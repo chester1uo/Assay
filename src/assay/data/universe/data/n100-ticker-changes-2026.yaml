@@ -1,0 +1,127 @@
+---
+year: 2026
+tickers_on_Jan_1:
+  - AAPL
+  - ABNB
+  - ADBE
+  - ADI
+  - ADP
+  - ADSK
+  - AEP
+  - ALNY
+  - AMAT
+  - AMD
+  - AMGN
+  - AMZN
+  - APP
+  - ARM
+  - ASML
+  - AVGO
+  - AXON
+  - AZN
+  - BKNG
+  - BKR
+  - CCEP
+  - CDNS
+  - CEG
+  - CHTR
+  - CMCSA
+  - COST
+  - CPRT
+  - CRWD
+  - CSCO
+  - CSGP
+  - CSX
+  - CTAS
+  - CTSH
+  - DASH
+  - DDOG
+  - DXCM
+  - EA
+  - EXC
+  - FANG
+  - FAST
+  - FER
+  - FTNT
+  - GEHC
+  - GILD
+  - GOOG
+  - GOOGL
+  - HON
+  - IDXX
+  - INSM
+  - INTC
+  - INTU
+  - ISRG
+  - KDP
+  - KHC
+  - KLAC
+  - LIN
+  - LRCX
+  - MAR
+  - MCHP
+  - MDLZ
+  - MELI
+  - META
+  - MNST
+  - MPWR
+  - MRVL
+  - MSFT
+  - MSTR
+  - MU
+  - NFLX
+  - NVDA
+  - NXPI
+  - ODFL
+  - ORLY
+  - PANW
+  - PAYX
+  - PCAR
+  - PDD
+  - PEP
+  - PLTR
+  - PYPL
+  - QCOM
+  - REGN
+  - ROP
+  - ROST
+  - SBUX
+  - SHOP
+  - SNPS
+  - STX
+  - TEAM
+  - TMUS
+  - TRI
+  - TSLA
+  - TTWO
+  - TXN
+  - VRSK
+  - VRTX
+  - WBD
+  - WDAY
+  - WDC
+  - XEL
+  - ZS
+
+changes:
+  "2026-01-05":
+    union:
+      - VSNT
+  "2026-01-09":
+    difference:
+      - VSNT
+  "2026-01-20":
+    difference:
+      - AZN
+    union:
+      - WMT
+  "2026-04-20":
+    difference:
+      - TEAM
+    union:
+      - SNDK
+  "2026-05-18":
+    difference:
+      - CSGP
+    union:
+      - LITE

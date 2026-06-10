@@ -1,0 +1,136 @@
+---
+year: 2024
+tickers_on_Jan_1:
+  - AAPL
+  - ABNB
+  - ADBE
+  - ADI
+  - ADP
+  - ADSK
+  - AEP
+  - AMAT
+  - AMD
+  - AMGN
+  - AMZN
+  - ANSS
+  - ASML
+  - AVGO
+  - AZN
+  - BIIB
+  - BKNG
+  - BKR
+  - CCEP
+  - CDNS
+  - CDW
+  - CEG
+  - CHTR
+  - CMCSA
+  - COST
+  - CPRT
+  - CRWD
+  - CSCO
+  - CSGP
+  - CSX
+  - CTAS
+  - CTSH
+  - DASH
+  - DDOG
+  - DLTR
+  - DXCM
+  - EA
+  - EXC
+  - FANG
+  - FAST
+  - FTNT
+  - GFS
+  - GEHC
+  - GILD
+  - GOOG
+  - GOOGL
+  - HON
+  - IDXX
+  - ILMN
+  - INTC
+  - INTU
+  - ISRG
+  - KDP
+  - KHC
+  - KLAC
+  - LRCX
+  - LULU
+  - MAR
+  - MCHP
+  - MDLZ
+  - MELI
+  - META
+  - MDB
+  - MNST
+  - MRNA
+  - MRVL
+  - MSFT
+  - MU
+  - NFLX
+  - NVDA
+  - NXPI
+  - ODFL
+  - ON
+  - ORLY
+  - PANW
+  - PAYX
+  - PCAR
+  - PDD
+  - PEP
+  - PYPL
+  - QCOM
+  - REGN
+  - ROP
+  - ROST
+  - SBUX
+  - SIRI
+  - SNPS
+  - SPLK
+  - TEAM
+  - TMUS
+  - TSLA
+  - TTD
+  - TTWO
+  - TXN
+  - VRSK
+  - VRTX
+  - WBA
+  - WBD
+  - WDAY
+  - XEL
+  - ZS
+
+changes:
+  '2024-03-18':
+    difference:
+      - SPLK
+    union:
+      - LIN
+  '2024-06-24':
+    difference:
+      - SIRI
+    union:
+      - ARM
+  '2024-07-22':
+    difference:
+      - WBA
+    union:
+      - SMCI
+  '2024-11-18':
+    difference:
+      - DLTR
+    union:
+      - APP
+  '2024-12-23':
+    difference:
+      - ILMN
+      - MRNA
+      - SMCI
+    union:
+      - AXON
+      - MSTR
+      - PLTR
+      
