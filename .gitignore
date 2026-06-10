@@ -1,0 +1,27 @@
+# Secrets — never commit
+.env
+*.env
+!.env.example
+
+# Ingested market data (large; regenerate via the pipeline). Anchored to the
+# repo root with a leading slash so the data-LAYER source under src/assay/data/
+# (and its vendored YAML) is NOT ignored — only the top-level parquet stores are.
+/data/
+# Additional pipeline-managed data folders (e.g. a separate full-history pull)
+/data_*/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/

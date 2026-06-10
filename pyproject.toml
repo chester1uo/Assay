@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "assay"
+version = "0.1.0"
+description = "Assay — high-performance factor backtesting engine. Data layer (MASSIVE, US equities) + dual-syntax factor execution engine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "boto3>=1.34",
+    "requests>=2.31",
+    "polars>=1.0",
+    "pyarrow>=14",
+    "numpy>=1.24",
+    "PyYAML>=6.0",
+    "exchange-calendars>=4",
+]
+
+[project.optional-dependencies]
+perf = [
+    "numba>=0.60",
+    "scipy>=1.13",
+]
+api = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "sse-starlette>=2.1",
+    "pydantic>=2.7",
+    "httpx>=0.27",
+]
+mcp = [
+    "mcp>=1.0",
+]
+all = [
+    "assay[perf,api,mcp]",
+]
+
+[project.scripts]
+assay = "assay.cli:main"
+assay-data = "assay.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"assay.data.universe" = ["data/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "network: tests that hit the live MASSIVE API (require credentials)",
+    "data: data-layer tests (loaders, adjustment, universe, DataStore)",
+    "engine: factor-engine tests (parser, operators, evaluation, diagnostics)",
+    "factors: factor-catalog tests (Alpha-101)",
+    "evaluator: backtest/evaluation tests (forward returns, IC, decay, cost)",
+    "library: factor-library + report-contract tests",
+    "service: AssayService / SDK orchestration tests",
+    "api: REST + SSE endpoint tests",
+    "mcp: MCP tool-surface tests",
+]
