@@ -1,0 +1,6 @@
+{
+  "type": "module",
+  "private": true,
+  "name": "assay-webui",
+  "description": "Marker so Node treats the zero-build .js files as ES modules for `node --check`. Not installed; no dependencies, no build."
+}

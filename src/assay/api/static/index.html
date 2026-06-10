@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=1280, initial-scale=1" />
+  <title>Assay — Factor Research</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topnav" id="topnav">
+    <a class="topnav-logo" href="#/dashboard" aria-label="Assay home">
+      <span class="topnav-diamond" aria-hidden="true">&#9670;</span>
+      <span class="topnav-wordmark">ASSAY</span>
+    </a>
+
+    <nav class="topnav-tabs" aria-label="Primary">
+      <a class="topnav-tab" data-route="#/dashboard" href="#/dashboard">Dashboard</a>
+      <a class="topnav-tab" data-route="#/library" href="#/library">Factor Library</a>
+      <a class="topnav-tab" data-route="#/factor" href="#/factor">Single Factor Test</a>
+    </nav>
+
+    <div class="topnav-controls">
+      <label class="topnav-field">
+        <span class="topnav-field-label">Universe</span>
+        <select id="universe-select" class="select" aria-label="Universe"></select>
+      </label>
+
+      <label class="topnav-field">
+        <span class="topnav-field-label">Period</span>
+        <select id="period-select" class="select" aria-label="Period preset">
+          <option value="1Y">1Y</option>
+          <option value="3Y">3Y</option>
+          <option value="5Y">5Y</option>
+          <option value="custom">Custom</option>
+        </select>
+      </label>
+
+      <div class="topnav-field topnav-period-custom" id="period-custom" hidden>
+        <input type="date" id="period-start" class="input input-date" aria-label="Period start" />
+        <span class="topnav-period-dash" aria-hidden="true">&ndash;</span>
+        <input type="date" id="period-end" class="input input-date" aria-label="Period end" />
+      </div>
+
+      <button type="button" id="status-dot" class="status-dot status-dot--unknown"
+              aria-label="System status" title="System status: unknown"></button>
+    </div>
+  </header>
+
+  <main id="app" class="app-main" tabindex="-1"></main>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
