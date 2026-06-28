@@ -204,10 +204,11 @@ def create_app() -> FastAPI:
 
     # Routers import `get_service` from this module, so import them here (after the
     # accessor + handlers are defined) to keep a clean one-way dependency.
-    from assay.api.routes import factor, library, session, system
+    from assay.api.routes import factor, library, portfolio, session, system
 
     app.include_router(factor.router, prefix="/v1/factor", tags=["Factor"])
     app.include_router(library.router, prefix="/v1/library", tags=["Library"])
+    app.include_router(portfolio.router, prefix="/v1/portfolio", tags=["Portfolio"])
     app.include_router(session.router, prefix="/v1/session", tags=["Session"])
     app.include_router(system.router, prefix="/v1/system", tags=["System"])
 

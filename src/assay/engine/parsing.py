@@ -42,6 +42,9 @@ _WINDOW_OPS = {
     "ts_product", "ts_std", "ts_min", "ts_max", "ts_argmin", "ts_argmax",
     "ts_rank", "ts_decay_linear", "ts_ema", "ts_dema", "ts_skew", "ts_kurt",
     "ts_corr", "ts_cov",
+    # window is the LAST arg for these (ts_quantile's window is arg-2, not last,
+    # so it is deliberately excluded and coerces d inside the kernel).
+    "ts_var", "ts_med", "ts_mad", "ts_count", "ts_slope", "ts_resi", "ts_rsquare",
 }
 _GROUP_OPS = {"cs_neutralize", "cs_group_rank", "cs_group_mean"}
 
@@ -63,6 +66,14 @@ _ALIASES = {
     "ts_ema": "ts_ema", "EMA": "ts_ema",
     "ts_dema": "ts_dema", "DEMA": "ts_dema",
     "ts_skew": "ts_skew", "ts_kurt": "ts_kurt",
+    "ts_var": "ts_var", "Var": "ts_var",
+    "ts_med": "ts_med", "Med": "ts_med", "Median": "ts_med",
+    "ts_mad": "ts_mad", "Mad": "ts_mad",
+    "ts_count": "ts_count", "Count": "ts_count",
+    "ts_quantile": "ts_quantile", "Quantile": "ts_quantile",
+    "ts_slope": "ts_slope", "Slope": "ts_slope",
+    "ts_resi": "ts_resi", "Resi": "ts_resi",
+    "ts_rsquare": "ts_rsquare", "Rsquare": "ts_rsquare", "RSquare": "ts_rsquare",
     "ts_min": "ts_min", "ts_max": "ts_max",
     "ts_argmax": "ts_argmax", "Ts_ArgMax": "ts_argmax", "IdxMax": "ts_argmax",
     "ts_argmin": "ts_argmin", "Ts_ArgMin": "ts_argmin", "IdxMin": "ts_argmin",
@@ -89,6 +100,19 @@ _ALIASES = {
     "fillna": "fillna",
     "sigmoid": "sigmoid", "Sigmoid": "sigmoid",
     "elem_min": "elem_min", "elem_max": "elem_max",
+    # function-form arithmetic (qlib / AlphaBench CamelCase spellings). The lowercase
+    # forms already resolve via operators.is_registered; these add the CamelCase ones.
+    "Add": "add", "Sub": "sub", "Subtract": "sub",
+    "Mul": "mul", "Multiply": "mul",
+    "Div": "div", "Divide": "div", "Neg": "neg",
+    # element-wise max/min of two series (qlib Greater / Less)
+    "Greater": "elem_max", "greater": "elem_max",
+    "Less": "elem_min", "less": "elem_min",
+    # comparison / logical (qlib Gt/Lt/Ge/Le/Eq/Ne/And/Or/Not)
+    "Gt": "gt", "Lt": "lt", "Ge": "ge", "Le": "le", "Eq": "eq", "Ne": "ne",
+    "And": "and", "and": "and", "Or": "or", "or": "or", "Not": "not", "not": "not",
+    # higher moments
+    "Skew": "ts_skew", "Kurt": "ts_kurt",
 }
 
 # CamelCase operators that only exist in the qlib dialect (used for detection).
@@ -120,7 +144,7 @@ _TOKEN_RE = re.compile(
     r"""
       (?P<WS>\s+)
     | (?P<ADV>adv\d+(?:\.\d+)?)
-    | (?P<NUMBER>\d+\.\d*|\.\d+|\d+)
+    | (?P<NUMBER>(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?)
     | (?P<DOLLAR>\$[A-Za-z_]\w*)
     | (?P<IDENT>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)
     | (?P<STRING>'[^']*'|\"[^\"]*\")
@@ -302,7 +326,9 @@ class _Parser:
             window = math.floor(float(tok.value[3:]))
             return OpNode("ts_mean", (FieldNode("volume"), LitNode(window)))
         if tok.kind == "NUMBER":
-            return LitNode(float(tok.value) if "." in tok.value else int(tok.value))
+            v = tok.value
+            is_float = "." in v or "e" in v or "E" in v  # 1e-12 / 1.5e6 are floats
+            return LitNode(float(v) if is_float else int(v))
         if tok.kind == "STRING":
             return LitNode(tok.value[1:-1])
         if tok.kind == "DOLLAR":

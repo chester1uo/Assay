@@ -25,3 +25,10 @@ venv/
 .ruff_cache/
 .mypy_cache/
 .ipynb_checkpoints/
+
+_assay_tmp/
+_assay_sweep/
+data_cn/
+data_us/
+data_2025_2026h1/
+sparse_cond/

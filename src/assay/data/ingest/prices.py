@@ -1,8 +1,8 @@
-"""Price ingester: MASSIVE day-aggregate flat files -> ``price_raw`` parquet.
+"""Price ingester: local MASSIVE day-aggregate parquet -> ``price_raw`` parquet.
 
-Downloads day-aggregate CSVs over a date range, optionally filtered to a symbol
-universe, normalizes them to the ``price_raw`` schema, and writes month
-partitions (``market=US/year=YYYY/month=MM/price_raw.parquet``).
+Reads locally-downloaded day-aggregate files over a date range, optionally
+filtered to a symbol universe, normalizes them to the ``price_raw`` schema, and
+writes month partitions (``market=US/year=YYYY/month=MM/price_raw.parquet``).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import polars as pl
 
 from assay.config import AssayConfig
 from assay.data.io_utils import upsert_parquet
-from assay.data.massive.flatfiles import DayAggFile, FlatFilesClient, FlatFilesForbidden
+from assay.data.massive.flatfiles import DayAggFile, LocalFlatFiles
 from assay.data.schemas import PRICE_RAW_SCHEMA, price_partition_path
 
 log = logging.getLogger(__name__)
@@ -43,9 +43,9 @@ def normalize_day_agg(df: pl.DataFrame, source_id: str) -> pl.DataFrame:
 
 
 class PriceIngester:
-    def __init__(self, config: AssayConfig, client: FlatFilesClient | None = None):
+    def __init__(self, config: AssayConfig, client: LocalFlatFiles | None = None):
         self.config = config
-        self.client = client or FlatFilesClient(config.massive)
+        self.client = client or LocalFlatFiles(config.massive)
 
     def run(
         self,
@@ -53,12 +53,18 @@ class PriceIngester:
         end: dt.date,
         symbols: set[str] | None = None,
     ) -> dict:
-        """Download + normalize day aggregates for ``[start, end]``.
+        """Transfer + normalize local day aggregates for ``[start, end]``.
 
         Returns a stats dict: files seen, files written, total rows.
         """
         files = self.client.list_day_aggs(start, end)
-        log.info("price ingest: %d day-aggregate files in %s..%s", len(files), start, end)
+        log.info("price transfer: %d day-aggregate files in %s..%s", len(files), start, end)
+        if not files:
+            log.warning(
+                "no day-aggregate files found under %s for %s..%s — is the local "
+                "MASSIVE mirror downloaded and MASSIVE_DATA_DIR set correctly?",
+                self.client.root, start, end,
+            )
 
         # Group files by (year, month) so each partition is written once.
         by_month: dict[tuple[int, int], list[DayAggFile]] = defaultdict(list)
@@ -68,20 +74,13 @@ class PriceIngester:
         stats = {
             "files_seen": len(files),
             "files_loaded": 0,
-            "files_forbidden": 0,
             "rows": 0,
             "partitions": 0,
         }
-        forbidden_dates: list[dt.date] = []
         for (year, month), month_files in sorted(by_month.items()):
             frames: list[pl.DataFrame] = []
             for f in sorted(month_files, key=lambda x: x.date):
-                try:
-                    raw = self.client.read_day_agg(f.date, symbols=symbols)
-                except FlatFilesForbidden:
-                    stats["files_forbidden"] += 1
-                    forbidden_dates.append(f.date)
-                    continue
+                raw = self.client.read_day_agg(f.date, symbols=symbols)
                 if raw is None or raw.is_empty():
                     continue
                 frames.append(normalize_day_agg(raw, source_id=f.key))
@@ -95,18 +94,4 @@ class PriceIngester:
             stats["partitions"] += 1
             log.info("wrote %s (%d rows this batch, %d total)", path, month_df.height, n)
 
-        if forbidden_dates:
-            log.warning(
-                "%d/%d files were 403 Forbidden (outside your MASSIVE subscription "
-                "window), e.g. %s .. %s — these dates were skipped.",
-                stats["files_forbidden"], stats["files_seen"],
-                min(forbidden_dates), max(forbidden_dates),
-            )
-        if stats["files_loaded"] == 0 and stats["files_forbidden"] > 0:
-            raise RuntimeError(
-                f"All {stats['files_forbidden']} requested day-aggregate files returned 403 "
-                "Forbidden. The entire date range is outside your MASSIVE subscription window "
-                "(downloads are entitled on a rolling window even though the bucket lists "
-                "further back). Try a more recent --start date."
-            )
         return stats

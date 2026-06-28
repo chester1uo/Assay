@@ -2,7 +2,9 @@
 
 Phase 1 target: NASDAQ-100. :func:`prepare_nasdaq100` resolves the point-in-time
 constituent universe over a date range, then runs the three ingesters
-(universe -> corporate actions -> prices) into the parquet stores.
+(universe -> corporate actions -> prices) into the parquet stores. Every stage
+reads from the local MASSIVE mirror (``config.massive.source_dir``); nothing is
+downloaded.
 """
 
 from __future__ import annotations
@@ -45,11 +47,10 @@ def prepare_nasdaq100(
     if do_universe:
         report["universe"] = UniverseIngester(config).run(index_id, start, end)
     if do_corp_actions:
-        # Corporate actions come from the MASSIVE REST API and are *best-effort*
-        # adjustment data: a flaky/unreachable REST endpoint must not abort the run
-        # and lose the essential price download (which comes from S3 flat files).
-        # On failure we record it and continue; prices remain usable unadjusted
-        # (adj="none"), and corp-actions can be backfilled later when REST recovers.
+        # Corporate actions are *best-effort* adjustment data: a missing/malformed
+        # local corp-actions tree must not abort the run and lose the essential
+        # price transfer. On failure we record it and continue; prices remain
+        # usable unadjusted (adj="none"), and corp-actions can be backfilled later.
         try:
             report["corp_actions"] = CorpActionIngester(config).run(tickers, start, end)
         except Exception as exc:  # noqa: BLE001 - resilience boundary, error is recorded

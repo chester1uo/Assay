@@ -1,6 +1,4 @@
 # Assay runtime dependencies
-boto3>=1.34           # S3-compatible flat-files access (MASSIVE files.massive.com)
-requests>=2.31        # REST corporate-actions client (splits / dividends)
 polars>=1.0           # columnar dataframe engine for normalization + parquet
 pyarrow>=14           # parquet IO backing polars
 numpy>=1.24           # (T x N) factor matrix kernels in the execution engine

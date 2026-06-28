@@ -163,9 +163,17 @@ class FactorReport:
 
     # -- identity helper ---------------------------------------------------
     @staticmethod
-    def compute_factor_id(expr_canonical: str) -> str:
-        """SHA-256[:16] hex digest of the canonical expression (engineering-docs 7.2)."""
-        return hashlib.sha256(expr_canonical.encode("utf-8")).hexdigest()[:16]
+    def compute_factor_id(expr_canonical: str, granularity: str = "1d") -> str:
+        """SHA-256[:16] hex digest of the canonical expression (engineering-docs 7.2).
+
+        ``granularity`` namespaces the id by bar frequency so the same expression
+        evaluated daily vs at minute scope keys to distinct library entries. The
+        daily case is **legacy-preserving**: ``granularity="1d"`` hashes the bare
+        canonical expression exactly as before (so existing ``<factor_id>.json``
+        files never re-key); any intraday granularity hashes ``"{expr}::{gran}"``.
+        """
+        key = expr_canonical if granularity == "1d" else f"{expr_canonical}::{granularity}"
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
     # -- serialisation -----------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
