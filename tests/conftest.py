@@ -21,6 +21,8 @@ _GROUPS = {
     "service",
     "api",
     "mcp",
+    "portfolio",
+    "performance",
 }
 
 

@@ -13,7 +13,7 @@ Examples
     # inspect / verify
     python -m assay.cli status
     python -m assay.cli verify --start 2023-06-01 --end 2023-06-30
-    python -m assay.cli discover
+    python -m assay.cli discover                 # show the local MASSIVE source layout
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import datetime as dt
 import logging
 
 from assay.config import AssayConfig
-from assay.data.massive import FlatFilesClient
+from assay.data.massive import LocalFlatFiles
 from assay.data.pipeline import prepare_nasdaq100
 from assay.data.schemas import (
     adj_events_path,
@@ -83,13 +83,14 @@ def _resolve_universe(start: dt.date, end: dt.date, explicit: set[str] | None) -
 
 # -- command handlers ---------------------------------------------------------
 def cmd_discover(args, config: AssayConfig) -> None:
-    client = FlatFilesClient(config.massive)
-    print("Top-level flat-file prefixes:")
+    client = LocalFlatFiles(config.massive)
+    print(f"local source: {config.massive.source_dir}")
+    print("datasets present:")
     for p in client.list_top_level_prefixes():
         print(" ", p)
     today = dt.date.today()
-    recent = client.list_day_aggs(today - dt.timedelta(days=10), today)
-    print(f"\nMost recent day-aggregate files (last 10 days, {len(recent)} found):")
+    recent = client.list_day_aggs(today - dt.timedelta(days=30), today)
+    print(f"\nMost recent day-aggregate files (last 30 days, {len(recent)} found):")
     for f in recent[-5:]:
         print(" ", f.date, f.key)
 
@@ -362,6 +363,85 @@ def _write_batch_output(reports, path: str) -> None:
         p.write_text(json.dumps(rows, indent=2))
 
 
+def _portfolio_summary(report) -> str:
+    """Compact, agent-readable one-block summary of a :class:`PortfolioReport`.
+
+    Mirrors the headline portfolio metrics the agent loop / WebUI consume
+    (portfolio design-doc §4-§5): realised return, risk-adjusted ratios, drawdown,
+    and the turnover / cost-drag the IC analysis cannot see.
+    """
+    cfg = report.config or {}
+    universe = cfg.get("universe", "?")
+    market = cfg.get("market", "?")
+    rebal = cfg.get("rebalance_type", "?")
+    weight = cfg.get("weight_method", "?")
+    ls = "long-short" if cfg.get("long_short") else "long-only"
+    lines = [
+        f"run_id:        {report.run_id}",
+        f"factor:        {report.expr if hasattr(report, 'expr') else report.factor_id}",
+        f"factor_id:     {report.factor_id}",
+        f"universe:      {universe} [{market}]  {report.period_start}..{report.period_end}",
+        f"setup:         rebalance={rebal}  weights={weight}  {ls}",
+        f"panel:         {report.n_trading_days} trading days | {report.n_rebalances} rebalances",
+        f"total_return:  {_fmt(report.total_return, '+.2%')}   annual_return: {_fmt(report.annual_return, '+.2%')}",
+        f"sharpe:        {_fmt(report.sharpe, '.2f')}   sortino: {_fmt(report.sortino, '.2f')}"
+        f"   calmar: {_fmt(report.calmar, '.2f')}",
+        f"max_drawdown:  {_fmt(report.max_drawdown, '+.2%')}   information_ratio: {_fmt(report.information_ratio, '.2f')}",
+        f"annual_turnover: {_fmt(report.annual_turnover, '.2f')}   cost_drag: {_fmt(report.cost_drag, '+.2%')}"
+        f"   avg_holding_days: {_fmt(report.avg_holding_days, '.1f')}",
+    ]
+    return "\n".join(lines)
+
+
+def cmd_portfolio(args, config: AssayConfig | None) -> None:
+    """Run a portfolio backtest via the SDK and print a compact PortfolioReport summary.
+
+    Builds a :class:`PortfolioBacktestConfig` from the market preset (cost/limit
+    defaults, portfolio design-doc §6) overridden by the supplied CLI knobs, runs the
+    section-1.1 pipeline, prints the headline metrics, and — with ``--output`` —
+    writes the full JSON report.
+    """
+    import json
+
+    import assay
+    from assay.portfolio import PortfolioBacktestConfig
+
+    assay.init()  # auto-init from env / .env; DataStore built lazily on data access
+
+    overrides: dict = {
+        "period_start": args.start.isoformat(),
+        "period_end": args.end.isoformat(),
+        "universe": args.universe,
+        "rebalance_type": args.rebalance,
+        "weight_method": args.weight_method,
+        "long_short": args.long_short,
+    }
+    if args.as_of is not None:
+        overrides["as_of_date"] = args.as_of.isoformat()
+    if args.gross_exposure is not None:
+        overrides["gross_exposure"] = args.gross_exposure
+    if args.net_exposure is not None:
+        overrides["net_exposure"] = args.net_exposure
+    if args.max_weight is not None:
+        overrides["max_single_weight"] = args.max_weight
+    if args.execution is not None:
+        overrides["execution_price"] = args.execution
+    config_obj = PortfolioBacktestConfig.preset(args.market, **overrides)
+
+    report = assay.backtest_portfolio(
+        args.expr,
+        config_obj,
+        as_of=args.as_of.isoformat() if args.as_of else None,
+    )
+    print(_portfolio_summary(report))
+
+    if args.output:
+        from pathlib import Path
+
+        Path(args.output).write_text(json.dumps(report.to_dict(), indent=2))
+        print(f"\nwrote full report -> {args.output}")
+
+
 def cmd_report(args, config: AssayConfig | None) -> None:
     """Fetch a saved factor by id from the library and pretty-print its report."""
     import assay
@@ -500,7 +580,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--start", type=_date, required=True, help="YYYY-MM-DD")
         sp.add_argument("--end", type=_date, required=True, help="YYYY-MM-DD")
 
-    sp = sub.add_parser("discover", help="list flat-file prefixes (sanity check)")
+    sp = sub.add_parser("discover", help="show the local MASSIVE source layout (sanity check)")
     sp.set_defaults(func=cmd_discover)
 
     sp = sub.add_parser("prepare-nasdaq100", help="prepare full dataset for NASDAQ-100")
@@ -515,12 +595,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--index", default="NASDAQ100")
     sp.set_defaults(func=cmd_universe)
 
-    sp = sub.add_parser("corp-actions", help="fetch splits & dividends")
+    sp = sub.add_parser("corp-actions", help="read local splits & dividends")
     add_range(sp)
     sp.add_argument("--symbols", help="comma-separated; default = NASDAQ-100 union over range")
     sp.set_defaults(func=cmd_corp_actions)
 
-    sp = sub.add_parser("prices", help="download & normalize day aggregates")
+    sp = sub.add_parser("prices", help="transfer & normalize local day aggregates")
     add_range(sp)
     sp.add_argument("--symbols", help="comma-separated; default = NASDAQ-100 union over range")
     sp.set_defaults(func=cmd_prices)
@@ -584,6 +664,38 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=20, help="print top N (default 20)")
     sp.add_argument("--output", default=None, help="write all reports to .json or .parquet")
     sp.set_defaults(func=cmd_batch, needs_config=False)
+
+    sp = sub.add_parser(
+        "portfolio", help="run a portfolio backtest for a factor (compact PortfolioReport)"
+    )
+    sp.add_argument("expr", help="qlib or function-call/Alpha-101 factor expression")
+    sp.add_argument("--universe", default="NASDAQ100",
+                    help="universe id (default NASDAQ100)")
+    sp.add_argument("--start", type=_date, required=True, help="period start YYYY-MM-DD")
+    sp.add_argument("--end", type=_date, required=True, help="period end YYYY-MM-DD")
+    sp.add_argument("--as-of", type=_date, default=None, help="point-in-time as-of date")
+    sp.add_argument("--market", default="US", choices=["US", "A", "HK"],
+                    help="market preset (cost/limit model; default US)")
+    sp.add_argument("--rebalance", default="monthly",
+                    choices=["daily", "weekly", "monthly", "quarterly", "threshold", "signal"],
+                    help="rebalance schedule (default monthly)")
+    sp.add_argument("--weight-method", dest="weight_method", default="signal_prop",
+                    choices=["equal", "signal_prop", "mv", "risk_parity", "quintile",
+                             "decile", "bl"],
+                    help="weight construction (default signal_prop)")
+    sp.add_argument("--long-short", dest="long_short", action="store_true",
+                    help="long top / short bottom (default long-only)")
+    sp.add_argument("--gross-exposure", dest="gross_exposure", type=float, default=None,
+                    help="total absolute weight sum (0.5-2.0)")
+    sp.add_argument("--net-exposure", dest="net_exposure", type=float, default=None,
+                    help="net weight sum (-1.0-1.0; 0.0 = dollar-neutral)")
+    sp.add_argument("--max-weight", dest="max_weight", type=float, default=None,
+                    help="max single-stock weight (0.01-0.30)")
+    sp.add_argument("--execution", default=None,
+                    choices=["next_open", "next_close", "vwap", "arrival"],
+                    help="execution price benchmark (default = preset)")
+    sp.add_argument("--output", default=None, help="write the full report to a .json file")
+    sp.set_defaults(func=cmd_portfolio, needs_config=False)
 
     sp = sub.add_parser("report", help="fetch a saved factor by id and pretty-print it")
     sp.add_argument("factor_id", help="library factor id (sha256[:16] of canonical expr)")

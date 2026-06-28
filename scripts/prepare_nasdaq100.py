@@ -4,8 +4,9 @@
 Usage:
     python scripts/prepare_nasdaq100.py 2023-01-01 2023-12-31
 
-Requires MASSIVE_* credentials in the environment (see .env.example). Run from
-source with PYTHONPATH=src, or after `pip install -e .`.
+Reads the local MASSIVE mirror at ``MASSIVE_DATA_DIR`` (default /data/massive_data;
+see .env.example) — no credentials/network needed. Run from source with
+PYTHONPATH=src, or after `pip install -e .`.
 """
 
 from __future__ import annotations

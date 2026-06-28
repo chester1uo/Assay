@@ -496,6 +496,30 @@ class AssayService:
         reports.sort(key=lambda r: _sort_key(r, sort_by), reverse=True)
         return reports
 
+    # --------------------------------------------------------- portfolio bt ---
+    def backtest_portfolio(self, expr, config, *, as_of: str | None = None, **kw):
+        """Run a portfolio backtest over the service store (design-doc Phase 5).
+
+        Builds a :class:`~assay.portfolio.PortfolioBacktester` over :attr:`store` and
+        runs the section-1.1 pipeline, returning a
+        :class:`~assay.portfolio.PortfolioReport`. The optional market inputs
+        (``groups``, ``tradable_mask``, ``prev_close``, ``adv``, ``benchmark``) pass
+        straight through; ``None`` (the US default) leaves each constraint inert.
+
+        ``as_of`` defaults inside the backtester to ``config.as_of_date`` then
+        ``config.period_end`` (PIT cutoff -> survivorship-safe universe + adjustment
+        versioning, design-doc §7.1/§7.2). The backtester never reads wall-clock
+        time, so this method stamps ``lineage.eval_timestamp`` (and ``source``-free
+        provenance) here — normal app code — keeping the simulation a pure function.
+        """
+        from assay.portfolio import PortfolioBacktester
+
+        report = PortfolioBacktester(store=self.store).run(
+            expr, config, as_of=as_of, **kw
+        )
+        report.lineage.eval_timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+        return report
+
     # --------------------------------------------------------------- library ---
     def library_query(self, **filters) -> list[FactorSummary]:
         """Filtered/sorted/paged library view (delegates to :meth:`FactorLibrary.list`)."""

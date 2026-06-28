@@ -6,14 +6,13 @@ module folders under ``tests/`` (``data`` / ``engine`` / ``factors``).
 
 Usage
 -----
-    python scripts/run_tests.py                  # whole offline suite (excludes network)
+    python scripts/run_tests.py                  # whole suite
     python scripts/run_tests.py all              # same as above
     python scripts/run_tests.py engine           # only tests/engine
     python scripts/run_tests.py data             # only tests/data
     python scripts/run_tests.py factors          # only tests/factors
     python scripts/run_tests.py diagnostics      # a single module: tests/**/test_diagnostics.py
     python scripts/run_tests.py operators        # all modules whose name contains "operators"
-    python scripts/run_tests.py network          # the live MASSIVE smoke tests (need creds)
 
 Extra pytest args pass straight through:
     python scripts/run_tests.py engine -k corr -x
@@ -35,18 +34,16 @@ GROUPS = {"data", "engine", "factors"}
 def _resolve(target: str) -> list[str]:
     """Return the pytest path/marker args for a target selector."""
     if target in (None, "", "all"):
-        return [str(TESTS), "-m", "not network"]
+        return [str(TESTS)]
     if target in GROUPS:
-        return [str(TESTS / target), "-m", "not network"]
-    if target == "network":
-        return [str(TESTS), "-m", "network"]
+        return [str(TESTS / target)]
     # otherwise treat as a module keyword: exact test_<target>.py, else fuzzy match
     exact = sorted(TESTS.rglob(f"test_{target}.py"))
     fuzzy = sorted(p for p in TESTS.rglob("test_*.py") if target in p.stem)
     matches = exact or fuzzy
     if not matches:
         sys.exit(f"run_tests: no test module matching {target!r} under {TESTS}")
-    return [str(m) for m in matches] + ["-m", "not network"]
+    return [str(m) for m in matches]
 
 
 def main(argv: list[str]) -> int:

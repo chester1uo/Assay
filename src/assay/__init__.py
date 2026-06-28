@@ -101,6 +101,50 @@ async def stream(expr, **kw) -> AsyncGenerator[dict, None]:
 
 
 # ---------------------------------------------------------------------------
+# portfolio backtest
+# ---------------------------------------------------------------------------
+def backtest_portfolio(expr, config=None, **config_kwargs):
+    """Run a full portfolio backtest -> :class:`~assay.portfolio.PortfolioReport`.
+
+    Given a factor expression and a :class:`~assay.portfolio.PortfolioBacktestConfig`
+    (or keyword fields to build one), simulates position-taking, rebalancing,
+    execution costs and daily mark-to-market over the period, returning the
+    section-5 report (Sharpe, drawdown, turnover, cost drag, NAV series, ...). Auto-
+    initialises the service from the environment on first call.
+
+    ``config`` may be:
+
+    * a :class:`PortfolioBacktestConfig` — used as-is;
+    * ``None`` — a config is built from ``config_kwargs`` (``period_start`` /
+      ``period_end`` are required by the config validator);
+
+    in either case the **run-time** keywords ``as_of`` / ``groups`` /
+    ``tradable_mask`` / ``prev_close`` / ``adv`` / ``benchmark`` are split out of
+    ``config_kwargs`` and forwarded to the run (so
+    ``assay.backtest_portfolio("ts_returns(close,20)", period_start=..., period_end=...,
+    weight_method="equal", as_of=...)`` works in one call)::
+
+        rep = assay.backtest_portfolio(
+            "cs_rank(ts_returns(close, 20))",
+            period_start="2020-01-01", period_end="2024-12-31",
+            rebalance_type="monthly", weight_method="signal_prop",
+        )
+        print(rep.sharpe, rep.annual_turnover)
+    """
+    from assay.portfolio import PortfolioBacktestConfig
+
+    run_keys = ("as_of", "groups", "tradable_mask", "prev_close", "adv", "benchmark")
+    run_kw = {k: config_kwargs.pop(k) for k in list(config_kwargs) if k in run_keys}
+    if config is None:
+        config = PortfolioBacktestConfig(**config_kwargs)
+    elif config_kwargs:
+        raise TypeError(
+            "pass either a PortfolioBacktestConfig or config keyword fields, not both"
+        )
+    return _service().backtest_portfolio(expr, config, **run_kw)
+
+
+# ---------------------------------------------------------------------------
 # library proxy
 # ---------------------------------------------------------------------------
 class _LibraryProxy:
@@ -218,6 +262,7 @@ __all__ = [
     "init",
     "backtest",
     "batch_backtest",
+    "backtest_portfolio",
     "stream",
     "library",
     "Session",

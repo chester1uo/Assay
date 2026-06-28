@@ -69,6 +69,39 @@ UNIVERSE_SNAPSHOTS_SCHEMA: dict[str, pl.DataType] = {
     "as_of_date": pl.Date,  # knowledge_time
 }
 
+# --- trade_status (market-microstructure tradability) ------------------------
+# Per (date, symbol) trading constraints that a backtest's execution layer needs
+# but that are *not* prices: the daily up/down price-limit bands (涨跌停价). Only
+# populated for markets that have such rules (A-share). ``close`` is the *raw*
+# (unadjusted) close on that bar, kept so the reader can rebase the raw limit
+# bands into whatever adjusted basis the price panel uses (limit prices are raw;
+# the panel may be split/total-adjusted — comparing the two requires the factor
+# ``adj_close / close``). Suspension is *not* stored here: a suspended name simply
+# has no price_raw bar on that date, which the execution layer already reads as
+# untradable (NaN price).
+TRADE_STATUS_SCHEMA: dict[str, pl.DataType] = {
+    "date": pl.Date,
+    "symbol": pl.Utf8,
+    "up_limit": pl.Float64,  # daily ceiling price (涨停价), raw
+    "down_limit": pl.Float64,  # daily floor price (跌停价), raw
+    "limit_up_locked": pl.Boolean,  # low >= up_limit: locked at ceiling all day (unbuyable)
+    "limit_down_locked": pl.Boolean,  # high <= down_limit: locked at floor (unsellable)
+    "close": pl.Float64,  # raw (unadjusted) close, for basis rebasing
+    "as_of_date": pl.Date,  # knowledge_time (== date for EOD bands)
+}
+
+# --- security_groups (classification for neutralization) ---------------------
+# Per-symbol group label (industry / sector) used by sector-neutral signal
+# processing and the sector-weight constraint. A *current snapshot* in practice
+# (most providers expose only today's industry) — ``as_of_date`` is set to the
+# listing date so the label is "known since listing"; the value itself is not
+# point-in-time-versioned (documented limitation, like a survivorship snapshot).
+SECURITY_GROUPS_SCHEMA: dict[str, pl.DataType] = {
+    "symbol": pl.Utf8,
+    "group": pl.Utf8,  # classification label (e.g. Tushare/SW industry)
+    "as_of_date": pl.Date,  # knowledge_time
+}
+
 
 # --- on-disk paths -----------------------------------------------------------
 def price_partition_path(data_dir: Path, market: str, year: int, month: int) -> Path:
@@ -93,3 +126,11 @@ def adj_events_path(data_dir: Path, market: str) -> Path:
 
 def universe_snapshots_path(data_dir: Path, market: str) -> Path:
     return Path(data_dir) / "universe_snapshots" / f"market={market}" / "universe_snapshots.parquet"
+
+
+def trade_status_path(data_dir: Path, market: str) -> Path:
+    return Path(data_dir) / "trade_status" / f"market={market}" / "trade_status.parquet"
+
+
+def security_groups_path(data_dir: Path, market: str) -> Path:
+    return Path(data_dir) / "security_groups" / f"market={market}" / "security_groups.parquet"

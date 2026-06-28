@@ -75,6 +75,25 @@ def op_or(a, b):
     return np.where(np.isnan(a) & np.isnan(b), np.nan, out)
 
 
+def op_and(a, b):
+    """Logical AND (qlib ``And``): 1.0 only if both operands are truthy.
+
+    Mirrors :func:`op_or`'s NaN convention — a NaN operand is treated as false,
+    and the result is NaN only when *both* operands are NaN.
+    """
+    a, b = as_float(a), as_float(b)
+    av = np.where(np.isnan(a), 0.0, a)
+    bv = np.where(np.isnan(b), 0.0, b)
+    out = ((av != 0) & (bv != 0)).astype(np.float64)
+    return np.where(np.isnan(a) & np.isnan(b), np.nan, out)
+
+
+def op_not(a):
+    """Logical NOT (qlib ``Not``): 1.0 where the operand is zero, else 0.0; NaN preserved."""
+    a = as_float(a)
+    return np.where(np.isnan(a), np.nan, (a == 0).astype(np.float64))
+
+
 register("add", op_add, 2, 2, signature="a + b", category="arithmetic", incremental=True)
 register("sub", op_sub, 2, 2, signature="a - b", category="arithmetic", incremental=True)
 register("mul", op_mul, 2, 2, signature="a * b", category="arithmetic", incremental=True)
@@ -87,9 +106,11 @@ register("ge", op_ge, 2, 2, signature="a >= b", category="comparison", increment
 register("eq", op_eq, 2, 2, signature="a == b", category="comparison", incremental=True)
 register("ne", op_ne, 2, 2, signature="a != b", category="comparison", incremental=True)
 register("or", op_or, 2, 2, signature="a || b", category="logical", incremental=True)
+register("and", op_and, 2, 2, signature="a && b", category="logical", incremental=True)
+register("not", op_not, 1, 1, signature="!a", category="logical", incremental=True)
 
 
 __all__ = [
     "op_add", "op_sub", "op_mul", "op_div", "op_neg",
-    "op_lt", "op_le", "op_gt", "op_ge", "op_eq", "op_ne", "op_or",
+    "op_lt", "op_le", "op_gt", "op_ge", "op_eq", "op_ne", "op_or", "op_and", "op_not",
 ]

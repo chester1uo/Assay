@@ -1,22 +1,15 @@
-"""Configuration and credential loading for the Assay data pipeline.
+"""Configuration for the Assay data pipeline.
 
-Credentials are read from environment variables (the installer appended a
-``MASSIVE_*`` block to ``~/.bashrc``). For convenience a project-root ``.env``
-file is also loaded at import time *without* overriding anything already set in
-the shell environment, so the shell profile always wins.
+The pipeline runs entirely against a **local** mirror of the MASSIVE dataset
+(downloaded out-of-band by the ``downloader_*`` scripts that live alongside the
+data); it no longer fetches anything over the network. A project-root ``.env``
+file is loaded at import time *without* overriding anything already set in the
+shell environment, so the shell profile always wins.
 
-Required variables (see ``.env.example``)::
+Environment variables (all optional, sensible defaults)::
 
-    MASSIVE_API_KEY                 REST bearer token  (api.massive.com)
-    MASSIVE_S3_ACCESS_KEY_ID        S3 flat-files access key id
-    MASSIVE_S3_SECRET_ACCESS_KEY    S3 flat-files secret access key
-
-Optional (sensible defaults)::
-
-    MASSIVE_S3_ENDPOINT     default https://files.massive.com
-    MASSIVE_S3_BUCKET       default flatfiles
-    MASSIVE_REST_BASE_URL   default https://api.massive.com
-    ASSAY_DATA_DIR          default ./data
+    MASSIVE_DATA_DIR    root of the local MASSIVE mirror   (default /data/massive_data)
+    ASSAY_DATA_DIR      where the prepared parquet stores are written (default ./data)
 """
 
 from __future__ import annotations
@@ -55,38 +48,52 @@ def _load_dotenv(path: Path) -> None:
 _load_dotenv(_PROJECT_ROOT / ".env")
 
 
+_DEFAULT_SOURCE_DIR = "/data/massive_data"
+
+
 @dataclass(frozen=True)
 class MassiveConfig:
-    """Connection settings for the MASSIVE data provider."""
+    """On-disk layout of the locally-downloaded MASSIVE dataset.
 
-    api_key: str
-    s3_access_key_id: str
-    s3_secret_access_key: str
-    s3_endpoint: str = "https://files.massive.com"
-    s3_bucket: str = "flatfiles"
-    rest_base_url: str = "https://api.massive.com"
-    # S3 object-key prefix for US-stock daily OHLCV flat files. Full key is
-    # f"{day_aggs_prefix}/{YYYY}/{MM}/{YYYY-MM-DD}.csv.gz".
-    day_aggs_prefix: str = "us_stocks_sip/day_aggs_v1"
+    ``source_dir`` is the root of the local mirror; the sub-paths below mirror
+    the directory layout produced by the downloader scripts::
+
+        {source_dir}/us_stocks_sip/day_aggs_v1/{YYYY}/{MM}/{YYYY-MM-DD}.parquet
+        {source_dir}/corporate_actions/splits/{TICKER}.jsonl
+        {source_dir}/corporate_actions/dividends/{TICKER}.jsonl
+    """
+
+    source_dir: Path = Path(_DEFAULT_SOURCE_DIR)
+    # Sub-paths under ``source_dir`` (relative), one per source dataset.
+    day_aggs_subdir: str = "us_stocks_sip/day_aggs_v1"
+    minute_aggs_subdir: str = "us_stocks_sip/minute_aggs_v1"
+    splits_subdir: str = "corporate_actions/splits"
+    dividends_subdir: str = "corporate_actions/dividends"
+
+    @property
+    def day_aggs_dir(self) -> Path:
+        """Directory holding ``{YYYY}/{MM}/{YYYY-MM-DD}.parquet`` day aggregates."""
+        return Path(self.source_dir) / self.day_aggs_subdir
+
+    @property
+    def minute_aggs_dir(self) -> Path:
+        """Directory holding ``{YYYY}/{MM}/{YYYY-MM-DD}.parquet`` minute aggregates."""
+        return Path(self.source_dir) / self.minute_aggs_subdir
+
+    @property
+    def splits_dir(self) -> Path:
+        """Directory holding per-ticker ``{TICKER}.jsonl`` split records."""
+        return Path(self.source_dir) / self.splits_subdir
+
+    @property
+    def dividends_dir(self) -> Path:
+        """Directory holding per-ticker ``{TICKER}.jsonl`` dividend records."""
+        return Path(self.source_dir) / self.dividends_subdir
 
     @classmethod
     def from_env(cls) -> "MassiveConfig":
-        try:
-            return cls(
-                api_key=os.environ["MASSIVE_API_KEY"],
-                s3_access_key_id=os.environ["MASSIVE_S3_ACCESS_KEY_ID"],
-                s3_secret_access_key=os.environ["MASSIVE_S3_SECRET_ACCESS_KEY"],
-                s3_endpoint=os.environ.get("MASSIVE_S3_ENDPOINT", cls.s3_endpoint),
-                s3_bucket=os.environ.get("MASSIVE_S3_BUCKET", cls.s3_bucket),
-                rest_base_url=os.environ.get("MASSIVE_REST_BASE_URL", cls.rest_base_url),
-            )
-        except KeyError as exc:  # pragma: no cover - exercised via from_env errors
-            missing = exc.args[0]
-            raise RuntimeError(
-                f"Missing required environment variable {missing!r}. "
-                "Add the MASSIVE_* exports to ~/.bashrc (see .env.example), run "
-                "`source ~/.bashrc`, or create a project .env file."
-            ) from exc
+        source = os.environ.get("MASSIVE_DATA_DIR", _DEFAULT_SOURCE_DIR)
+        return cls(source_dir=Path(source).expanduser())
 
 
 @dataclass
@@ -94,9 +101,10 @@ class AssayConfig:
     """Top-level pipeline configuration — the shared contract every layer reads.
 
     Construction stays backward compatible: ``AssayConfig(massive=..., data_dir=...)``
-    still works, and :meth:`from_env` reads ``ASSAY_DATA_DIR`` plus the ``MASSIVE_*``
-    block. ``massive`` is optional so offline callers (tests, the WebUI, a pure
-    library walk) can build a config without credentials via :meth:`for_tests`.
+    still works, and :meth:`from_env` reads ``ASSAY_DATA_DIR`` plus ``MASSIVE_DATA_DIR``
+    (the local source root). ``massive`` is optional so offline callers (tests, the
+    WebUI, a pure library walk that only reads the prepared parquet stores) can build
+    a config without pointing at a source mirror via :meth:`for_tests`.
 
     Directory fields default to ``None`` and resolve under ``data_dir`` via the
     :attr:`library_path` / :attr:`cache_path` properties, so a bare ``data_dir`` is
@@ -125,6 +133,14 @@ class AssayConfig:
     default_horizons: tuple[int, ...] = (1, 5, 10, 20)
     default_execution: str = "next_open"
     default_adj: str = "split"
+
+    # Granularity defaults (minute-backtesting design). ``default_frequency`` keeps
+    # the daily path the default; ``default_horizons_minute`` are bar horizons used
+    # when a request resolves to an intraday frequency; ``annualization_basis``
+    # selects daily-aggregated ("daily") vs per-bar ("bar") metric annualization.
+    default_frequency: str = "1d"
+    default_horizons_minute: tuple[int, ...] = (1, 5, 30, 390)
+    annualization_basis: str = "daily"
 
     def __post_init__(self) -> None:
         # Normalise paths to Path so str inputs and ~ both work uniformly.

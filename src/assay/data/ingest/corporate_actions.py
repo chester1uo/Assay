@@ -1,4 +1,4 @@
-"""Corporate-action ingester: MASSIVE REST splits & dividends -> ``adj_events``.
+"""Corporate-action ingester: local MASSIVE splits & dividends -> ``adj_events``.
 
 Each split/dividend becomes one ``adj_events`` row recording the *primitive*
 event (forward split ratio or raw cash dividend). The cumulative point-in-time
@@ -9,8 +9,9 @@ never copied from the provider's as-of-today ``historical_adjustment_factor``
 Knowledge-time (``as_of_date``) conventions:
 
 * dividends -> ``declaration_date`` (the announcement), falling back to the
-  ex-dividend date when no declaration date is available;
-* splits    -> ``execution_date`` (the splits endpoint exposes no announcement
+  ex-dividend date when no declaration date is available (the local dump carries
+  no declaration date, so the ex-date is used);
+* splits    -> ``execution_date`` (the splits records expose no announcement
   date, so the effective date is the conservative knowable date).
 """
 
@@ -24,7 +25,7 @@ import polars as pl
 
 from assay.config import AssayConfig
 from assay.data.io_utils import upsert_parquet
-from assay.data.massive.rest import RestClient
+from assay.data.massive.corpactions import LocalCorpActions
 from assay.data.schemas import ADJ_EVENTS_SCHEMA, adj_events_path
 
 log = logging.getLogger(__name__)
@@ -84,9 +85,9 @@ def _dividend_row(rec: dict[str, Any]) -> dict[str, Any] | None:
 
 
 class CorpActionIngester:
-    def __init__(self, config: AssayConfig, client: RestClient | None = None):
+    def __init__(self, config: AssayConfig, client: LocalCorpActions | None = None):
         self.config = config
-        self.client = client or RestClient(config.massive)
+        self.client = client or LocalCorpActions(config.massive)
 
     def run(self, tickers, start: dt.date, end: dt.date) -> dict:
         tickers = sorted(set(tickers))

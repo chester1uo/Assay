@@ -1,6 +1,10 @@
-"""MASSIVE provider clients: S3 flat files and the REST corporate-actions API."""
+"""Local MASSIVE source readers: day-aggregate parquet and corporate-action JSONL.
 
-from assay.data.massive.flatfiles import FlatFilesClient
-from assay.data.massive.rest import RestClient
+The pipeline transforms a locally-downloaded MASSIVE mirror into the Assay
+parquet stores; nothing here touches the network.
+"""
 
-__all__ = ["FlatFilesClient", "RestClient"]
+from assay.data.massive.corpactions import LocalCorpActions
+from assay.data.massive.flatfiles import DayAggFile, LocalFlatFiles
+
+__all__ = ["LocalFlatFiles", "LocalCorpActions", "DayAggFile"]

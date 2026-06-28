@@ -15,8 +15,11 @@ import polars as pl
 from assay.config import AssayConfig
 from assay.data.schemas import (
     ADJ_EVENTS_SCHEMA,
+    TRADE_STATUS_SCHEMA,
     adj_events_path,
     price_partition_path,
+    security_groups_path,
+    trade_status_path,
     universe_snapshots_path,
 )
 from assay.data.store.adjust import forward_adjust
@@ -108,6 +111,53 @@ class DataStore:
         if symbols is not None:
             df = df.filter(pl.col("symbol").is_in(list(symbols)))
         return df
+
+    # -- trade status (price-limit bands / tradability) -----------------------
+    def get_trade_status(
+        self, symbols, start_date, end_date, as_of_date
+    ) -> pl.DataFrame:
+        """Per ``(date, symbol)`` price-limit bands + locked flags, PIT-filtered.
+
+        Returns columns ``date, symbol, up_limit, down_limit, limit_up_locked,
+        limit_down_locked, close`` (the raw close, for basis rebasing). Markets
+        without a ``trade_status`` store (e.g. US) return an **empty** frame
+        rather than raising, so a caller can treat "no limit data" as "no limit
+        constraint" and degrade gracefully.
+        """
+        path = trade_status_path(self.config.data_dir, self.config.market)
+        if not path.is_file():
+            return pl.DataFrame(schema=TRADE_STATUS_SCHEMA)
+        start = _as_date(start_date)
+        end = _as_date(end_date)
+        as_of = _as_date(as_of_date)
+        lf = pl.scan_parquet(str(path)).filter(
+            (pl.col("date") >= start)
+            & (pl.col("date") <= end)
+            & (pl.col("as_of_date") <= as_of)
+        )
+        if symbols is not None:
+            lf = lf.filter(pl.col("symbol").is_in(list(symbols)))
+        return lf.collect()
+
+    # -- security groups (industry / sector labels) ---------------------------
+    def get_groups(self, symbols, as_of_date) -> dict[str, str]:
+        """Map ``symbol -> group`` (industry/sector), PIT-filtered by ``as_of_date``.
+
+        Returns ``{}`` (not an error) when the market has no ``security_groups``
+        store, so a caller can treat "no group data" as "no neutralization". One
+        label per symbol (latest knowable as-of the query date).
+        """
+        path = security_groups_path(self.config.data_dir, self.config.market)
+        if not path.is_file():
+            return {}
+        as_of = _as_date(as_of_date)
+        df = pl.read_parquet(path).filter(pl.col("as_of_date") <= as_of)
+        if symbols is not None:
+            df = df.filter(pl.col("symbol").is_in(list(symbols)))
+        if df.is_empty():
+            return {}
+        df = df.sort("as_of_date").unique(subset=["symbol"], keep="last")
+        return dict(zip(df["symbol"].to_list(), df["group"].to_list()))
 
     # -- panel ----------------------------------------------------------------
     def get_panel(

@@ -164,6 +164,71 @@ def ts_cov(x, y, d):
     return (ax * ay).sum(axis=-1) / (int(d) - 1)
 
 
+# -- rolling order-statistics & dispersion (qlib Var/Med/Mad/Count/Quantile) --
+def ts_var(x, d):
+    if int(d) < 2:
+        raise ValueError("ts_var(x, d) needs d >= 2")
+    return windows(x, int(d)).var(axis=-1, ddof=1)
+
+
+def ts_med(x, d):
+    return np.median(windows(x, int(d)), axis=-1)  # NaN in a window -> NaN (full-window)
+
+
+def ts_mad(x, d):
+    w = windows(x, int(d))
+    return np.abs(w - w.mean(axis=-1, keepdims=True)).mean(axis=-1)
+
+
+def ts_count(x, d):
+    """Rolling count of nonzero (truthy) values over the window (qlib ``Count``)."""
+    w = windows(x, int(d))
+    valid = ~np.isnan(w).any(axis=-1)
+    cnt = (w != 0).sum(axis=-1).astype(np.float64)
+    cnt[~valid] = np.nan
+    return cnt
+
+
+def ts_quantile(x, d, q):
+    """Rolling ``q``-quantile (qlib ``Quantile(x, d, qscore)``); ``q`` in [0, 1]."""
+    return np.quantile(windows(x, int(d)), float(q), axis=-1)
+
+
+# -- rolling least-squares vs time (qlib Slope/Rsquare/Resi) ------------------
+def _rolling_ls(x, d):
+    """Per-window OLS of x against time t=0..d-1. Returns the shared pieces."""
+    d = int(d)
+    if d < 2:
+        raise ValueError("slope/rsquare/resi need d >= 2")
+    w = windows(x, d)                       # (T, N, d), NaN-filled until full
+    t = np.arange(d, dtype=np.float64)
+    tc = t - t.mean()
+    stt = float((tc * tc).sum())            # scalar: sum (t - tbar)^2
+    xbar = w.mean(axis=-1)
+    sxt = (w * tc).sum(axis=-1)             # == sum((w-xbar) * tc) since sum(tc)=0
+    slope = sxt / stt
+    intercept = xbar - slope * t.mean()
+    return w, t, stt, xbar, sxt, slope, intercept
+
+
+def ts_slope(x, d):
+    return _rolling_ls(x, d)[5]
+
+
+def ts_resi(x, d):
+    """Regression residual at the most recent bar: x_t - (intercept + slope*(d-1))."""
+    w, t, _, _, _, slope, intercept = _rolling_ls(x, d)
+    return w[..., -1] - (intercept + slope * t[-1])
+
+
+def ts_rsquare(x, d):
+    w, t, stt, xbar, sxt, slope, intercept = _rolling_ls(x, d)
+    sxx = ((w - xbar[..., None]) ** 2).sum(axis=-1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        r2 = (sxt ** 2) / (stt * sxx)
+    return np.where(sxx == 0, np.nan, r2)
+
+
 def ts_corr(x, y, d):
     ax, ay = _rolling_pair(x, y, d)
     cov = (ax * ay).sum(axis=-1)
@@ -218,10 +283,29 @@ register("ts_corr", ts_corr, 3, 3, signature="ts_corr(x, y, d)", category="time-
          common_errors=["d=1 produces all-NaN output (zero variance)"])
 register("ts_cov", ts_cov, 3, 3, signature="ts_cov(x, y, d)", category="time-series",
          output_range="(-inf, inf)", incremental=True)
+register("ts_var", ts_var, 2, 2, signature="ts_var(x, d)", category="time-series",
+         output_range="[0, inf)", incremental=False,
+         common_errors=["d=1 is undefined (needs d >= 2)"])
+register("ts_med", ts_med, 2, 2, signature="ts_med(x, d)", category="time-series",
+         output_range="same as x", incremental=False)
+register("ts_mad", ts_mad, 2, 2, signature="ts_mad(x, d)", category="time-series",
+         output_range="[0, inf)", incremental=False)
+register("ts_count", ts_count, 2, 2, signature="ts_count(cond, d)", category="time-series",
+         output_range="[0, d]", incremental=False)
+register("ts_quantile", ts_quantile, 3, 3, signature="ts_quantile(x, d, q)",
+         category="time-series", output_range="same as x", incremental=False)
+register("ts_slope", ts_slope, 2, 2, signature="ts_slope(x, d)", category="time-series",
+         output_range="(-inf, inf)", incremental=False)
+register("ts_resi", ts_resi, 2, 2, signature="ts_resi(x, d)", category="time-series",
+         output_range="(-inf, inf)", incremental=False)
+register("ts_rsquare", ts_rsquare, 2, 2, signature="ts_rsquare(x, d)", category="time-series",
+         output_range="[0, 1]", incremental=False)
 
 
 __all__ = [
     "ts_delay", "ts_delta", "ts_returns", "ts_log_returns", "ts_mean", "ts_sum", "ts_product",
     "ts_std", "ts_min", "ts_max", "ts_argmin", "ts_argmax", "ts_rank", "ts_decay_linear",
     "ts_ema", "ts_dema", "ts_skew", "ts_kurt", "ts_cov", "ts_corr",
+    "ts_var", "ts_med", "ts_mad", "ts_count", "ts_quantile",
+    "ts_slope", "ts_resi", "ts_rsquare",
 ]

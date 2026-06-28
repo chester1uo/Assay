@@ -164,7 +164,7 @@ def test_combined_split_and_dividend_continuous():
 
 def _make_store(tmp_path) -> AssayConfig:
     cfg = AssayConfig(
-        massive=MassiveConfig(api_key="x", s3_access_key_id="x", s3_secret_access_key="x"),
+        massive=MassiveConfig(),
         data_dir=tmp_path,
         market="US",
     )
@@ -296,7 +296,7 @@ _EVENT_SCHEMA = {
 
 def _build_store(tmp_path, price_rows, event_rows):
     cfg = AssayConfig(
-        massive=MassiveConfig(api_key="x", s3_access_key_id="x", s3_secret_access_key="x"),
+        massive=MassiveConfig(),
         data_dir=tmp_path, market="US",
     )
     price = pl.DataFrame(price_rows, schema=_PRICE_SCHEMA)

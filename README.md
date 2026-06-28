@@ -1,29 +1,34 @@
 # Assay
 
-Assay is a high-performance factor backtesting engine built for LLM agent-driven alpha mining.
+Assay is a high-performance, point-in-time-correct factor backtesting engine built for LLM
+agent-driven alpha mining. On top of a shared engine it exposes four surfaces — a Python SDK,
+a REST API (with SSE streaming), an MCP server for agents, and a zero-install WebUI — plus a
+full **portfolio backtest** module.
 
-This repository ships two layers:
+## 📚 Documentation
 
-1. the **data layer** — a loader + preparer pipeline that turns
-   [MASSIVE](https://massive.com) US-equity data into the point-in-time parquet
-   stores the engine reads (NASDAQ-100, full PIT constituent history); and
-2. the **factor execution engine** — a dual-syntax parser (qlib *and*
-   function-call / Alpha-101) over a unified AST and a numpy operator backend
-   that evaluates a factor expression into a `(T × N)` factor matrix.
+Full design specs and usage guides live in **[docs/](docs/README.md)**:
 
-See [assay_engineering_docs.md](assay_engineering_docs.md) for the full design
-and [assay_operator_compat.md](assay_operator_compat.md) for the operator table.
+- **Start here:** [Getting Started](docs/guide/getting-started.md)
+- **Guides:** [Data Pipeline](docs/guide/data-pipeline.md) · [Python SDK](docs/guide/python-sdk.md) ·
+  [CLI](docs/guide/cli.md) · [REST API](docs/guide/rest-api.md) · [MCP](docs/guide/mcp-server.md) ·
+  [WebUI](docs/guide/webui.md) · [Portfolio Backtest](docs/guide/portfolio-backtest.md) ·
+  [Performance](docs/guide/performance.md)
+- **Design:** [Engineering](docs/design/engineering.md) · [Architecture](docs/design/architecture.md) ·
+  [Operator table](docs/design/operator-compatibility.md) · [Portfolio](docs/design/portfolio-backtest.md)
+
+The rest of this README is a focused tour of the **data layer** and the **factor execution
+engine** (the foundation); everything above the engine is covered in the guides.
 
 ---
 
 ## What the pipeline does
 
 ```
-MASSIVE flat files (S3)  ─┐
-  day_aggs_v1/*.csv.gz    │   load            normalize + PIT          read (PIT)
-MASSIVE REST (splits,     ├─►  loaders  ──►   ingesters  ──►  parquet  ──►  DataStore.get_panel
-  dividends)              │                                   stores
-NASDAQ-100 history (YAML)─┘
+local MASSIVE mirror      ─┐
+  day_aggs_v1/*.parquet    │   read            normalize + PIT          read (PIT)
+  corporate_actions/*.jsonl├─►  readers  ──►   ingesters  ──►  parquet  ──►  DataStore.get_panel
+NASDAQ-100 history (YAML) ─┘   (local, no network)            stores
 ```
 
 Three parquet stores are produced under `$ASSAY_DATA_DIR` (default `./data`),
@@ -47,35 +52,28 @@ stay raw and any point-in-time slice can be reproduced exactly.
 pip install -r requirements.txt          # or: pip install -e .
 ```
 
-### Credentials
+### Local data source
 
-The MASSIVE credentials are loaded from environment variables. An installer
-block was appended to `~/.bashrc`; reload it once:
-
-```bash
-source ~/.bashrc
-```
-
-Variables (see [.env.example](.env.example)):
+The pipeline reads a **local mirror** of the MASSIVE dataset (downloaded
+out-of-band by the `downloader_*` scripts) and transforms it into the parquet
+stores — it does **not** download anything, so no credentials are needed.
 
 | Variable | Purpose |
 |---|---|
-| `MASSIVE_API_KEY` | REST bearer token (`api.massive.com`) |
-| `MASSIVE_S3_ACCESS_KEY_ID` / `MASSIVE_S3_SECRET_ACCESS_KEY` | S3 flat-files credentials |
-| `MASSIVE_S3_ENDPOINT` | `https://files.massive.com` |
-| `MASSIVE_S3_BUCKET` | `flatfiles` |
-| `MASSIVE_REST_BASE_URL` | `https://api.massive.com` |
-| `ASSAY_DATA_DIR` | output root (default `./data`) |
+| `MASSIVE_DATA_DIR` | root of the local MASSIVE mirror (default `/data/massive_data`) |
+| `ASSAY_DATA_DIR` | output root for the prepared stores (default `./data`) |
 
-Alternatively, copy `.env.example` to `.env` and fill it in — `assay.config`
-loads `.env` automatically (the shell environment always wins). Both `.env` and
+Expected source layout under `MASSIVE_DATA_DIR`:
+
+```
+us_stocks_sip/day_aggs_v1/{YYYY}/{MM}/{YYYY-MM-DD}.parquet   # daily OHLCV bars
+corporate_actions/splits/{TICKER}.jsonl                      # one split record per line
+corporate_actions/dividends/{TICKER}.jsonl                   # one dividend record per line
+```
+
+Copy `.env.example` to `.env` to override the defaults — `assay.config` loads
+`.env` automatically (the shell environment always wins). Both `.env` and
 `data/` are git-ignored.
-
-> **Subscription window.** MASSIVE entitles flat-file *downloads* on a rolling
-> ~5-year window. The bucket *lists* older dates, but `GetObject` returns HTTP
-> 403 outside the window. The price loader skips 403s with a warning and only
-> errors out if the *entire* requested range is forbidden — choose a `--start`
-> within your plan's window.
 
 ---
 
@@ -95,7 +93,7 @@ python -m assay.cli prices       --start 2023-01-01 --end 2024-12-31
 # Inspect / verify
 python -m assay.cli status
 python -m assay.cli verify  --start 2024-06-01 --end 2024-06-30 --adj split
-python -m assay.cli discover           # sanity-check S3 connectivity
+python -m assay.cli discover           # show the local MASSIVE source layout
 ```
 
 Run from source with `PYTHONPATH=src python -m assay.cli ...`, or after
@@ -176,7 +174,7 @@ range, so de-listed / removed names are still fetched.
 The engine ([src/assay/engine/](src/assay/engine/)) parses a factor expression
 into a unified AST and evaluates it over a PIT panel. Two front-end syntaxes
 lower to the *same* AST and operator backend — see
-[assay_operator_compat.md](assay_operator_compat.md) for the full operator table:
+[docs/design/operator-compatibility.md](docs/design/operator-compatibility.md) for the full operator table:
 
 * **qlib** — `$`-fields, CamelCase ops: `Corr($close, $volume, 20)`
 * **function-call** — Assay-native `ts_*`/`cs_*` *and* Alpha-101 / WorldQuant
@@ -286,9 +284,10 @@ volume); `signedpower` is sign-preserving while `^` is plain `pow`. The 18
 subindustry `group_data`. See [tests/factors/test_alpha101.py](tests/factors/test_alpha101.py).
 
 > **Scope.** This is the cold single-factor path: parse → evaluate. The IC /
-> RankIC / decay evaluation, `FactorReport`, batch DAG/CSE execution and the
-> two-level cache (engineering-docs §4.3-6) build on top of these kernels and
-> are the next step.
+> RankIC / decay evaluation, `FactorReport`, factor library, `AssayService` + SDK,
+> REST/MCP/WebUI surfaces, and the portfolio backtest are all built on top of these
+> kernels — see the [docs guides](docs/README.md). (Batch DAG/CSE execution and the
+> L1 incremental cache remain the open performance items.)
 
 ---
 
@@ -306,17 +305,16 @@ A single entry point runs the whole suite or any module/group (it sets
 `PYTHONPATH=src` for you and passes extra pytest args through):
 
 ```bash
-python scripts/run_tests.py            # whole offline suite
+python scripts/run_tests.py            # whole suite
 python scripts/run_tests.py engine     # one group  (== pytest -m engine == pytest tests/engine)
 python scripts/run_tests.py diagnostics # one module (tests/**/test_diagnostics.py)
-python scripts/run_tests.py network    # live MASSIVE smoke tests (need creds)
 python scripts/run_tests.py engine -k corr -x   # extra args pass through
 ```
 
 Equivalent raw pytest (each test is auto-marked by its folder):
 
 ```bash
-PYTHONPATH=src python -m pytest -m "not network"   # offline: all groups
+PYTHONPATH=src python -m pytest tests                # all groups
 PYTHONPATH=src python -m pytest tests/engine        # by path
 PYTHONPATH=src python -m pytest -m data             # by marker
 ```
