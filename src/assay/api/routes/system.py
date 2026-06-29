@@ -26,9 +26,10 @@ from assay.api.auth import get_api_key
 
 router = APIRouter()
 
-# Universes the engine knows about today (architecture §4.4 / §6.3 enum). Only
-# NASDAQ100 is wired up; the others are roadmap and report 0 symbols.
-_KNOWN_UNIVERSES = ("NASDAQ100", "SP500", "Russell2000")
+# Universes the engine knows about (architecture §4.4 / §6.3 enum). US (NASDAQ100)
+# and A-share (CSI300/500/1000) are wired; each reports symbols from its own market
+# store. Universes with no ingested snapshot report 0 symbols rather than failing.
+_KNOWN_UNIVERSES = ("NASDAQ100", "SP500", "Russell2000", "CSI300", "CSI500", "CSI1000")
 
 
 def _data_summary(svc) -> dict[str, Any]:
@@ -94,7 +95,7 @@ def _cache_summary(svc) -> dict[str, Any]:
 
 
 @router.get("/status")
-async def system_status(api_key: str | None = Depends(get_api_key)) -> dict:
+def system_status(api_key: str | None = Depends(get_api_key)) -> dict:
     """Engine version + best-effort data / cache / session summary (architecture §4.4).
 
     Always ``200``: every data-touching read is guarded so a credential-less, data-
@@ -117,7 +118,7 @@ async def system_status(api_key: str | None = Depends(get_api_key)) -> dict:
 
 
 @router.get("/universes")
-async def list_universes(api_key: str | None = Depends(get_api_key)) -> list[dict]:
+def list_universes(api_key: str | None = Depends(get_api_key)) -> list[dict]:
     """Known universes with current symbol counts (architecture §4.4).
 
     Symbol counts are resolved point-in-time as of the config's default period end;
@@ -128,16 +129,18 @@ async def list_universes(api_key: str | None = Depends(get_api_key)) -> list[dic
     out: list[dict] = []
     for uid in _KNOWN_UNIVERSES:
         n = 0
+        market = svc._market_for(uid)
         try:
-            n = len(svc.store.get_universe(uid, end, end))
+            # Count from the universe's own market store (US vs A-share).
+            n = len(svc.store_for_universe(uid).get_universe(uid, end, end))
         except Exception:
             pass
-        out.append({"id": uid, "n_symbols": n, "last_rebalance": None})
+        out.append({"id": uid, "n_symbols": n, "market": market, "last_rebalance": None})
     return out
 
 
 @router.get("/data-calendar")
-async def data_calendar(
+def data_calendar(
     market: str | None = Query(None),
     year: int | None = Query(None),
     api_key: str | None = Depends(get_api_key),

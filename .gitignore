@@ -2,6 +2,8 @@
 .env
 *.env
 !.env.example
+.assay.config.json
+*.assay.config.json
 
 # Ingested market data (large; regenerate via the pipeline). Anchored to the
 # repo root with a leading slash so the data-LAYER source under src/assay/data/

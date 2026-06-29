@@ -143,14 +143,18 @@ export class ApiClient {
         const decoder = new TextDecoder();
         let buffer = "";
         // SSE frames are separated by a blank line; each carries event:/data: lines.
+        // The separator may be "\n\n" or "\r\n\r\n" (sse-starlette emits CRLF), so
+        // match either — a plain indexOf("\n\n") never fires on CRLF streams and
+        // would buffer the whole response into one un-parseable blob.
+        const FRAME_SEP = /\r?\n\r?\n/;
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
-          let sep;
-          while ((sep = buffer.indexOf("\n\n")) !== -1) {
-            const frame = buffer.slice(0, sep);
-            buffer = buffer.slice(sep + 2);
+          let m;
+          while ((m = FRAME_SEP.exec(buffer)) !== null) {
+            const frame = buffer.slice(0, m.index);
+            buffer = buffer.slice(m.index + m[0].length);
             const parsed = parseSseFrame(frame);
             if (parsed) onEvent(parsed);
           }
@@ -183,11 +187,40 @@ export class ApiClient {
       query: { factor_ids: factorIds, universe, period },
     });
   }
-  prune({ redundancy_threshold, dry_run = true } = {}) {
+  prune({ redundancy_threshold, dry_run = true, factor_ids } = {}) {
     return request("POST", this._p("/v1/library/prune"), {
-      body: { redundancy_threshold, dry_run },
+      body: { redundancy_threshold, dry_run, factor_ids },
     });
   }
+  /** Bulk-import expressions: evaluate + save the good ones. body: {exprs, universe?, source?, period?}. */
+  libraryBulkAdd(body, { signal } = {}) {
+    return request("POST", this._p("/v1/library/factors/bulk"), { body, signal });
+  }
+
+  // ---- market data ---------------------------------------------------------
+  /** OHLCV bars for one symbol. params: {symbol, freq, adj, start, end, as_of}. */
+  marketBars({ symbol, freq, adj, start, end, as_of } = {}, { signal } = {}) {
+    return request("GET", this._p("/v1/market/bars"), { query: { symbol, freq, adj, start, end, as_of }, signal });
+  }
+  /** Evaluate an alpha expression for one symbol -> {dates, values}. */
+  marketFactorSeries(body, { signal } = {}) {
+    return request("POST", this._p("/v1/market/factor-series"), { body, signal });
+  }
+
+  // ---- portfolio backtest --------------------------------------------------
+  /** Run a portfolio backtest. `req` carries {expr, ...inline config fields} or
+   *  {expr, config:{...}}. Returns the PortfolioReport dict. */
+  portfolioBacktest(req, { signal } = {}) {
+    return request("POST", this._p("/v1/portfolio/backtest"), { body: req, signal });
+  }
+
+  // ---- data manager (admin) ------------------------------------------------
+  adminConfigGet() { return request("GET", this._p("/v1/admin/config")); }
+  adminConfigPut(patch) { return request("PUT", this._p("/v1/admin/config"), { body: patch }); }
+  adminDataStatus() { return request("GET", this._p("/v1/admin/data/status")); }
+  adminJobStart(body) { return request("POST", this._p("/v1/admin/data/jobs"), { body }); }
+  adminJobs() { return request("GET", this._p("/v1/admin/data/jobs")); }
+  adminJob(id) { return request("GET", this._p(`/v1/admin/data/jobs/${encodeURIComponent(id)}`)); }
 
   // ---- session -------------------------------------------------------------
   createSession({ universe, period } = {}) {

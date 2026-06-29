@@ -13,6 +13,8 @@
 // Graceful degradation: every fetch is guarded; empty / error states are explicit and
 // the page never blank-crashes when NASDAQ-100 data is not ingested.
 
+import { t } from "../i18n.js";
+
 const STYLE_ID = "dashboard-page-style";
 const POLL_MS = 30000;
 const LEADERBOARD_LIMIT = 200;
@@ -101,13 +103,13 @@ function redundancyBadge(score, ctx) {
   const s = num(score);
   if (s === null) return ctx.el("span", { className: "muted" }, "—");
   let variant = "green";
-  let label = "unique";
+  let label = t("badge.unique");
   if (s > 0.7) {
     variant = "red";
-    label = "redundant";
+    label = t("badge.redundant");
   } else if (s >= 0.4) {
     variant = "amber";
-    label = "similar";
+    label = t("badge.similar");
   }
   return ctx.el(
     "span",
@@ -120,7 +122,7 @@ function statusBadge(failureMode, ctx) {
   if (failureMode) {
     return ctx.el("span", { className: "badge badge--red", title: failureMode }, "! " + failureMode);
   }
-  return ctx.el("span", { className: "badge badge--green", title: "Passed" }, "✓");
+  return ctx.el("span", { className: "badge badge--green", title: t("badge.passed") }, "✓");
 }
 
 function sourceTag(source, ctx) {
@@ -129,15 +131,15 @@ function sourceTag(source, ctx) {
 
 function relTime(iso) {
   if (!iso) return null;
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return String(iso);
-  const sec = (Date.now() - t) / 1000;
-  if (sec < 90) return "just now";
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return String(iso);
+  const sec = (Date.now() - ts) / 1000;
+  if (sec < 90) return t("common.justNow");
   const min = sec / 60;
-  if (min < 90) return `${Math.round(min)} min ago`;
+  if (min < 90) return t("common.minAgo", { n: Math.round(min) });
   const hr = min / 60;
-  if (hr < 36) return `${Math.round(hr)} h ago`;
-  return `${Math.round(hr / 24)} d ago`;
+  if (hr < 36) return t("common.hAgo", { n: Math.round(hr) });
+  return t("common.dAgo", { n: Math.round(hr / 24) });
 }
 
 // ---------------------------------------------------------------- status bar ----
@@ -151,19 +153,19 @@ function buildStatusBar(status, ctx) {
 
   // Freshness heuristic identical in spirit to app.js refreshStatus().
   let dotCls = "fresh";
-  let freshLabel = "Data online";
+  let freshLabel = t("dash.dataOnline");
   if (status && (status.degraded || status.status === "degraded")) {
     dotCls = "stale";
-    freshLabel = "Degraded";
+    freshLabel = t("dash.degraded");
   } else if (!symbols) {
     // No ingested symbols -> nothing to evaluate against.
     dotCls = "error";
-    freshLabel = "No data ingested";
+    freshLabel = t("dash.noData");
   } else if (lastSync) {
     const ageH = (Date.now() - Date.parse(lastSync)) / 3.6e6;
     if (Number.isFinite(ageH) && ageH > 24) {
       dotCls = "stale";
-      freshLabel = "Data stale";
+      freshLabel = t("dash.dataStale");
     }
   }
 
@@ -176,31 +178,31 @@ function buildStatusBar(status, ctx) {
     el(
       "span",
       {},
-      "Last sync: ",
-      el("span", { className: "sb-strong" }, lastSync ? relTime(lastSync) : "never")
+      t("dash.lastSync") + " ",
+      el("span", { className: "sb-strong" }, lastSync ? relTime(lastSync) : t("common.never"))
     )
   );
   items.push(sep());
-  items.push(el("span", {}, symbols !== null ? `${ctx.fmtInt(symbols)} symbols` : "— symbols"));
+  items.push(el("span", {}, symbols !== null ? `${ctx.fmtInt(symbols)} ${t("common.symbols")}` : `— ${t("common.symbols")}`));
   if (tradingDays) {
     items.push(sep());
-    items.push(el("span", {}, `${ctx.fmtInt(tradingDays)} trading days`));
+    items.push(el("span", {}, `${ctx.fmtInt(tradingDays)} ${t("common.tradingDays")}`));
   }
   if (status && status.engine_version) {
     items.push(sep());
-    items.push(el("span", { className: "muted" }, `engine v${status.engine_version}`));
+    items.push(el("span", { className: "muted" }, t("dash.engine", { v: status.engine_version })));
   }
 
   // Warnings: surface data unavailability as an actionable warning.
   const warnings = [];
-  if (!symbols) warnings.push("No ingested data — run prepare-nasdaq100");
-  if (status && (status.degraded || status.status === "degraded")) warnings.push("Service degraded");
+  if (!symbols) warnings.push(t("dash.warnNoData"));
+  if (status && (status.degraded || status.status === "degraded")) warnings.push(t("dash.warnDegraded"));
   items.push(sep());
   items.push(
     el(
       "span",
-      { className: "sb-warn", title: warnings.join(" · ") || "No warnings" },
-      warnings.length ? `⚠ ${warnings.length} warning${warnings.length > 1 ? "s" : ""}` : "✓ 0 warnings"
+      { className: "sb-warn", title: warnings.join(" · ") || "" },
+      warnings.length ? `⚠ ${t(warnings.length > 1 ? "dash.warnings" : "dash.warning", { n: warnings.length })}` : `✓ ${t("dash.noWarnings")}`
     )
   );
 
@@ -213,9 +215,9 @@ function buildStatusBarError(ctx) {
     "div",
     { className: "dash-statusbar", role: "status" },
     el("span", { className: "sb-dot sb-dot--error" }),
-    el("span", { className: "sb-strong" }, "System status unavailable"),
+    el("span", { className: "sb-strong" }, t("dash.statusUnavail")),
     el("span", { className: "sb-sep" }, "·"),
-    el("span", { className: "muted" }, "GET /v1/system/status failed")
+    el("span", { className: "muted" }, t("dash.statusFailed"))
   );
 }
 
@@ -267,31 +269,31 @@ function buildKpiRow(ctx, { factors, status }) {
     "div",
     { className: "grid grid-4" },
     kpiCard(ctx, {
-      label: "Total factors",
+      label: t("dash.kpiTotal"),
       value: fmtInt(totalFactors),
-      sub: factors.length < totalFactors ? `showing top ${factors.length}` : "in library",
+      sub: factors.length < totalFactors ? t("dash.kpiTotalSubTop", { n: factors.length }) : t("dash.kpiTotalSubLib"),
       onClick: () => ctx.router.navigate("#/library"),
     }),
     kpiCard(ctx, {
-      label: "Avg RankICIR",
+      label: t("dash.kpiAvgIcir"),
       value: fmt(avgIcir, 2),
-      sub: icirs.length ? `across ${fmtInt(icirs.length)} scored` : "no scored factors",
+      sub: icirs.length ? t("dash.kpiAvgSub", { n: fmtInt(icirs.length) }) : t("dash.kpiAvgNone"),
       valueCls: avgIcir !== null ? (avgIcir >= 0 ? "metric-value--pos" : "metric-value--neg") : null,
     }),
     kpiCard(ctx, {
-      label: "Best RankICIR",
+      label: t("dash.kpiBestIcir"),
       value: best ? fmt(num(best.rank_icir), 2) : "—",
       sub: best ? best.expr : "—",
       valueCls: best ? "metric-value--pos" : null,
       onClick: best ? () => ctx.router.navigate(`#/factor/${encodeURIComponent(best.factor_id)}`) : null,
     }),
     kpiCard(ctx, {
-      label: "Active sessions",
+      label: t("dash.kpiSessions"),
       value: sessions !== null ? fmtInt(sessions) : "—",
       sub:
         status && num(status.data && status.data.trading_days_available) !== null
-          ? `${fmtInt(status.data.trading_days_available)} data days`
-          : "agent sessions live",
+          ? t("dash.kpiDataDays", { n: fmtInt(status.data.trading_days_available) })
+          : t("dash.kpiSessionsSub"),
     })
   );
 }
@@ -356,7 +358,7 @@ function buildLeaderboard(ctx, factors, filters, onFiltersChange) {
     el("option", { value: "rank_icir", selected: filters.sortBy === "rank_icir" }, "RankICIR"),
     el("option", { value: "rank_ic", selected: filters.sortBy === "rank_ic" }, "RankIC"),
     el("option", { value: "ic", selected: filters.sortBy === "ic" }, "IC"),
-    el("option", { value: "decay_halflife_days", selected: filters.sortBy === "decay_halflife_days" }, "Decay")
+    el("option", { value: "decay_halflife_days", selected: filters.sortBy === "decay_halflife_days" }, t("dash.colDecay"))
   );
 
   const minIcirInput = el("input", {
@@ -391,15 +393,15 @@ function buildLeaderboard(ctx, factors, filters, onFiltersChange) {
       "aria-label": "Hide redundant factors",
       onChange: (e) => onFiltersChange({ hideRedundant: e.target.checked }),
     }),
-    "Hide redundant"
+    t("dash.hideRedundant")
   );
 
   const controls = el(
     "div",
     { className: "dash-controls" },
-    el("span", { className: "ctrl" }, el("span", { className: "ctrl-label" }, "Sort"), sortSelect),
-    el("span", { className: "ctrl" }, el("span", { className: "ctrl-label" }, "Min ICIR"), minIcirInput),
-    el("span", { className: "ctrl" }, el("span", { className: "ctrl-label" }, "Source"), sourceSelect),
+    el("span", { className: "ctrl" }, el("span", { className: "ctrl-label" }, t("dash.sort")), sortSelect),
+    el("span", { className: "ctrl" }, el("span", { className: "ctrl-label" }, t("dash.minIcir")), minIcirInput),
+    el("span", { className: "ctrl" }, el("span", { className: "ctrl-label" }, t("dash.source")), sourceSelect),
     hideToggle
   );
 
@@ -411,16 +413,16 @@ function buildLeaderboard(ctx, factors, filters, onFiltersChange) {
     body = el(
       "div",
       { className: "empty-state" },
-      el("div", { className: "empty-state-title" }, "No factors yet"),
-      el("div", {}, "Evaluate one in Single Factor Test to populate the leaderboard."),
-      el("button", { className: "btn btn--primary btn--sm", onClick: () => ctx.router.navigate("#/factor") }, "Open Single Factor Test")
+      el("div", { className: "empty-state-title" }, t("dash.noFactors")),
+      el("div", {}, t("dash.noFactorsHint")),
+      el("button", { className: "btn btn--primary btn--sm", onClick: () => ctx.router.navigate("#/factor") }, t("dash.openFactorTest"))
     );
   } else if (filtered.length === 0) {
     body = el(
       "div",
       { className: "empty-state" },
-      el("div", { className: "empty-state-title" }, "No factors match these filters"),
-      el("div", {}, "Loosen Min ICIR, source, or the redundancy toggle.")
+      el("div", { className: "empty-state-title" }, t("dash.noMatch")),
+      el("div", {}, t("dash.noMatchHint"))
     );
   } else {
     const head = el(
@@ -429,13 +431,13 @@ function buildLeaderboard(ctx, factors, filters, onFiltersChange) {
       el(
         "tr",
         {},
-        el("th", {}, "Expression"),
+        el("th", {}, t("dash.colExpr")),
         el("th", { className: "num" }, "RankIC"),
         el("th", { className: "num" }, "RankICIR"),
-        el("th", {}, "Decay"),
-        el("th", {}, "Redundancy"),
-        el("th", {}, "Source"),
-        el("th", {}, "Status")
+        el("th", {}, t("dash.colDecay")),
+        el("th", {}, t("dash.colRedundancy")),
+        el("th", {}, t("dash.colSource")),
+        el("th", {}, t("dash.colStatus"))
       )
     );
     const rows = filtered.map((f) =>
@@ -470,8 +472,8 @@ function buildLeaderboard(ctx, factors, filters, onFiltersChange) {
     el(
       "div",
       { className: "card-head" },
-      el("h2", { className: "section-title" }, "Factor Leaderboard"),
-      el("span", { className: "muted", style: { fontSize: "12px" } }, factors.length ? `${filtered.length} of ${factors.length}` : "")
+      el("h2", { className: "section-title" }, t("dash.leaderboard")),
+      el("span", { className: "muted", style: { fontSize: "12px" } }, factors.length ? t("dash.ofTotal", { shown: filtered.length, total: factors.length }) : "")
     ),
     controls,
     el("div", { className: "mt-4 w-full" }, body)
@@ -494,8 +496,8 @@ function buildTopPanel(ctx, factors) {
     list = el(
       "div",
       { className: "empty-state", style: { padding: "var(--sp-8) var(--sp-4)" } },
-      el("div", { className: "empty-state-title" }, "No factors to show"),
-      el("div", {}, "Top factors appear here once the library has scored entries.")
+      el("div", { className: "empty-state-title" }, t("dash.noTop")),
+      el("div", {}, t("dash.noTopHint"))
     );
   } else {
     list = el(
@@ -534,14 +536,14 @@ function buildTopPanel(ctx, factors) {
     el(
       "div",
       { className: "card-head" },
-      el("h2", { className: "section-title" }, "Top factors"),
-      el("span", { className: "muted", style: { fontSize: "12px" } }, "by RankICIR")
+      el("h2", { className: "section-title" }, t("dash.topFactors")),
+      el("span", { className: "muted", style: { fontSize: "12px" } }, t("dash.byRankIcir"))
     ),
     list,
     el(
       "p",
       { className: "placeholder-note mt-4" },
-      "Live agent activity feed is not wired yet — no session-stream endpoint exists. Showing the library's highest-ICIR factors instead."
+      t("dash.feedNote")
     )
   );
 }
@@ -556,8 +558,8 @@ function buildCalendar(ctx, calendar) {
     body = el(
       "div",
       { className: "empty-state" },
-      el("div", { className: "empty-state-title" }, "No ingested data"),
-      el("div", {}, "Run prepare-nasdaq100 to populate the data calendar.")
+      el("div", { className: "empty-state-title" }, t("dash.calNoData")),
+      el("div", {}, t("dash.calNoDataHint"))
     );
   } else {
     const dates = rows.map((r) => r.date);
@@ -577,8 +579,8 @@ function buildCalendar(ctx, calendar) {
     el(
       "div",
       { className: "card-head" },
-      el("h2", { className: "section-title" }, "Data Calendar"),
-      el("span", { className: "muted", style: { fontSize: "12px" } }, rows.length ? `${rows.length} trading days` : "")
+      el("h2", { className: "section-title" }, t("dash.calendar")),
+      el("span", { className: "muted", style: { fontSize: "12px" } }, rows.length ? `${rows.length} ${t("common.tradingDays")}` : "")
     ),
     body
   );
@@ -608,8 +610,8 @@ export function render(root, ctx) {
     el(
       "div",
       { className: "page-header" },
-      el("h1", { className: "page-title" }, "Dashboard"),
-      el("span", { className: "page-subtitle" }, `Universe ${ctx.store.get("universe")} · ${ctx.store.get("period").join(" – ")}`)
+      el("h1", { className: "page-title" }, t("dash.title")),
+      el("span", { className: "page-subtitle" }, t("dash.subtitle", { u: ctx.store.get("universe"), start: ctx.store.get("period")[0], end: ctx.store.get("period")[1] }))
     ),
     statusSlot,
     kpiSlot,
@@ -669,12 +671,12 @@ export function render(root, ctx) {
         el(
           "section",
           { className: "panel", style: { padding: "var(--sp-4)" } },
-          el("h2", { className: "section-title", style: { marginBottom: "var(--sp-3)" } }, "Factor Leaderboard"),
+          el("h2", { className: "section-title", style: { marginBottom: "var(--sp-3)" } }, t("dash.leaderboard")),
           el(
             "div",
             { className: "error-state" },
-            el("div", { className: "error-state-title" }, "Could not load the factor library"),
-            el("div", { className: "muted" }, err && err.message ? err.message : "GET /v1/library/factors failed")
+            el("div", { className: "error-state-title" }, t("dash.libLoadFail")),
+            el("div", { className: "muted" }, err && err.message ? err.message : t("dash.libLoadFailMsg"))
           )
         )
       );
@@ -692,12 +694,12 @@ export function render(root, ctx) {
         el(
           "section",
           { className: "card" },
-          el("h2", { className: "section-title", style: { marginBottom: "var(--sp-3)" } }, "Data Calendar"),
+          el("h2", { className: "section-title", style: { marginBottom: "var(--sp-3)" } }, t("dash.calendar")),
           el(
             "div",
             { className: "error-state" },
-            el("div", { className: "error-state-title" }, "Data calendar unavailable"),
-            el("div", { className: "muted" }, "GET /v1/system/data-calendar failed")
+            el("div", { className: "error-state-title" }, t("dash.calUnavail")),
+            el("div", { className: "muted" }, t("dash.calFailed"))
           )
         )
       );

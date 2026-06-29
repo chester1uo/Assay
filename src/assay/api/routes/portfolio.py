@@ -71,24 +71,34 @@ class PortfolioBacktestRequest(BaseModel):
         Precedence: an explicit ``config`` dict is taken verbatim via
         :meth:`PortfolioBacktestConfig.from_dict` (it tolerates partial payloads and
         ignores unknown keys). Otherwise the inline section-2 fields (the extra slot
-        plus ``period_start`` / ``period_end`` if present) are merged onto the US
-        market preset, so a minimal ``{expr, period_start, period_end}`` request is
-        valid. The config validator raises on out-of-range fields (mapped to 422).
+        plus ``period_start`` / ``period_end`` if present) are merged onto the market
+        preset chosen by the inline ``market`` (default US), so a minimal
+        ``{expr, period_start, period_end}`` request is valid and an A-share request
+        (``market='A'``) gets A-share cost/limit defaults. The config validator
+        raises on out-of-range fields (mapped to 422).
         """
         if self.config is not None:
             return PortfolioBacktestConfig.from_dict(self.config)
         # Collect inline config fields from the model's extra slot (anything that is
-        # not a reserved transport key), then layer them onto the US preset defaults.
+        # not a reserved transport key), then layer them onto the market preset.
         extra = {
             k: v
             for k, v in (self.model_extra or {}).items()
             if k not in self._RESERVED
         }
-        return PortfolioBacktestConfig.preset("US", **extra)
+        # Pick the cost/limit preset from the requested market (default US), so an
+        # inline ``{market: "A"}`` request gets the A-share stamp-duty / commission /
+        # price-limit defaults rather than US ones. Unknown markets fall back to US.
+        # ``market`` is passed positionally to preset(), so drop it from the kwargs
+        # overrides to avoid "multiple values for argument 'market'".
+        market = str(extra.pop("market", "US")).upper()
+        if market not in ("US", "A", "HK"):
+            market = "US"
+        return PortfolioBacktestConfig.preset(market, **extra)
 
 
 @router.post("/backtest")
-async def backtest_portfolio(
+def backtest_portfolio(
     req: PortfolioBacktestRequest,
     api_key: str | None = Depends(get_api_key),
 ) -> dict[str, Any]:

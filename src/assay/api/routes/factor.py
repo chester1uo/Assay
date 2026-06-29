@@ -19,6 +19,7 @@ import time
 from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Body, Depends, Header
+from fastapi.concurrency import run_in_threadpool
 from sse_starlette.sse import EventSourceResponse
 
 from assay.api.app import get_service
@@ -103,12 +104,14 @@ async def evaluate_factor(
         events = svc.stream(req.expr, **kwargs)
         return EventSourceResponse(_sse_iter(events))
 
-    report = svc.evaluate(req.expr, **kwargs)
+    # Offload the blocking, CPU-bound evaluation to a worker thread so it never
+    # stalls the event loop (other requests stay responsive while it runs).
+    report = await run_in_threadpool(svc.evaluate, req.expr, **kwargs)
     return report.to_dict()
 
 
 @router.post("/lint")
-async def lint_factor(
+def lint_factor(
     expr: str = Body(..., embed=True),
     api_key: str | None = Depends(get_api_key),
 ) -> dict[str, Any]:
@@ -144,7 +147,7 @@ async def lint_factor(
 
 
 @router.post("/batch", response_model=BatchResponse)
-async def batch_factors(
+def batch_factors(
     req: BatchRequest,
     api_key: str | None = Depends(get_api_key),
 ) -> BatchResponse:

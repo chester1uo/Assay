@@ -18,46 +18,50 @@ const LINT_DEBOUNCE_MS = 300;
 const DEFAULT_EXPR = "ts_corr(close, volume, 20)";
 const HORIZONS_ALL = [1, 5, 10, 20];
 const EXECUTIONS = ["next_open", "next_close"]; // vwap unsupported (no intraday source)
+// Neutralize options: `value` is the API field; `labelKey` resolves to a
+// localized display label at render time.
 const NEUTRALIZE = [
-  { value: "", label: "None" },
-  { value: "sector", label: "Sector" },
-  { value: "industry", label: "Industry" },
-  { value: "market_cap", label: "Market cap" },
+  { value: "", labelKey: "factor.neutralizeNone" },
+  { value: "sector", labelKey: "factor.neutralizeSector" },
+  { value: "industry", labelKey: "factor.neutralizeIndustry" },
+  { value: "market_cap", labelKey: "factor.neutralizeMarketCap" },
 ];
 
 // Curated operator reference (no operator-schema endpoint exists; we list the
 // registered names we know and note that more are available via /v1/factor/lint).
+// `groupKey`/`descKey` resolve to localized text at render time; the operator
+// signatures themselves are code identifiers and are never translated.
 const OPERATOR_DOCS = [
-  { group: "Time-series", ops: [
-    ["ts_delay(x, d)", "value of x, d days ago"],
-    ["ts_delta(x, d)", "x − ts_delay(x, d)"],
-    ["ts_mean(x, d)", "rolling mean over d days"],
-    ["ts_std(x, d)", "rolling std (d ≥ 2)"],
-    ["ts_sum(x, d)", "rolling sum"],
-    ["ts_min(x, d) / ts_max(x, d)", "rolling extrema"],
-    ["ts_rank(x, d)", "rolling time-series rank"],
-    ["ts_corr(x, y, d)", "rolling correlation"],
-    ["ts_cov(x, y, d)", "rolling covariance"],
-    ["ts_ema(x, d) / ts_dema(x, d)", "exponential / double-EMA"],
-    ["ts_decay_linear(x, d)", "linearly-weighted mean"],
-    ["ts_argmax(x, d) / ts_argmin(x, d)", "index of extrema"],
-    ["ts_returns(x, d) / ts_log_returns(x, d)", "returns"],
-    ["ts_zscore(x, d) / ts_skew / ts_kurt / ts_product", "moments"],
+  { groupKey: "factor.opGroupTimeSeries", ops: [
+    ["ts_delay(x, d)", "factor.opTsDelay"],
+    ["ts_delta(x, d)", "factor.opTsDelta"],
+    ["ts_mean(x, d)", "factor.opTsMean"],
+    ["ts_std(x, d)", "factor.opTsStd"],
+    ["ts_sum(x, d)", "factor.opTsSum"],
+    ["ts_min(x, d) / ts_max(x, d)", "factor.opTsMinMax"],
+    ["ts_rank(x, d)", "factor.opTsRank"],
+    ["ts_corr(x, y, d)", "factor.opTsCorr"],
+    ["ts_cov(x, y, d)", "factor.opTsCov"],
+    ["ts_ema(x, d) / ts_dema(x, d)", "factor.opTsEma"],
+    ["ts_decay_linear(x, d)", "factor.opTsDecayLinear"],
+    ["ts_argmax(x, d) / ts_argmin(x, d)", "factor.opTsArg"],
+    ["ts_returns(x, d) / ts_log_returns(x, d)", "factor.opTsReturns"],
+    ["ts_zscore(x, d) / ts_skew / ts_kurt / ts_product", "factor.opTsMoments"],
   ] },
-  { group: "Cross-sectional", ops: [
-    ["cs_rank(x)", "rank across symbols per day"],
-    ["cs_zscore(x) / cs_demean(x) / cs_scale(x)", "standardise"],
-    ["cs_winsorize(x, p)", "clip tails (0 < p < 0.5)"],
-    ["cs_neutralize(x, g)", "residualise vs group g"],
-    ["cs_group_rank(x, g) / cs_group_mean(x, g)", "by group"],
+  { groupKey: "factor.opGroupCrossSectional", ops: [
+    ["cs_rank(x)", "factor.opCsRank"],
+    ["cs_zscore(x) / cs_demean(x) / cs_scale(x)", "factor.opCsStandardise"],
+    ["cs_winsorize(x, p)", "factor.opCsWinsorize"],
+    ["cs_neutralize(x, g)", "factor.opCsNeutralize"],
+    ["cs_group_rank(x, g) / cs_group_mean(x, g)", "factor.opCsGroup"],
   ] },
-  { group: "Element-wise / math", ops: [
-    ["+  −  *  /  (or add/sub/mul/div)", "arithmetic"],
-    ["abs, neg, sign, log, sqrt, sigmoid", "unary"],
-    ["pow(x, n), signed_power(x, n)", "powers"],
-    ["clip(x, lo, hi), fillna(x, m)", "cleanup"],
-    ["elem_max(x, y) / elem_min(x, y)", "pairwise"],
-    ["where(cond, a, b), safe_div(x, y)", "conditional"],
+  { groupKey: "factor.opGroupElementwise", ops: [
+    ["+  −  *  /  (or add/sub/mul/div)", "factor.opMathArithmetic"],
+    ["abs, neg, sign, log, sqrt, sigmoid", "factor.opMathUnary"],
+    ["pow(x, n), signed_power(x, n)", "factor.opMathPowers"],
+    ["clip(x, lo, hi), fillna(x, m)", "factor.opMathCleanup"],
+    ["elem_max(x, y) / elem_min(x, y)", "factor.opMathPairwise"],
+    ["where(cond, a, b), safe_div(x, y)", "factor.opMathConditional"],
   ] },
 ];
 
@@ -157,14 +161,17 @@ function injectStyle() {
 .factor-config { display: flex; align-items: flex-end; gap: var(--sp-3); flex-wrap: wrap; }
 .factor-config-field { display: flex; flex-direction: column; gap: var(--sp-1); }
 .factor-config-field > .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
-.factor-horizons { display: inline-flex; gap: var(--sp-3); align-items: center; }
+.factor-horizons { display: inline-flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 .factor-horizons label { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; cursor: pointer; }
+.factor-horizon-input { width: 130px; font-family: var(--font-mono); }
+.factor-horizon-input.is-error { border-color: #E8B5AE; }
 .factor-override { color: var(--amber); font-weight: 600; cursor: help; }
 .factor-main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--sp-4); align-items: start; }
 @media (max-width: 1200px) { .factor-main { grid-template-columns: minmax(0, 1fr); } }
 .factor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
 @media (max-width: 900px) { .factor-grid { grid-template-columns: minmax(0, 1fr); } }
 .factor-card .card-head { flex-direction: column; align-items: flex-start; gap: 2px; }
+.factor-card-titlerow { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); width: 100%; }
 .factor-hint { font-size: 12px; color: var(--text-muted); }
 .factor-summary { position: sticky; top: var(--sp-4); }
 .factor-summary-section { padding: var(--sp-3) 0; border-top: 1px solid var(--border); }
@@ -213,9 +220,9 @@ function redundancyBadge(score, ctx) {
     return ctx.el("span", { className: "badge badge--gray" }, "—");
   }
   let cls = "badge--green";
-  let lbl = "unique";
-  if (score > 0.7) { cls = "badge--red"; lbl = "redundant"; }
-  else if (score >= 0.4) { cls = "badge--amber"; lbl = "similar"; }
+  let lbl = ctx.t("factor.redundancyUnique");
+  if (score > 0.7) { cls = "badge--red"; lbl = ctx.t("factor.redundancyRedundant"); }
+  else if (score >= 0.4) { cls = "badge--amber"; lbl = ctx.t("factor.redundancySimilar"); }
   return ctx.el("span", { className: "badge " + cls }, `${ctx.fmt(score, 2)} ${lbl}`);
 }
 
@@ -226,7 +233,7 @@ function decayBadge(days, ctx) {
   let cls = "badge--green";
   if (days > 30) cls = "badge--red";
   else if (days >= 10) cls = "badge--amber";
-  return ctx.el("span", { className: "badge " + cls }, `${days}d`);
+  return ctx.el("span", { className: "badge " + cls }, ctx.t("factor.daysShort", { days }));
 }
 
 function metricNode(label, value, ctx) {
@@ -294,16 +301,16 @@ export function render(root, ctx) {
     autocorrect: "off",
     autocapitalize: "off",
     rows: "4",
-    "aria-label": "Factor expression editor",
-    placeholder: "e.g. ts_corr(close, volume, 20)",
+    "aria-label": ctx.t("factor.editorAria"),
+    placeholder: ctx.t("factor.exprPlaceholder"),
   });
 
   const dialectBadge = ctx.el("span", { className: "badge badge--gray" }, "—");
   const lintStatus = ctx.el("span", { className: "muted" }, "");
   const diagBox = ctx.el("div", { className: "factor-lintbar" });
-  const astPanel = ctx.el("div", { className: "factor-ast muted" }, "Type an expression to see its parse tree.");
+  const astPanel = ctx.el("div", { className: "factor-ast muted" }, ctx.t("factor.astHint"));
   const astDetails = ctx.el("details", { className: "card" },
-    ctx.el("summary", { style: { cursor: "pointer" }, className: "card-title" }, "AST"),
+    ctx.el("summary", { style: { cursor: "pointer" }, className: "card-title" }, ctx.t("factor.astTitle")),
     ctx.el("div", { className: "card-body" }, astPanel)
   );
 
@@ -320,7 +327,7 @@ export function render(root, ctx) {
 
   const convertBtn = ctx.el("button", {
     className: "btn btn--sm", type: "button",
-    title: "Convert between qlib and Assay-Python syntax (in-browser, no API call)",
+    title: ctx.t("factor.convertTitle"),
     onClick: () => {
       const cur = editor.value;
       const d = lastDialect || localDialect(cur);
@@ -328,7 +335,7 @@ export function render(root, ctx) {
       scheduleLint();
       editor.focus();
     },
-  }, "⇄ Convert syntax");
+  }, "⇄ " + ctx.t("factor.convert"));
 
   // History menu
   const historyMenu = ctx.el("div", { className: "factor-menu hidden", role: "menu" });
@@ -336,7 +343,7 @@ export function render(root, ctx) {
     const hist = loadHistory();
     historyMenu.replaceChildren();
     if (!hist.length) {
-      historyMenu.appendChild(ctx.el("div", { className: "muted", style: { padding: "8px" } }, "No history yet."));
+      historyMenu.appendChild(ctx.el("div", { className: "muted", style: { padding: "8px" } }, ctx.t("factor.noHistory")));
       return;
     }
     for (const h of hist) {
@@ -358,7 +365,7 @@ export function render(root, ctx) {
       if (hidden) { rebuildHistoryMenu(); historyMenu.classList.remove("hidden"); }
       else historyMenu.classList.add("hidden");
     },
-  }, "↺ History");
+  }, "↺ " + ctx.t("factor.history"));
   const historyWrap = ctx.el("div", { className: "factor-menu-wrap" }, historyBtn, historyMenu);
 
   // Operator docs drawer
@@ -371,15 +378,15 @@ export function render(root, ctx) {
       docsOpen = !docsOpen;
       docsDrawer.classList.toggle("hidden", !docsOpen);
     },
-  }, "? Operator docs");
+  }, "? " + ctx.t("factor.operatorDocs"));
 
   const evalBtn = ctx.el("button", {
-    className: "btn btn--primary", type: "button", title: "Evaluate (Cmd/Ctrl+Enter)",
+    className: "btn btn--primary", type: "button", title: ctx.t("factor.evaluateTitle"),
     onClick: () => runEvaluate(),
-  }, "Evaluate ▶");
+  }, ctx.t("factor.evaluate") + " ▶");
 
   const toolbar = ctx.el("div", { className: "factor-toolbar" },
-    ctx.el("span", { className: "factor-dialect" }, ctx.el("span", { className: "label" }, "Dialect"), dialectBadge),
+    ctx.el("span", { className: "factor-dialect" }, ctx.el("span", { className: "label" }, ctx.t("factor.dialect")), dialectBadge),
     convertBtn,
     historyWrap,
     docsBtn,
@@ -398,7 +405,7 @@ export function render(root, ctx) {
   // ---------------------------------------------------------------- summary panel ----
   const summaryBody = ctx.el("div", {});
   const summaryPanel = ctx.el("aside", { className: "card factor-summary" },
-    ctx.el("div", { className: "card-head" }, ctx.el("span", { className: "card-title" }, "Factor Report")),
+    ctx.el("div", { className: "card-head" }, ctx.el("span", { className: "card-title" }, ctx.t("factor.report"))),
     summaryBody
   );
   renderSummaryIdle(summaryBody, ctx);
@@ -406,8 +413,8 @@ export function render(root, ctx) {
   // ---------------------------------------------------------------- assemble ----
   const page = ctx.el("div", { className: "page factor-page" },
     ctx.el("div", { className: "page-header" },
-      ctx.el("h1", { className: "page-title" }, "Single Factor Test"),
-      ctx.el("span", { className: "page-subtitle" }, "Write, lint and evaluate one factor against the live panel.")
+      ctx.el("h1", { className: "page-title" }, ctx.t("factor.title")),
+      ctx.el("span", { className: "page-subtitle" }, ctx.t("factor.subtitle"))
     ),
     ctx.el("section", { className: "card factor-editor-shell" },
       toolbar,
@@ -435,7 +442,7 @@ export function render(root, ctx) {
     if (!expr) {
       setDialectBadge(null);
       diagBox.replaceChildren();
-      astPanel.replaceChildren(ctx.el("span", { className: "muted" }, "Type an expression to see its parse tree."));
+      astPanel.replaceChildren(ctx.el("span", { className: "muted" }, ctx.t("factor.astHint")));
       editor.classList.remove("is-error");
       return;
     }
@@ -453,7 +460,7 @@ export function render(root, ctx) {
     } catch (err) {
       if (err && err.name === "AbortError") return;
       // lint endpoint should not 5xx; on transport failure just clear
-      diagBox.replaceChildren(ctx.el("span", { className: "muted" }, "Lint unavailable."));
+      diagBox.replaceChildren(ctx.el("span", { className: "muted" }, ctx.t("factor.lintUnavailable")));
     }
   }
 
@@ -464,24 +471,24 @@ export function render(root, ctx) {
     const warnings = diag.warnings || [];
     editor.classList.toggle("is-error", errors.length > 0);
     if (!errors.length && !warnings.length) {
-      diagBox.appendChild(ctx.el("span", { className: "badge badge--green" }, "✓ parses"));
+      diagBox.appendChild(ctx.el("span", { className: "badge badge--green" }, "✓ " + ctx.t("factor.parses")));
       const fields = diag.stats && Array.isArray(diag.stats.fields) ? diag.stats.fields : null;
       if (fields && fields.length) {
-        diagBox.appendChild(ctx.el("span", { className: "muted" }, "fields: " + fields.join(", ")));
+        diagBox.appendChild(ctx.el("span", { className: "muted" }, ctx.t("factor.fields", { fields: fields.join(", ") })));
       }
       return;
     }
     for (const d of [...errors, ...warnings]) {
       const isErr = d.severity === "error";
       const row = ctx.el("div", { className: "factor-diag", style: { width: "100%" } },
-        ctx.el("span", { className: "badge " + (isErr ? "badge--red" : "badge--amber"), title: d.code }, d.code || (isErr ? "error" : "warning")),
+        ctx.el("span", { className: "badge " + (isErr ? "badge--red" : "badge--amber"), title: d.code }, d.code || (isErr ? ctx.t("factor.error") : ctx.t("factor.warning"))),
         ctx.el("div", {},
           ctx.el("div", { className: "factor-diag-msg" },
             ctx.el("strong", {}, (d.title || "") + (d.title ? " — " : "")), d.message || ""),
           d.location && d.location.snippet
             ? ctx.el("pre", { className: "factor-diag-snippet" }, d.location.snippet)
             : null,
-          d.suggestion ? ctx.el("div", { className: "muted", style: { marginTop: "2px" } }, "Fix: " + d.suggestion) : null
+          d.suggestion ? ctx.el("div", { className: "muted", style: { marginTop: "2px" } }, ctx.t("factor.fixLabel") + d.suggestion) : null
         )
       );
       diagBox.appendChild(row);
@@ -491,7 +498,7 @@ export function render(root, ctx) {
   function renderAstPanel(ast) {
     astPanel.replaceChildren();
     if (!ast) {
-      astPanel.appendChild(ctx.el("span", { className: "muted" }, "No parse tree (expression has a syntax error)."));
+      astPanel.appendChild(ctx.el("span", { className: "muted" }, ctx.t("factor.noParseTree")));
       return;
     }
     const lines = renderAst(ast, ctx, "", true, true);
@@ -506,12 +513,12 @@ export function render(root, ctx) {
     evalBtn.disabled = on;
     cfg.evalBtn.disabled = on;
     evalStatus.className = "factor-latency muted";
-    evalStatus.textContent = on ? "Evaluating…" : "";
+    evalStatus.textContent = on ? ctx.t("factor.evaluating") : "";
   }
 
   function runEvaluate() {
     const expr = editor.value.trim();
-    if (!expr) { toast(ctx, "Enter an expression first.", true); return; }
+    if (!expr) { toast(ctx, ctx.t("factor.enterExprFirst"), true); return; }
     if (evalController) { evalController.abort(); evalController = null; }
 
     pushHistory(expr);
@@ -537,7 +544,7 @@ export function render(root, ctx) {
     evalController = api.evaluateStream(req, (ev) => {
       const { event, data } = ev;
       if (event === "eval.started") {
-        evalStatus.textContent = "Computing…";
+        evalStatus.textContent = ctx.t("factor.computing");
       } else if (event === "eval.ic_series") {
         cards.renderIcSeries(data);
         cards.renderHeatmap(data);
@@ -564,7 +571,7 @@ export function render(root, ctx) {
     const ms = report && Number.isFinite(report.duration_ms) ? Math.round(report.duration_ms) : null;
     if (ms !== null) {
       evalStatus.className = "factor-latency";
-      evalStatus.textContent = ms + "ms";
+      evalStatus.textContent = ctx.t("factor.msSuffix", { ms });
     } else {
       evalStatus.textContent = "";
     }
@@ -578,25 +585,25 @@ export function render(root, ctx) {
   function handleEvalError(err) {
     setEvalRunning(false);
     evalStatus.className = "factor-latency neg";
-    evalStatus.textContent = "failed";
+    evalStatus.textContent = ctx.t("factor.failed");
     const status = err && err.status;
     const envelope = err && err.envelope;
     summaryBody.replaceChildren();
     if (status === 503) {
       summaryBody.appendChild(ctx.el("div", { className: "error-state" },
-        ctx.el("div", { className: "error-state-title" }, "No data ingested"),
+        ctx.el("div", { className: "error-state-title" }, ctx.t("factor.noDataTitle")),
         ctx.el("div", { className: "muted", style: { marginTop: "8px" } },
-          "The panel is empty. Ingest NASDAQ-100 prices first:"),
+          ctx.t("factor.noDataBody")),
         ctx.el("pre", { className: "factor-json" }, "assay prepare-nasdaq100"),
         ctx.el("div", { className: "muted" }, err && err.message ? err.message : "")
       ));
       return;
     }
     summaryBody.appendChild(ctx.el("div", { className: "error-state" },
-      ctx.el("div", { className: "error-state-title" }, "Evaluation failed"),
+      ctx.el("div", { className: "error-state-title" }, ctx.t("factor.evalFailed")),
       ctx.el("div", { className: "factor-diag-msg", style: { marginTop: "8px" } },
         err && err.message ? err.message : String(err)),
-      envelope && envelope.code ? ctx.el("div", { className: "muted", style: { marginTop: "4px" } }, "Code: " + envelope.code) : null
+      envelope && envelope.code ? ctx.el("div", { className: "muted", style: { marginTop: "4px" } }, ctx.t("factor.codeLabel") + envelope.code) : null
     ));
   }
 
@@ -605,9 +612,9 @@ export function render(root, ctx) {
     try {
       const res = await api.librarySave(report);
       const id = (res && (res.factor_id || (res.saved && res.factor_id))) || report.factor_id;
-      toast(ctx, "Saved to library" + (id ? " — " + id : ""), false);
+      toast(ctx, id ? ctx.t("factor.savedWithId", { id }) : ctx.t("factor.saved"), false);
     } catch (err) {
-      toast(ctx, "Save failed: " + (err && err.message ? err.message : err), true);
+      toast(ctx, ctx.t("factor.saveFailed", { error: (err && err.message ? err.message : err) }), true);
     }
   }
 
@@ -651,7 +658,7 @@ export function render(root, ctx) {
   // ---------------------------------------------------------------- prefill ----
   const prefillId = ctx.params && ctx.params.id;
   if (prefillId) {
-    editor.value = "Loading factor " + prefillId + "…";
+    editor.value = ctx.t("factor.loadingFactor", { id: prefillId });
     renderSummaryLoading(summaryBody, ctx);
     api.libraryGet(prefillId).then((report) => {
       editor.value = report.expr || "";
@@ -663,12 +670,12 @@ export function render(root, ctx) {
         onSave: () => saveReport(report), onCompare: () => compareReport(report),
       });
       const ms = Number.isFinite(report.duration_ms) ? Math.round(report.duration_ms) : null;
-      if (ms !== null) { evalStatus.className = "factor-latency"; evalStatus.textContent = ms + "ms"; }
+      if (ms !== null) { evalStatus.className = "factor-latency"; evalStatus.textContent = ctx.t("factor.msSuffix", { ms }); }
     }).catch((err) => {
       editor.value = "";
       summaryBody.replaceChildren(ctx.el("div", { className: "error-state" },
-        ctx.el("div", { className: "error-state-title" }, "Factor not found"),
-        ctx.el("div", { className: "muted" }, "Could not load '" + prefillId + "': " + (err && err.message ? err.message : err))
+        ctx.el("div", { className: "error-state-title" }, ctx.t("factor.factorNotFound")),
+        ctx.el("div", { className: "muted" }, ctx.t("factor.couldNotLoad", { id: prefillId, error: (err && err.message ? err.message : err) }))
       ));
       scheduleLint();
     });
@@ -689,30 +696,41 @@ function buildConfigRow(ctx, store, onEvaluate) {
   const globalPeriod = snap.period;
 
   // Universe (overridable; pre-set to global)
-  const uniSel = ctx.el("select", { className: "select", "aria-label": "Universe" },
+  const uniSel = ctx.el("select", { className: "select", "aria-label": ctx.t("factor.universe") },
     ctx.el("option", { value: globalUniverse, selected: true }, globalUniverse)
   );
   // Period overrides
-  const startInput = ctx.el("input", { type: "date", className: "input input-date", value: globalPeriod[0], "aria-label": "Eval period start" });
-  const endInput = ctx.el("input", { type: "date", className: "input input-date", value: globalPeriod[1], "aria-label": "Eval period end" });
+  const startInput = ctx.el("input", { type: "date", className: "input input-date", value: globalPeriod[0], "aria-label": ctx.t("factor.periodStartAria") });
+  const endInput = ctx.el("input", { type: "date", className: "input input-date", value: globalPeriod[1], "aria-label": ctx.t("factor.periodEndAria") });
 
-  const execSel = ctx.el("select", { className: "select", "aria-label": "Execution" },
+  const execSel = ctx.el("select", { className: "select", "aria-label": ctx.t("factor.execution") },
     ...EXECUTIONS.map((x) => ctx.el("option", { value: x }, x))
   );
 
-  const horizonInputs = HORIZONS_ALL.map((h) =>
-    ctx.el("input", { type: "checkbox", value: String(h), checked: true, "aria-label": h + " day horizon" })
-  );
-  const horizons = ctx.el("div", { className: "factor-horizons" },
-    ...HORIZONS_ALL.map((h, i) => ctx.el("label", {}, horizonInputs[i], h + "d"))
+  // Editable holding periods: a free-text list (comma/space separated). Defaults to
+  // the canonical 1/5/10/20 but the user can type any positive integers (1–252).
+  const DEFAULT_HORIZONS_STR = HORIZONS_ALL.join(", ");
+  const horizonInput = ctx.el("input", {
+    type: "text", className: "input factor-horizon-input",
+    value: DEFAULT_HORIZONS_STR, placeholder: DEFAULT_HORIZONS_STR,
+    spellcheck: "false", autocomplete: "off",
+    "aria-label": ctx.t("factor.horizons"),
+  });
+  const horizonHint = ctx.el("span", { className: "factor-hint" }, ctx.t("factor.horizonsEditHint"));
+  // live-validate: mark the input on a fully-unparseable value (eval falls back to defaults)
+  horizonInput.addEventListener("input", () => {
+    const parsed = parseHorizons(horizonInput.value);
+    const empty = horizonInput.value.trim() === "";
+    horizonInput.classList.toggle("is-error", !empty && parsed.length === 0);
+  });
+  const horizons = ctx.el("div", { className: "factor-horizons" }, horizonInput, horizonHint);
+
+  const neutralSel = ctx.el("select", { className: "select", "aria-label": ctx.t("factor.neutralize") },
+    ...NEUTRALIZE.map((n) => ctx.el("option", { value: n.value }, ctx.t(n.labelKey)))
   );
 
-  const neutralSel = ctx.el("select", { className: "select", "aria-label": "Neutralize" },
-    ...NEUTRALIZE.map((n) => ctx.el("option", { value: n.value }, n.label))
-  );
-
-  const uniStar = ctx.el("span", { className: "factor-override hidden", title: "This evaluation uses a different universe than your global setting." }, " *");
-  const periodStar = ctx.el("span", { className: "factor-override hidden", title: "This evaluation uses a different period than your global setting." }, " *");
+  const uniStar = ctx.el("span", { className: "factor-override hidden", title: ctx.t("factor.universeOverride") }, " *");
+  const periodStar = ctx.el("span", { className: "factor-override hidden", title: ctx.t("factor.periodOverride") }, " *");
 
   function refreshStars() {
     uniStar.classList.toggle("hidden", uniSel.value === store.get("universe"));
@@ -735,14 +753,14 @@ function buildConfigRow(ctx, store, onEvaluate) {
   });
   uniSel.addEventListener("change", () => { uniSel.dataset.touched = "1"; });
 
-  const evalBtn = ctx.el("button", { className: "btn btn--primary", type: "button", onClick: onEvaluate }, "Evaluate ▶");
+  const evalBtn = ctx.el("button", { className: "btn btn--primary", type: "button", onClick: onEvaluate }, ctx.t("factor.evaluate") + " ▶");
 
   const node = ctx.el("div", { className: "factor-config" },
-    field(ctx, "Universe", ctx.el("span", { className: "flex items-center" }, uniSel, uniStar)),
-    field(ctx, "Period", ctx.el("span", { className: "flex items-center gap-1" }, startInput, ctx.el("span", { className: "muted" }, "–"), endInput, periodStar)),
-    field(ctx, "Execution", execSel),
-    field(ctx, "Horizons", horizons),
-    field(ctx, "Neutralize", neutralSel),
+    field(ctx, ctx.t("factor.universe"), ctx.el("span", { className: "flex items-center" }, uniSel, uniStar)),
+    field(ctx, ctx.t("factor.period"), ctx.el("span", { className: "flex items-center gap-1" }, startInput, ctx.el("span", { className: "muted" }, "–"), endInput, periodStar)),
+    field(ctx, ctx.t("factor.execution"), execSel),
+    field(ctx, ctx.t("factor.horizons"), horizons),
+    field(ctx, ctx.t("factor.neutralize"), neutralSel),
     ctx.el("div", { className: "factor-config-field" }, ctx.el("span", { className: "label", style: { visibility: "hidden" } }, "."), evalBtn)
   );
 
@@ -751,7 +769,7 @@ function buildConfigRow(ctx, store, onEvaluate) {
     evalBtn,
     cleanup: unsub,
     values() {
-      const hz = HORIZONS_ALL.filter((h, i) => horizonInputs[i].checked);
+      const hz = parseHorizons(horizonInput.value);
       return {
         universe: uniSel.value,
         period: [startInput.value, endInput.value],
@@ -763,6 +781,18 @@ function buildConfigRow(ctx, store, onEvaluate) {
   };
 }
 
+// Parse a free-text holding-period list ("1, 5, 10 20") into a sorted, de-duped
+// list of positive integers (1–252 trading days). Returns [] when nothing valid.
+function parseHorizons(str) {
+  const parts = String(str == null ? "" : str).split(/[\s,]+/).filter(Boolean);
+  const out = [];
+  for (const p of parts) {
+    const n = Number(p);
+    if (Number.isInteger(n) && n >= 1 && n <= 252) out.push(n);
+  }
+  return [...new Set(out)].sort((a, b) => a - b);
+}
+
 function field(ctx, label, control) {
   return ctx.el("div", { className: "factor-config-field" },
     ctx.el("span", { className: "label" }, label),
@@ -772,16 +802,28 @@ function field(ctx, label, control) {
 
 // =================================================================== cards ====
 
-function cardShell(ctx, title, hintText) {
+function cardShell(ctx, title, hintText, { zoomable = false } = {}) {
   const hint = ctx.el("span", { className: "factor-hint" }, hintText || "");
   const body = ctx.el("div", { className: "card-body" });
-  const node = ctx.el("section", { className: "card factor-card" },
-    ctx.el("div", { className: "card-head" },
-      ctx.el("span", { className: "card-title" }, title),
+  const titleEl = ctx.el("span", { className: "card-title" }, title);
+
+  let head;
+  if (zoomable && ctx.zoomButton) {
+    // ⤢ clones the card's current chart SVG into a large lightbox. Hidden until a
+    // chart is actually present (empty/skeleton states have no <svg>); a tiny
+    // MutationObserver keeps the affordance in sync as the card re-renders.
+    const zoomBtn = ctx.zoomButton(ctx, () => body, () => title);
+    zoomBtn.style.display = "none";
+    const sync = () => { zoomBtn.style.display = body.querySelector("svg") ? "" : "none"; };
+    new MutationObserver(sync).observe(body, { childList: true, subtree: true });
+    head = ctx.el("div", { className: "card-head" },
+      ctx.el("div", { className: "factor-card-titlerow" }, titleEl, zoomBtn),
       hint
-    ),
-    body
-  );
+    );
+  } else {
+    head = ctx.el("div", { className: "card-head" }, titleEl, hint);
+  }
+  const node = ctx.el("section", { className: "card factor-card" }, head, body);
   return { node, body, hint };
 }
 
@@ -791,12 +833,12 @@ function skeleton(ctx) {
 
 function buildCards(ctx) {
   const { charts } = ctx;
-  const c1 = cardShell(ctx, "IC & RankIC time series", "Run an evaluation to populate.");
-  const c2 = cardShell(ctx, "IC decay by horizon", "");
-  const c3 = cardShell(ctx, "Quintile returns (Q1→Q5)", "");
-  const c4 = cardShell(ctx, "IC calendar heatmap", "");
-  const c5 = cardShell(ctx, "Turnover", "");
-  const c6 = cardShell(ctx, "Return distribution", "");
+  const c1 = cardShell(ctx, ctx.t("factor.cardIcSeries"), ctx.t("factor.cardIcSeriesHint"), { zoomable: true });
+  const c2 = cardShell(ctx, ctx.t("factor.cardDecay"), "", { zoomable: true });
+  const c3 = cardShell(ctx, ctx.t("factor.cardQuintile"), "", { zoomable: true });
+  const c4 = cardShell(ctx, ctx.t("factor.cardHeatmap"), "", { zoomable: true });
+  const c5 = cardShell(ctx, ctx.t("factor.cardTurnover"), "");
+  const c6 = cardShell(ctx, ctx.t("factor.cardDistribution"), "", { zoomable: true });
 
   // Optional cards default hidden until data is present in the final report.
   c5.node.classList.add("hidden");
@@ -820,7 +862,7 @@ function buildCards(ctx) {
     const dates = data.dates || [];
     c1.body.replaceChildren();
     if (!ic.some(Number.isFinite) && !rankIc.some(Number.isFinite)) {
-      c1.body.appendChild(emptyChart(ctx, "No IC series."));
+      c1.body.appendChild(emptyChart(ctx, ctx.t("factor.noIcSeries")));
       c1.hint.textContent = "";
       return;
     }
@@ -833,7 +875,7 @@ function buildCards(ctx) {
       bands: [{ from: -0.02, to: 0.02, color: "rgba(136,146,170,0.10)" }],
     })));
     const meanIc = Number.isFinite(data.ic_mean) ? data.ic_mean : mean(ic);
-    c1.hint.textContent = describeIc(meanIc, ic);
+    c1.hint.textContent = describeIc(meanIc, ic, ctx);
   }
 
   function renderDecay(data) {
@@ -846,15 +888,15 @@ function buildCards(ctx) {
     const keys = Object.keys(byH).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
     const values = keys.map((k) => Number(byH[String(k)] ?? byH[k]));
     if (!keys.length || !values.some(Number.isFinite)) {
-      c2.body.appendChild(emptyChart(ctx, "No decay data."));
+      c2.body.appendChild(emptyChart(ctx, ctx.t("factor.noDecayData")));
       c2.hint.textContent = "";
       return;
     }
-    const labels = keys.map((k) => k + "d");
+    const labels = keys.map((k) => ctx.t("factor.daysShort", { days: k }));
     c2.body.appendChild(chartWrap(charts.barChart({ labels, values, valueLabels: true, height: 240 })));
     c2.hint.textContent = Number.isFinite(halflife)
-      ? `Signal half-life: ${halflife} days.`
-      : "IC across forward horizons.";
+      ? ctx.t("factor.signalHalfLife", { days: halflife })
+      : ctx.t("factor.icAcrossHorizons");
   }
 
   function renderGroups(data) {
@@ -865,7 +907,7 @@ function buildCards(ctx) {
   function renderGroupBars(q) {
     c3.body.replaceChildren();
     const arr = toQuintileArray(q);
-    if (!arr || !arr.length) { c3.body.appendChild(emptyChart(ctx, "No group returns.")); c3.hint.textContent = ""; return; }
+    if (!arr || !arr.length) { c3.body.appendChild(emptyChart(ctx, ctx.t("factor.noGroupReturns"))); c3.hint.textContent = ""; return; }
     const labels = arr.map((_, i) => "Q" + (i + 1));
     // Q1 red (short), Q5 green (long), middle gray
     const colors = arr.map((_, i) => i === 0 ? "#C0392B" : i === arr.length - 1 ? "#1E7B4B" : "#8892AA");
@@ -873,17 +915,17 @@ function buildCards(ctx) {
     const spread = arr[arr.length - 1] - arr[0];
     const monotonic = isMonotonic(arr);
     c3.hint.textContent = monotonic
-      ? `Monotonic long-short spread of ${ctx.fmt(spread, 4)}.`
-      : `Non-monotonic (spread ${ctx.fmt(spread, 4)}) — factor may be non-linear.`;
+      ? ctx.t("factor.monotonicSpread", { spread: ctx.fmt(spread, 4) })
+      : ctx.t("factor.nonMonotonicSpread", { spread: ctx.fmt(spread, 4) });
   }
 
   function renderHeatmap(data) {
     const ic = data.ic || [];
     const dates = data.dates || [];
     c4.body.replaceChildren();
-    if (!dates.length || !ic.some(Number.isFinite)) { c4.body.appendChild(emptyChart(ctx, "No IC heatmap data.")); c4.hint.textContent = ""; return; }
+    if (!dates.length || !ic.some(Number.isFinite)) { c4.body.appendChild(emptyChart(ctx, ctx.t("factor.noHeatmapData"))); c4.hint.textContent = ""; return; }
     c4.body.appendChild(chartWrap(charts.calendarHeatmap({ dates, values: ic, height: 160 })));
-    c4.hint.textContent = "Monthly-mean IC — green positive, red negative.";
+    c4.hint.textContent = ctx.t("factor.heatmapHint");
   }
 
   function renderTurnover(report) {
@@ -892,13 +934,13 @@ function buildCards(ctx) {
     c5.node.classList.remove("hidden");
     c5.body.replaceChildren(
       ctx.el("div", { className: "factor-metrics" },
-        metricNode("1-day turnover", ctx.pct(t, 1), ctx),
-        metricNode("Implied retention", ctx.pct(Math.max(0, 1 - t), 1), ctx)
+        metricNode(ctx.t("factor.turnover1d"), ctx.pct(t, 1), ctx),
+        metricNode(ctx.t("factor.impliedRetention"), ctx.pct(Math.max(0, 1 - t), 1), ctx)
       ),
       ctx.el("div", { className: "muted", style: { marginTop: "8px" } },
-        t < 0.2 ? "Low turnover — friendly to longer holding periods."
-                : t > 0.5 ? "High turnover — transaction costs may dominate."
-                          : "Moderate turnover.")
+        t < 0.2 ? ctx.t("factor.turnoverLow")
+                : t > 0.5 ? ctx.t("factor.turnoverHigh")
+                          : ctx.t("factor.turnoverModerate"))
     );
   }
 
@@ -911,7 +953,7 @@ function buildCards(ctx) {
     c6.body.replaceChildren(
       chartWrap(charts.barChart({ labels, values: arr, colors, valueLabels: true, height: 200 })),
       ctx.el("div", { className: "muted", style: { marginTop: "4px" } },
-        "Mean forward return per quintile (return-distribution detail not exposed by the API).")
+        ctx.t("factor.distributionHint"))
     );
   }
 
@@ -925,18 +967,18 @@ function buildCards(ctx) {
       });
       renderHeatmap({ ic: report.ic_series || [], dates: report.dates || [] });
     } else {
-      if (!c1.body.querySelector("svg")) { c1.body.replaceChildren(emptyChart(ctx, "No IC series.")); }
-      if (!c4.body.querySelector("svg")) { c4.body.replaceChildren(emptyChart(ctx, "No heatmap data.")); }
+      if (!c1.body.querySelector("svg")) { c1.body.replaceChildren(emptyChart(ctx, ctx.t("factor.noIcSeries"))); }
+      if (!c4.body.querySelector("svg")) { c4.body.replaceChildren(emptyChart(ctx, ctx.t("factor.noHeatmapData"))); }
     }
     if (report.ic_by_horizon && Object.keys(report.ic_by_horizon).length) {
       renderDecayBars(report.ic_by_horizon, report.decay_halflife_days);
     } else if (!c2.body.querySelector("svg")) {
-      c2.body.replaceChildren(emptyChart(ctx, "No decay data."));
+      c2.body.replaceChildren(emptyChart(ctx, ctx.t("factor.noDecayData")));
     }
     if (report.quintile_returns && toQuintileArray(report.quintile_returns)) {
       renderGroupBars(report.quintile_returns);
     } else if (!c3.body.querySelector("svg")) {
-      c3.body.replaceChildren(emptyChart(ctx, "No group returns."));
+      c3.body.replaceChildren(emptyChart(ctx, ctx.t("factor.noGroupReturns")));
     }
     renderTurnover(report);
     renderDistribution(report);
@@ -959,7 +1001,7 @@ function emptyChart(ctx, msg) {
 function renderSummaryIdle(body, ctx) {
   body.replaceChildren(
     ctx.el("div", { className: "factor-summary-section" },
-      ctx.el("div", { className: "muted" }, "Write an expression and press Evaluate (or Cmd/Ctrl+Enter) to compute its signal report.")
+      ctx.el("div", { className: "muted" }, ctx.t("factor.summaryIdle"))
     )
   );
 }
@@ -982,7 +1024,7 @@ function renderSummaryError(body, report, ctx) {
 
   const head = ctx.el("div", { className: "factor-diag-card-head" },
     ctx.el("span", { className: "factor-diag-card-title" },
-      "⚠ " + (primary ? primary.title : (report.failure_mode || "Factor failed"))),
+      "⚠ " + (primary ? primary.title : (report.failure_mode || ctx.t("factor.factorFailed")))),
     primary && primary.code ? ctx.el("span", { className: "badge badge--red" }, primary.code) : ctx.el("span", { className: "badge badge--red" }, report.failure_mode || "")
   );
   const card = ctx.el("div", { className: "factor-diag-card" }, head);
@@ -993,12 +1035,12 @@ function renderSummaryError(body, report, ctx) {
     }
     if (primary.suggestion) {
       card.appendChild(ctx.el("div", { style: { marginTop: "8px" } },
-        ctx.el("strong", {}, "Fix: "), primary.suggestion));
+        ctx.el("strong", {}, ctx.t("factor.fixLabel")), primary.suggestion));
     }
   } else {
     card.appendChild(ctx.el("div", { className: "factor-diag-msg", style: { marginTop: "8px" } },
-      "failure_mode: " + report.failure_mode));
-    if (report.suggestion) card.appendChild(ctx.el("div", { style: { marginTop: "8px" } }, ctx.el("strong", {}, "Fix: "), report.suggestion));
+      ctx.t("factor.failureModeLabel") + report.failure_mode));
+    if (report.suggestion) card.appendChild(ctx.el("div", { style: { marginTop: "8px" } }, ctx.el("strong", {}, ctx.t("factor.fixLabel")), report.suggestion));
   }
   body.appendChild(card);
 
@@ -1013,7 +1055,7 @@ function renderSummaryReport(body, report, ctx, { onSave, onCompare }) {
 
   // Expression
   body.appendChild(ctx.el("div", { className: "factor-summary-section" },
-    ctx.el("div", { className: "label" }, "Expression"),
+    ctx.el("div", { className: "label" }, ctx.t("factor.expression")),
     ctx.el("div", { className: "factor-expr-box mt-2" }, report.expr || "—"),
     report.expr_canonical && report.expr_canonical !== report.expr
       ? ctx.el("div", { className: "muted", style: { marginTop: "4px", fontFamily: "var(--font-mono)", fontSize: "12px" } }, "≡ " + report.expr_canonical)
@@ -1022,7 +1064,7 @@ function renderSummaryReport(body, report, ctx, { onSave, onCompare }) {
 
   // Signal quality
   body.appendChild(ctx.el("div", { className: "factor-summary-section" },
-    ctx.el("div", { className: "label" }, "Signal quality"),
+    ctx.el("div", { className: "label" }, ctx.t("factor.signalQuality")),
     ctx.el("div", { className: "factor-metrics mt-2" },
       metricNode("IC", ctx.fmt(report.ic, 3), ctx),
       metricNode("ICIR", ctx.fmt(report.icir, 2), ctx),
@@ -1030,35 +1072,35 @@ function renderSummaryReport(body, report, ctx, { onSave, onCompare }) {
       metricNode("RankICIR", ctx.fmt(report.rank_icir, 2), ctx)
     ),
     ctx.el("div", { className: "flex items-center gap-2 mt-2" },
-      ctx.el("span", { className: "label" }, "Decay half-life"),
+      ctx.el("span", { className: "label" }, ctx.t("factor.decayHalfLife")),
       decayBadge(report.decay_halflife_days, ctx)
     )
   ));
 
   // Diagnostics
   body.appendChild(ctx.el("div", { className: "factor-summary-section" },
-    ctx.el("div", { className: "label" }, "Diagnostics"),
+    ctx.el("div", { className: "label" }, ctx.t("factor.diagnostics")),
     ctx.el("dl", { className: "factor-kv mt-2" },
-      ctx.el("dt", {}, "Look-ahead"),
+      ctx.el("dt", {}, ctx.t("factor.lookahead")),
       ctx.el("dd", {}, report.lookahead_detected
-        ? ctx.el("span", { className: "badge badge--red" }, "detected")
-        : ctx.el("span", { className: "badge badge--green" }, "✓ clean")),
-      ctx.el("dt", {}, "Redundancy"),
+        ? ctx.el("span", { className: "badge badge--red" }, ctx.t("factor.detected"))
+        : ctx.el("span", { className: "badge badge--green" }, "✓ " + ctx.t("factor.clean"))),
+      ctx.el("dt", {}, ctx.t("factor.redundancy")),
       ctx.el("dd", {}, redundancyBadge(report.redundancy_score, ctx),
         report.most_similar_factor ? ctx.el("span", { className: "muted", style: { marginLeft: "6px" } }, "→ " + report.most_similar_factor) : null),
-      ctx.el("dt", {}, "Turnover (1d)"),
+      ctx.el("dt", {}, ctx.t("factor.turnover1dKv")),
       ctx.el("dd", {}, report.turnover_1d != null ? ctx.pct(report.turnover_1d, 1) : "—"),
-      ctx.el("dt", {}, "Failure"),
+      ctx.el("dt", {}, ctx.t("factor.failure")),
       ctx.el("dd", {}, report.failure_mode
         ? ctx.el("span", { className: "badge badge--amber" }, report.failure_mode)
-        : ctx.el("span", { className: "badge badge--green" }, "None"))
+        : ctx.el("span", { className: "badge badge--green" }, ctx.t("factor.none")))
     )
   ));
 
   // Suggestion
   if (report.suggestion) {
     body.appendChild(ctx.el("div", { className: "factor-summary-section" },
-      ctx.el("div", { className: "label" }, "Suggestion"),
+      ctx.el("div", { className: "label" }, ctx.t("factor.suggestion")),
       ctx.el("div", { className: "mt-2", style: { fontSize: "13px" } }, report.suggestion)
     ));
   }
@@ -1069,8 +1111,15 @@ function renderSummaryReport(body, report, ctx, { onSave, onCompare }) {
   // Actions
   body.appendChild(ctx.el("div", { className: "factor-summary-section" },
     ctx.el("div", { className: "flex gap-2 wrap" },
-      ctx.el("button", { className: "btn btn--primary btn--sm", type: "button", onClick: onSave }, "Save to library"),
-      ctx.el("button", { className: "btn btn--sm", type: "button", onClick: onCompare }, "Compare with library →")
+      ctx.el("button", { className: "btn btn--primary btn--sm", type: "button", onClick: onSave }, ctx.t("factor.saveToLibrary")),
+      ctx.el("button", { className: "btn btn--sm", type: "button", onClick: onCompare }, ctx.t("factor.compareWithLibrary") + " →"),
+      ctx.el("button", { className: "btn btn--sm", type: "button",
+        title: ctx.t("factor.runPortfolioTitle"),
+        onClick: () => {
+          // Seed the Portfolio Backtest page with this exact expression.
+          try { sessionStorage.setItem("assay_portfolio_seed", report.expr || ""); } catch (_) {}
+          ctx.router.navigate("#/portfolio");
+        } }, ctx.t("factor.runPortfolio") + " →")
     )
   ));
 
@@ -1082,21 +1131,21 @@ function contextSection(ctx, report) {
   const lineage = report.lineage || {};
   const period = report.eval_period || [];
   return ctx.el("div", { className: "factor-summary-section" },
-    ctx.el("div", { className: "label" }, "Evaluation context"),
+    ctx.el("div", { className: "label" }, ctx.t("factor.evalContext")),
     ctx.el("dl", { className: "factor-kv mt-2" },
-      ctx.el("dt", {}, "Universe"),
-      ctx.el("dd", {}, (report.universe_id || "—") + (report.n_symbols ? "  ·  " + report.n_symbols + " symbols" : "")),
-      ctx.el("dt", {}, "Period"),
+      ctx.el("dt", {}, ctx.t("factor.universe")),
+      ctx.el("dd", {}, (report.universe_id || "—") + (report.n_symbols ? "  ·  " + ctx.t("factor.nSymbols", { n: report.n_symbols }) : "")),
+      ctx.el("dt", {}, ctx.t("factor.period")),
       ctx.el("dd", {}, period.length === 2 ? period[0] + " → " + period[1] : "—"),
-      ctx.el("dt", {}, "Dates"),
+      ctx.el("dt", {}, ctx.t("factor.dates")),
       ctx.el("dd", {}, report.n_dates != null ? ctx.fmtInt(report.n_dates) : "—"),
-      ctx.el("dt", {}, "Execution"),
+      ctx.el("dt", {}, ctx.t("factor.execution")),
       ctx.el("dd", {}, report.execution || "—"),
-      ctx.el("dt", {}, "Neutralize"),
-      ctx.el("dd", {}, report.neutralize || "none"),
-      ctx.el("dt", {}, "Duration"),
-      ctx.el("dd", {}, Number.isFinite(report.duration_ms) ? Math.round(report.duration_ms) + "ms" : "—"),
-      lineage && (lineage.snapshot || lineage.source || lineage.snapshot_id) ? ctx.el("dt", {}, "Lineage") : null,
+      ctx.el("dt", {}, ctx.t("factor.neutralize")),
+      ctx.el("dd", {}, report.neutralize || ctx.t("factor.neutralizeNone")),
+      ctx.el("dt", {}, ctx.t("factor.duration")),
+      ctx.el("dd", {}, Number.isFinite(report.duration_ms) ? ctx.t("factor.msSuffix", { ms: Math.round(report.duration_ms) }) : "—"),
+      lineage && (lineage.snapshot || lineage.source || lineage.snapshot_id) ? ctx.el("dt", {}, ctx.t("factor.lineage")) : null,
       lineage && (lineage.snapshot || lineage.source || lineage.snapshot_id)
         ? ctx.el("dd", {}, [lineage.snapshot || lineage.snapshot_id, lineage.source].filter(Boolean).join("  ·  ") || "—")
         : null
@@ -1110,11 +1159,11 @@ function jsonSection(ctx, report) {
     onClick: () => {
       try {
         navigator.clipboard.writeText(safeJson(report));
-        toast(ctx, "JSON copied", false);
-      } catch (_) { toast(ctx, "Copy unavailable", true); }
-    } }, "Copy");
+        toast(ctx, ctx.t("factor.jsonCopied"), false);
+      } catch (_) { toast(ctx, ctx.t("factor.copyUnavailable"), true); }
+    } }, ctx.t("factor.copy"));
   return ctx.el("details", { className: "factor-summary-section" },
-    ctx.el("summary", { style: { cursor: "pointer" }, className: "label" }, "Full JSON"),
+    ctx.el("summary", { style: { cursor: "pointer" }, className: "label" }, ctx.t("factor.fullJson")),
     ctx.el("div", { className: "flex justify-between items-center mt-2" },
       ctx.el("span", { className: "muted", style: { fontSize: "12px" } }, "FactorReport"),
       copyBtn),
@@ -1130,17 +1179,17 @@ function safeJson(obj) {
 
 function buildOperatorDocs(ctx) {
   const wrap = ctx.el("div", {});
-  wrap.appendChild(ctx.el("h4", {}, "Operator reference"));
+  wrap.appendChild(ctx.el("h4", {}, ctx.t("factor.operatorReference")));
   wrap.appendChild(ctx.el("div", { className: "muted", style: { fontSize: "12px", marginBottom: "8px" } },
-    "Assay-Python operators. Use ⇄ Convert to translate qlib syntax. The parser validates the full set — this is a curated subset; more are available."));
+    ctx.t("factor.operatorReferenceNote")));
   for (const sec of OPERATOR_DOCS) {
-    wrap.appendChild(ctx.el("h4", { style: { marginTop: "8px" } }, sec.group));
+    wrap.appendChild(ctx.el("h4", { style: { marginTop: "8px" } }, ctx.t(sec.groupKey)));
     const tbl = ctx.el("table", {});
     const tb = ctx.el("tbody", {});
-    for (const [sig, desc] of sec.ops) {
+    for (const [sig, descKey] of sec.ops) {
       tb.appendChild(ctx.el("tr", {},
         ctx.el("td", {}, sig),
-        ctx.el("td", { className: "muted" }, desc)
+        ctx.el("td", { className: "muted" }, ctx.t(descKey))
       ));
     }
     tbl.appendChild(tb);
@@ -1189,14 +1238,15 @@ function mean(arr) {
   return fin.reduce((a, b) => a + b, 0) / fin.length;
 }
 
-function describeIc(meanIc, ic) {
+function describeIc(meanIc, ic, ctx) {
   if (!Number.isFinite(meanIc)) return "";
-  const sign = meanIc >= 0 ? "positive" : "negative";
+  const sign = meanIc >= 0 ? ctx.t("factor.signPositive") : ctx.t("factor.signNegative");
   const fin = (ic || []).filter((v) => Number.isFinite(v));
-  if (!fin.length) return `Mean IC ${meanIc.toFixed(3)}.`;
+  if (!fin.length) return ctx.t("factor.meanIc", { value: meanIc.toFixed(3) });
   const posFrac = fin.filter((v) => v > 0).length / fin.length;
   const stable = Math.abs(posFrac - 0.5) > 0.15;
-  return `Mean IC ${meanIc.toFixed(3)} (${sign}). ${stable ? "Direction is consistent." : "Sign flips across the period."}`;
+  const consistency = stable ? ctx.t("factor.directionConsistent") : ctx.t("factor.signFlips");
+  return ctx.t("factor.meanIcSigned", { value: meanIc.toFixed(3), sign, consistency });
 }
 
 // quintile_returns may be a list [Q1..Q5] (report/stream) or a {"Q1":..} dict.

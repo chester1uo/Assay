@@ -190,6 +190,15 @@ def register_exception_handlers(app: FastAPI) -> None:
 # ------------------------------------------------------------- app factory ----
 def create_app() -> FastAPI:
     """Construct the FastAPI app (architecture §4.5). Importing never needs creds."""
+    # Apply the editable runtime config (dirs + provider creds) to the environment
+    # FIRST, so AssayService.from_env / the ingest pipeline see the operator's values.
+    try:
+        from assay import config_store
+
+        config_store.apply_to_env()
+    except Exception:  # pragma: no cover - config is best-effort
+        pass
+
     app = FastAPI(title="Assay API", version=assay.__version__)
 
     app.add_middleware(
@@ -204,13 +213,23 @@ def create_app() -> FastAPI:
 
     # Routers import `get_service` from this module, so import them here (after the
     # accessor + handlers are defined) to keep a clean one-way dependency.
-    from assay.api.routes import factor, library, portfolio, session, system
+    from assay.api.routes import (
+        admin, data_admin, factor, legacy, library, market, portfolio, session, system,
+    )
 
     app.include_router(factor.router, prefix="/v1/factor", tags=["Factor"])
     app.include_router(library.router, prefix="/v1/library", tags=["Library"])
+    app.include_router(market.router, prefix="/v1/market", tags=["Market"])
     app.include_router(portfolio.router, prefix="/v1/portfolio", tags=["Portfolio"])
     app.include_router(session.router, prefix="/v1/session", tags=["Session"])
     app.include_router(system.router, prefix="/v1/system", tags=["System"])
+    # Unlinked operations console at GET /admin (also installs the request-log
+    # middleware + WARNING-level log capture it renders). Reached by URL only.
+    app.include_router(admin.router, tags=["Admin"])
+    app.include_router(data_admin.router, tags=["Admin"])
+    admin.install(app)
+    # Easter egg: the same SPA in a 2000s skin at GET /legacy (URL only).
+    app.include_router(legacy.router, tags=["Legacy"])
 
     @app.get("/health", tags=["System"])
     async def health() -> dict:
@@ -224,9 +243,25 @@ def create_app() -> FastAPI:
     # backend-only checkout) so importing the app never fails.
     static_dir = Path(__file__).resolve().parent / "static"
     if static_dir.is_dir():
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="webui")
+        app.mount("/", _NoCacheStaticFiles(directory=static_dir, html=True), name="webui")
 
     return app
+
+
+class _NoCacheStaticFiles(StaticFiles):
+    """StaticFiles that asks browsers to revalidate every asset before use.
+
+    The default StaticFiles emits ``etag``/``last-modified`` but no
+    ``cache-control``, so browsers may serve a stale cached copy without
+    revalidating — which silently hands users an old WebUI bundle after a
+    frontend fix. ``no-cache`` forces a conditional request each load; the
+    etag still yields a cheap ``304`` when nothing changed.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
 
 
 app = create_app()
