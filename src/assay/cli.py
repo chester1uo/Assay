@@ -513,6 +513,22 @@ def cmd_library(args, config: AssayConfig | None) -> None:
             print("\n(dry run — pass --apply to delete)")
 
 
+def cmd_seed_demo(args, config: AssayConfig | None) -> None:
+    """Seed the factor library with the Alpha101 / Alpha158 demo catalogs."""
+    import assay
+
+    svc = assay.init()
+    period = (args.start, args.end) if (args.start and args.end) else None
+    sources = tuple(s.strip().upper() for s in (args.sources or "ALPHA101,ALPHA158").split(",") if s.strip())
+    print(f"seeding demo library: sources={list(sources)} "
+          f"universe={args.universe or '(config default)'} ... (this evaluates a few hundred factors)")
+    summary = svc.seed_demo_library(universe=args.universe, period=period, as_of=args.as_of, sources=sources)
+    for tag, st in summary.items():
+        print(f"  {tag}: evaluated {st['evaluated']}, saved {st['saved']}, skipped {st['skipped']}")
+    total = sum(st["saved"] for st in summary.values())
+    print(f"done — {total} demo factor(s) now in the library.")
+
+
 def cmd_serve_api(args, config: AssayConfig | None) -> None:
     """Launch the FastAPI REST service (uvicorn assay.api.app:app). Imports lazily."""
     try:
@@ -738,6 +754,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--transport", default="stdio", choices=["stdio", "sse"])
     sp.add_argument("--port", type=int, default=8001, help="port for the sse transport")
     sp.set_defaults(func=cmd_serve_mcp, needs_config=False)
+
+    sp = sub.add_parser("seed-demo", help="populate the library with Alpha101 / Alpha158 demo factors")
+    sp.add_argument("--universe", help="evaluation universe (default: config default, e.g. NASDAQ100/CSI300)")
+    sp.add_argument("--start", help="YYYY-MM-DD (default: config period)")
+    sp.add_argument("--end", help="YYYY-MM-DD (default: config period)")
+    sp.add_argument("--as-of", dest="as_of", help="point-in-time cutoff (default: end)")
+    sp.add_argument("--sources", help="comma-separated subset of ALPHA101,ALPHA158 (default: both)")
+    sp.set_defaults(func=cmd_seed_demo, needs_config=False)
 
     return p
 

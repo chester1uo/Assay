@@ -34,10 +34,16 @@ import { el } from "./dom.js";
 import { store, router } from "./state.js";
 import { charts } from "./charts.js";
 import { api, ApiError } from "./api.js";
+import { openLightbox, makeZoomButton } from "./lightbox.js";
+import { t, getLang, toggleLang, onLang } from "./i18n.js";
 
 import * as dashboard from "./pages/dashboard.js";
 import * as library from "./pages/library.js";
 import * as factor from "./pages/factor.js";
+import * as portfolio from "./pages/portfolio.js";
+import * as chart from "./pages/chart.js";
+import * as dataManager from "./pages/data.js";
+import * as docs from "./pages/docs.js";
 
 const appEl = document.getElementById("app");
 
@@ -55,11 +61,32 @@ function makeCtx(extra = {}) {
     pct: dom.pct,
     fmtInt: dom.fmtInt,
     fmtSigned: dom.fmtSigned,
+    lightbox: openLightbox,
+    zoomButton: makeZoomButton,
     ApiError,
+    t,
+    lang: getLang(),
     params: {},
     path: router.current(),
     ...extra,
   };
+}
+
+// --------------------------------------------------------------- i18n chrome ----
+
+// Localize the static shell (top nav, control labels, language button, status dot)
+// from data-i18n* attributes. Called on boot and on every language switch.
+function localizeChrome() {
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    node.textContent = t(node.getAttribute("data-i18n"));
+  });
+  document.querySelectorAll("[data-i18n-title]").forEach((node) => {
+    node.title = t(node.getAttribute("data-i18n-title"));
+  });
+  document.querySelectorAll("[data-i18n-aria]").forEach((node) => {
+    node.setAttribute("aria-label", t(node.getAttribute("data-i18n-aria")));
+  });
+  document.title = "Assay — " + t("nav.factor");
 }
 
 // ---------------------------------------------------------------- TopNav ----
@@ -74,28 +101,34 @@ function highlightTab(path) {
 }
 
 const KNOWN_UNIVERSES = [
-  { id: "NASDAQ100", label: "NASDAQ100", enabled: true },
-  { id: "SP500", label: "SP500", enabled: false },
-  { id: "RUSSELL2000", label: "Russell2000", enabled: false },
+  { id: "NASDAQ100", label: "NASDAQ100 (US)", enabled: false },
+  { id: "SP500", label: "SP500 (US)", enabled: false },
+  { id: "RUSSELL2000", label: "Russell2000 (US)", enabled: false },
+  { id: "CSI300", label: "CSI300 (A股)", enabled: false },
+  { id: "CSI500", label: "CSI500 (A股)", enabled: false },
+  { id: "CSI1000", label: "CSI1000 (A股)", enabled: false },
 ];
 
 function populateUniverseSelect(universes) {
   const sel = document.getElementById("universe-select");
   if (!sel) return;
-  // Merge live universes (from /v1/system/universes) with the known roadmap list.
-  const liveIds = new Set((universes || []).map((u) => u.id));
+  // A universe is selectable only if its market store actually has symbols. The
+  // /v1/system/universes endpoint reports n_symbols per universe (per its market).
+  const liveIds = new Set((universes || []).filter((u) => (u.n_symbols || 0) > 0).map((u) => u.id));
   const opts = KNOWN_UNIVERSES.map((u) => ({
     ...u,
     enabled: u.enabled || liveIds.has(u.id),
   }));
-  // include any extra live universes not in the known list
+  // include any extra live (data-backed) universes not in the known list
   for (const u of universes || []) {
-    if (!opts.some((o) => o.id === u.id)) opts.push({ id: u.id, label: u.id, enabled: true });
+    if ((u.n_symbols || 0) > 0 && !opts.some((o) => o.id === u.id)) {
+      opts.push({ id: u.id, label: u.id, enabled: true });
+    }
   }
   const current = store.get("universe");
   sel.replaceChildren(
     ...opts.map((u) =>
-      el("option", { value: u.id, disabled: !u.enabled, selected: u.id === current }, u.enabled ? u.label : `${u.label} (soon)`)
+      el("option", { value: u.id, disabled: !u.enabled, selected: u.id === current }, u.enabled ? u.label : `${u.label} (${t("ctrl.soon")})`)
     )
   );
 }
@@ -191,8 +224,8 @@ async function refreshStatus() {
   if (!dot) return;
   const setState = (cls, title) => {
     dot.className = "status-dot status-dot--" + cls;
-    dot.title = "System status: " + title;
-    dot.setAttribute("aria-label", "System status: " + title);
+    dot.title = t("status.title") + ": " + title;
+    dot.setAttribute("aria-label", t("status.title") + ": " + title);
   };
   try {
     const status = await api.systemStatus();
@@ -204,32 +237,34 @@ async function refreshStatus() {
       store.applyDataDefaultPeriod(data.first_date, data.last_date);
     }
     const lastSync = data.last_sync || data.lastSync || null;
+    const since = lastSync ? ` — ${t("status.lastSync")} ${lastSync}` : "";
     if (status && (status.degraded || status.status === "degraded")) {
-      setState("stale", "degraded" + (lastSync ? ` — last sync ${lastSync}` : ""));
+      setState("stale", t("status.degraded") + since);
       return;
     }
     if (lastSync) {
       const ageH = (Date.now() - Date.parse(lastSync)) / 3.6e6;
       if (Number.isFinite(ageH) && ageH > 24) {
-        setState("stale", `stale — last sync ${lastSync}`);
+        setState("stale", t("status.stale") + since);
         return;
       }
-      setState("fresh", `data fresh — last sync ${lastSync}`);
+      setState("fresh", t("status.fresh") + since);
       return;
     }
-    setState("fresh", "online");
+    setState("fresh", t("status.online"));
   } catch (err) {
-    setState("error", "sync error / data unavailable");
+    setState("error", t("status.error"));
   }
 }
 
 async function loadUniverses() {
   try {
     const universes = await api.universes();
-    populateUniverseSelect(Array.isArray(universes) ? universes : []);
+    lastUniverses = Array.isArray(universes) ? universes : [];
   } catch (_) {
-    populateUniverseSelect([]); // degrade to roadmap list
+    lastUniverses = []; // degrade to roadmap list
   }
+  populateUniverseSelect(lastUniverses);
 }
 
 // ---------------------------------------------------------------- routing ----
@@ -243,7 +278,7 @@ function mount(pageModule, params, path) {
     console.error("page render failed", err);
     appEl.replaceChildren(
       el("div", { className: "error-state" },
-        el("div", { className: "error-state-title" }, "This page failed to render."),
+        el("div", { className: "error-state-title" }, t("common.loadFailed")),
         el("div", { className: "muted" }, String(err && err.message ? err.message : err))
       )
     );
@@ -256,13 +291,35 @@ function registerRoutes() {
     .route("#/library", ({ path }) => mount(library, {}, path))
     .route("#/factor", ({ path }) => mount(factor, {}, path))
     .route("#/factor/:id", ({ params, path }) => mount(factor, params, path))
+    .route("#/portfolio", ({ path }) => mount(portfolio, {}, path))
+    .route("#/portfolio/:id", ({ params, path }) => mount(portfolio, params, path))
+    .route("#/chart", ({ path }) => mount(chart, {}, path))
+    .route("#/data", ({ path }) => mount(dataManager, {}, path))
+    .route("#/docs", ({ path }) => mount(docs, {}, path))
     .notFound(({ path }) => mount(dashboard, {}, path));
 }
 
 // ---------------------------------------------------------------- boot ----
 
+function wireLangToggle() {
+  const btn = document.getElementById("lang-toggle");
+  if (btn) btn.addEventListener("click", () => toggleLang());
+  // On language switch: re-localize the static chrome, refresh data-bound chrome
+  // (universe "soon" labels + status), and re-render the active page in the new language.
+  onLang(() => {
+    localizeChrome();
+    populateUniverseSelect(lastUniverses);
+    refreshStatus();
+    router.navigate("#" + router.current());
+  });
+}
+
+let lastUniverses = [];
+
 function boot() {
+  localizeChrome();
   wireTopNav();
+  wireLangToggle();
   registerRoutes();
   syncPeriodControls();
   // Fire-and-forget async chrome; never blocks first paint.

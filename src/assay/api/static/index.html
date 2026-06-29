@@ -8,30 +8,33 @@
 </head>
 <body>
   <header class="topnav" id="topnav">
-    <a class="topnav-logo" href="#/dashboard" aria-label="Assay home">
+    <a class="topnav-logo" href="#/dashboard" data-i18n-aria="nav.home" aria-label="Assay home">
       <span class="topnav-diamond" aria-hidden="true">&#9670;</span>
       <span class="topnav-wordmark">ASSAY</span>
     </a>
 
     <nav class="topnav-tabs" aria-label="Primary">
-      <a class="topnav-tab" data-route="#/dashboard" href="#/dashboard">Dashboard</a>
-      <a class="topnav-tab" data-route="#/library" href="#/library">Factor Library</a>
-      <a class="topnav-tab" data-route="#/factor" href="#/factor">Single Factor Test</a>
+      <a class="topnav-tab" data-route="#/dashboard" data-i18n="nav.dashboard" href="#/dashboard">Dashboard</a>
+      <a class="topnav-tab" data-route="#/library" data-i18n="nav.library" href="#/library">Factor Library</a>
+      <a class="topnav-tab" data-route="#/factor" data-i18n="nav.factor" href="#/factor">Single Factor Test</a>
+      <a class="topnav-tab" data-route="#/portfolio" data-i18n="nav.portfolio" href="#/portfolio">Portfolio Backtest</a>
+      <a class="topnav-tab" data-route="#/chart" data-i18n="nav.chart" href="#/chart">Chart</a>
+      <a class="topnav-tab" data-route="#/docs" data-i18n="nav.docs" href="#/docs">Docs</a>
     </nav>
 
     <div class="topnav-controls">
       <label class="topnav-field">
-        <span class="topnav-field-label">Universe</span>
+        <span class="topnav-field-label" data-i18n="ctrl.universe">Universe</span>
         <select id="universe-select" class="select" aria-label="Universe"></select>
       </label>
 
       <label class="topnav-field">
-        <span class="topnav-field-label">Period</span>
+        <span class="topnav-field-label" data-i18n="ctrl.period">Period</span>
         <select id="period-select" class="select" aria-label="Period preset">
           <option value="1Y">1Y</option>
           <option value="3Y">3Y</option>
           <option value="5Y">5Y</option>
-          <option value="custom">Custom</option>
+          <option value="custom" data-i18n="ctrl.custom">Custom</option>
         </select>
       </label>
 
@@ -40,6 +43,9 @@
         <span class="topnav-period-dash" aria-hidden="true">&ndash;</span>
         <input type="date" id="period-end" class="input input-date" aria-label="Period end" />
       </div>
+
+      <button type="button" id="lang-toggle" class="lang-toggle" data-i18n="ctrl.lang"
+              data-i18n-title="ctrl.langTitle" title="切换到中文">中文</button>
 
       <button type="button" id="status-dot" class="status-dot status-dot--unknown"
               aria-label="System status" title="System status: unknown"></button>

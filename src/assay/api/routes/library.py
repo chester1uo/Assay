@@ -111,6 +111,36 @@ async def save_factor(
     return SaveFactorResponse(factor_id=fid, saved=True)
 
 
+@router.post("/factors/bulk")
+def bulk_add_factors(
+    req: dict,
+    api_key: str | None = Depends(get_api_key),
+) -> dict:
+    """Evaluate a batch of expressions and save the good ones (bulk import).
+
+    Body: ``{exprs:[str], universe?, source?, period?:[start,end], as_of?}``. Returns
+    ``{evaluated, saved, results:[{expr, factor_id, saved, failure_mode, rank_ic,
+    rank_icir}]}``. The WebUI chunks a large import into several calls to drive a
+    progress bar. A missing data store surfaces as HTTP 503 via the app handler.
+    """
+    svc = get_service()
+    exprs = [str(e).strip() for e in (req.get("exprs") or []) if str(e).strip()]
+    if not exprs:
+        return {"evaluated": 0, "saved": 0, "results": []}
+    period = req.get("period")
+    if isinstance(period, (list, tuple)) and len(period) == 2:
+        period = (period[0], period[1])
+    else:
+        period = None
+    return svc.add_factors(
+        exprs,
+        universe=req.get("universe"),
+        source=(req.get("source") or "CUSTOM"),
+        period=period,
+        as_of=req.get("as_of"),
+    )
+
+
 @router.delete("/factors", response_model=DeleteFactorsResponse)
 async def delete_factors(
     req: DeleteFactorsRequest,
@@ -123,7 +153,7 @@ async def delete_factors(
 
 
 @router.get("/correlation-matrix")
-async def correlation_matrix(
+def correlation_matrix(
     factor_ids: str | None = Query(None, description="Comma-separated factor ids."),
     universe: str | None = Query(None),
     period: str | None = Query(None, description="start,end dates."),
@@ -144,7 +174,7 @@ async def correlation_matrix(
 
 
 @router.post("/prune", response_model=PruneResponse)
-async def prune_factors(
+def prune_factors(
     req: PruneRequest,
     api_key: str | None = Depends(get_api_key),
 ) -> PruneResponse:

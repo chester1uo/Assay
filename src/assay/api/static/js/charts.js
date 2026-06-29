@@ -75,13 +75,126 @@ function hexToRgb(hex) {
 
 const DEFAULT_COLORS = ["#2D5BE3", "#0E8A7E", "#B87C1A", "#C0392B", "#1E7B4B"];
 
+// ---------------------------------------------------------------- hover ----
+// Opt-in interactivity for line/bar charts: a dashed crosshair + focus dots and an
+// HTML tooltip showing the date and each series value at the hovered index.
+//
+// Mouse→data mapping uses the SVG's own getScreenCTM() inverse, so it stays correct
+// under viewBox scaling / letterboxing (the charts use preserveAspectRatio). The
+// chart returns a positioned wrapper <div> (svg + tooltip) instead of a bare <svg>;
+// callers already wrap charts in a container and the zoom button finds the inner
+// <svg> via querySelector, so both keep working.
+
+const HOVER_STYLE_ID = "chart-hover-style";
+function injectHoverStyle() {
+  if (typeof document === "undefined" || document.getElementById(HOVER_STYLE_ID)) return;
+  const css = `
+.chart-interactive { position: relative; }
+.chart-crosshair { stroke: #8892AA; stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+.chart-tip { position: absolute; pointer-events: none; z-index: 5; background: rgba(17,24,39,0.92);
+  color: #fff; font-size: 12px; padding: 6px 8px; border-radius: 6px; white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.22); transform: translateZ(0); }
+.chart-tip-date { font-weight: 600; margin-bottom: 3px; }
+.chart-tip-row { display: flex; align-items: center; gap: 6px; font-family: ui-monospace, monospace; line-height: 1.5; }
+.chart-tip-sw { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: 0 0 auto; }
+`;
+  const style = document.createElement("style");
+  style.id = HOVER_STYLE_ID;
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+
+/**
+ * Wrap `svg` with crosshair + tooltip interactivity.
+ * cfg: { top, ih, n, indexAt(ux)->i, xAt(i)->px, seriesAt(i)->[{name,color,value,cy?}], dateAt(i)->str, valueFmt }
+ */
+function attachHover(svg, cfg) {
+  injectHoverStyle();
+  const { top, ih, n, indexAt, xAt, seriesAt, dateAt, valueFmt } = cfg;
+  const fmtV = valueFmt || ((v) => (isNum(v) ? String(v) : "—"));
+
+  const cross = svgEl("line", { class: "chart-crosshair", x1: 0, x2: 0, y1: top, y2: top + ih, opacity: 0 });
+  const focus = svgEl("g", {});
+  svg.appendChild(cross);
+  svg.appendChild(focus);
+
+  const wrap = document.createElement("div");
+  wrap.className = "chart-interactive";
+  wrap.appendChild(svg);
+  const tip = document.createElement("div");
+  tip.className = "chart-tip";
+  tip.style.display = "none";
+  wrap.appendChild(tip);
+
+  function toUserX(e) {
+    if (typeof svg.getScreenCTM !== "function") return null;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    return pt.matrixTransform(ctm.inverse()).x;
+  }
+
+  function onMove(e) {
+    if (!n) return;
+    const ux = toUserX(e);
+    if (ux == null) return;
+    let i = indexAt(ux);
+    i = Math.max(0, Math.min(n - 1, i));
+    const cx = xAt(i);
+    cross.setAttribute("x1", cx);
+    cross.setAttribute("x2", cx);
+    cross.setAttribute("opacity", 1);
+    const rows = seriesAt(i) || [];
+    focus.replaceChildren();
+    for (const p of rows) {
+      if (p.cy == null || !isNum(p.cy)) continue;
+      focus.appendChild(svgEl("circle", { cx, cy: p.cy, r: 3.2, fill: p.color, stroke: "#fff", "stroke-width": 1 }));
+    }
+    tip.replaceChildren();
+    const dEl = document.createElement("div");
+    dEl.className = "chart-tip-date";
+    dEl.textContent = dateAt(i);
+    tip.appendChild(dEl);
+    for (const p of rows) {
+      const row = document.createElement("div");
+      row.className = "chart-tip-row";
+      const sw = document.createElement("span");
+      sw.className = "chart-tip-sw";
+      sw.style.background = p.color;
+      row.appendChild(sw);
+      row.appendChild(document.createTextNode(`${p.name ? p.name + ": " : ""}${fmtV(p.value)}`));
+      tip.appendChild(row);
+    }
+    tip.style.display = "";
+    const wr = wrap.getBoundingClientRect();
+    let tx = e.clientX - wr.left + 14;
+    let ty = e.clientY - wr.top + 14;
+    const tw = tip.offsetWidth;
+    const th = tip.offsetHeight;
+    if (tx + tw > wr.width) tx = e.clientX - wr.left - tw - 14;
+    if (ty + th > wr.height) ty = wr.height - th - 4;
+    tip.style.left = Math.max(0, tx) + "px";
+    tip.style.top = Math.max(0, ty) + "px";
+  }
+  function onLeave() {
+    cross.setAttribute("opacity", 0);
+    focus.replaceChildren();
+    tip.style.display = "none";
+  }
+  svg.addEventListener("mousemove", onMove);
+  svg.addEventListener("mouseleave", onLeave);
+  return wrap;
+}
+
 // ---------------------------------------------------------------- lineChart ----
 /**
  * Multi-line chart with axes, monthly-ish x ticks, and a zero line.
  * series: [{name, values:[num], color?}]  (NaN/null -> gap)
  * dates?: [isoStr] aligned to value index; yDomain?: [lo,hi]; bands?: [{from,to,color}]
  */
-export function lineChart({ series = [], dates = null, yDomain = null, height = 240, bands = [], width = 640 }) {
+export function lineChart({ series = [], dates = null, yDomain = null, height = 240, bands = [], width = 640, interactive = false, valueFmt = null }) {
   const m = { top: 12, right: 16, bottom: 24, left: 44 };
   const w = width;
   const h = height;
@@ -160,7 +273,23 @@ export function lineChart({ series = [], dates = null, yDomain = null, height = 
     if (d) root.appendChild(svgEl("path", { d: d.trim(), fill: "none", stroke: color, "stroke-width": 1.6 }));
   });
 
-  return root;
+  if (!interactive) return root;
+  return attachHover(root, {
+    top: m.top, ih, n,
+    indexAt: (ux) => (n <= 1 ? 0 : Math.round(((ux - m.left) / (iw || 1)) * (n - 1))),
+    xAt: x,
+    seriesAt: (i) => series.map((s, si) => {
+      const v = (s.values || [])[i];
+      return {
+        name: s.name || "",
+        color: s.color || DEFAULT_COLORS[si % DEFAULT_COLORS.length],
+        value: v,
+        cy: isNum(v) ? y(v) : null,
+      };
+    }),
+    dateAt: (i) => (dates && dates[i] != null ? String(dates[i]) : String(i)),
+    valueFmt,
+  });
 }
 
 // ---------------------------------------------------------------- barChart ----
@@ -168,7 +297,7 @@ export function lineChart({ series = [], dates = null, yDomain = null, height = 
  * Vertical bar chart with zero baseline and optional value labels.
  * labels:[str], values:[num], colors?:[str], valueLabels?:bool
  */
-export function barChart({ labels = [], values = [], colors = null, height = 240, valueLabels = false, width = 640 }) {
+export function barChart({ labels = [], values = [], colors = null, height = 240, valueLabels = false, width = 640, interactive = false, valueFmt = null, dates = null }) {
   const m = { top: 16, right: 16, bottom: 28, left: 44 };
   const w = width;
   const h = height;
@@ -200,6 +329,10 @@ export function barChart({ labels = [], values = [], colors = null, height = 240
   const y0 = y(0);
   root.appendChild(svgEl("line", { x1: m.left, x2: w - m.right, y1: y0, y2: y0, class: "chart-zero" }));
 
+  // Thin x-axis labels so they never overlap: show at most ~12, evenly spaced
+  // (and always the last one). Few-bar charts (quintiles, decay) keep every label.
+  const labelStep = Math.max(1, Math.ceil(n / 12));
+
   values.forEach((v, i) => {
     if (!isNum(v)) return;
     const cx = m.left + slot * i + slot / 2;
@@ -216,14 +349,26 @@ export function barChart({ labels = [], values = [], colors = null, height = 240
         })
       );
     }
-    if (labels[i] !== undefined) {
+    if (labels[i] !== undefined && (i % labelStep === 0 || i === n - 1)) {
       root.appendChild(
         svgEl("text", { x: cx, y: h - 10, "text-anchor": "middle", class: "chart-axis", text: String(labels[i]) })
       );
     }
   });
 
-  return root;
+  if (!interactive) return root;
+  return attachHover(root, {
+    top: m.top, ih, n,
+    indexAt: (ux) => Math.floor((ux - m.left) / (slot || 1)),
+    xAt: (i) => m.left + slot * i + slot / 2,
+    seriesAt: (i) => {
+      const v = values[i];
+      const color = (colors && colors[i]) || (v >= 0 ? "#2D5BE3" : "#C0392B");
+      return [{ name: "", color, value: v, cy: isNum(v) ? y(v) : null }];
+    },
+    dateAt: (i) => (dates && dates[i] != null ? String(dates[i]) : (labels[i] != null ? String(labels[i]) : String(i))),
+    valueFmt,
+  });
 }
 
 // ---------------------------------------------------------------- calendarHeatmap ----

@@ -118,6 +118,12 @@ class AssayConfig:
     data_dir: Path = field(default_factory=lambda: Path("data"))
     market: str = "US"
 
+    # Per-market store roots for multi-market serving (e.g. {"CN": "/data/.../data_cn"}).
+    # When a requested universe maps to a market listed here, that market's data_dir is
+    # used; otherwise the canonical ``data_dir`` is read (which may itself hold several
+    # ``price_raw/market=.../`` subtrees). Lets one server serve US + A-share at once.
+    market_dirs: dict[str, Path] = field(default_factory=dict)
+
     # Storage roots (default under data_dir — see *_path properties below).
     library_dir: Path | None = None
     cache_dir: Path | None = None
@@ -149,6 +155,10 @@ class AssayConfig:
             self.library_dir = Path(self.library_dir).expanduser()
         if self.cache_dir is not None:
             self.cache_dir = Path(self.cache_dir).expanduser()
+        # Normalise per-market dirs to expanded Paths (keys upper-cased).
+        self.market_dirs = {
+            str(k).upper(): Path(v).expanduser() for k, v in (self.market_dirs or {}).items()
+        }
 
     @property
     def library_path(self) -> Path:
@@ -163,7 +173,14 @@ class AssayConfig:
     @classmethod
     def from_env(cls) -> "AssayConfig":
         data_dir = Path(os.environ.get("ASSAY_DATA_DIR", "data")).expanduser().resolve()
-        return cls(massive=MassiveConfig.from_env(), data_dir=data_dir)
+        # Optional per-market stores: ASSAY_DATA_DIR_CN / _US / _HK point a market at
+        # its own prepared store, so one server serves several markets at once.
+        market_dirs: dict[str, Path] = {}
+        for mk in ("US", "CN", "HK", "A"):
+            val = os.environ.get(f"ASSAY_DATA_DIR_{mk}")
+            if val:
+                market_dirs[mk] = Path(val).expanduser().resolve()
+        return cls(massive=MassiveConfig.from_env(), data_dir=data_dir, market_dirs=market_dirs)
 
     @classmethod
     def for_tests(cls, data_dir: Path | str, **overrides) -> "AssayConfig":

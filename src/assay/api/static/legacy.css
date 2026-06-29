@@ -1,0 +1,194 @@
+/* legacy.css — a 2000s-era retro skin for Assay, served only under /legacy/ as an
+ * Easter egg. Loaded AFTER styles.css so it wins. The trick: re-declare the design
+ * tokens on body.legacy (they cascade to the whole app), then a few component
+ * overrides for the beveled, underlined, square-cornered Web-1.0 feel. Plus retro
+ * chrome (marquee banner + hit counter footer) injected by the /legacy route.
+ *
+ * Fonts: VT323 (dot-matrix / CRT terminal — readable even small) as the body font,
+ * Press Start 2P (8-bit) for the banner / wordmark / headings. Falls back to Courier
+ * if offline. High contrast throughout: black text/borders, bright links. */
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
+
+body.legacy {
+  /* re-skin every component at once by overriding the design tokens */
+  --navy: #000080;
+  --blue: #0000ff;
+  --teal: #006d6d;
+  --amber: #9a5b00;
+  --red: #cc0000;
+  --green: #007000;
+  --gray-1: #fffff0;        /* alt rows: faint cream */
+  --gray-4: #1a1a1a;        /* "muted" is still near-black for contrast */
+  --bg: #ffffff;
+  --text: #000000;
+  --text-muted: #1a1a1a;
+  --border: #000000;        /* high-contrast black gridlines */
+  --border-strong: #000000;
+  --radius-card: 0;
+  --radius-badge: 0;
+  --radius-btn: 0;
+  --font-sans: "VT323", "Courier New", monospace;
+  --font-mono: "VT323", "Courier New", monospace;
+  --focus-ring: 0 0 0 2px #000080;
+
+  background: #008080;       /* the classic teal "desktop" */
+  background-attachment: fixed;
+  /* VT323 renders small — bump the base size so dense data stays legible */
+  font-size: 18px;
+  -webkit-font-smoothing: none;        /* crisp pixels, no antialias */
+  font-smooth: never;
+  text-rendering: optimizeSpeed;
+}
+
+/* 8-bit accents — short text only (Press Start 2P is chunky) */
+body.legacy .topnav-wordmark,
+body.legacy h1, body.legacy .page-title, body.legacy .section-title,
+body.legacy h2, body.legacy .card-title, body.legacy .legacy-banner {
+  font-family: "Press Start 2P", "Courier New", monospace;
+  letter-spacing: 0;
+}
+body.legacy h1, body.legacy .page-title { font-size: 16px; line-height: 1.5; text-shadow: 2px 2px 0 #c0c0c0; color: #000080; }
+body.legacy .section-title, body.legacy h2, body.legacy .card-title { font-size: 11px; line-height: 1.6; color: #000080; }
+body.legacy .topnav-wordmark { font-size: 13px; color: #000080; }
+
+/* links: underlined, bright blue, purple when visited */
+body.legacy a { color: #0000ff; text-decoration: underline; font-weight: bold; }
+body.legacy a:visited { color: #800080; }
+body.legacy a:hover { color: #cc0000; background: #ffff00; }
+
+/* body text + muted text: pure black for max contrast */
+body.legacy, body.legacy .muted, body.legacy .label, body.legacy .text-muted { color: #000000; }
+
+/* beveled gray buttons (Win9x) */
+body.legacy .btn,
+body.legacy button:not(.lang-toggle):not(.status-dot) {
+  border: 2px outset #c0c0c0 !important;
+  background: #c0c0c0 !important;
+  color: #000 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  font-family: "VT323", "Courier New", monospace !important;
+  font-size: 17px !important;
+}
+body.legacy .btn:active,
+body.legacy button:not(.lang-toggle):not(.status-dot):active { border-style: inset !important; }
+body.legacy .btn--primary { background: #000080 !important; color: #ffff00 !important; border: 2px outset #4060c0 !important; }
+body.legacy .btn--danger { background: #800000 !important; color: #fff !important; }
+
+/* cards / panels: hard black ridged borders, no soft shadows */
+body.legacy .card, body.legacy .panel, body.legacy section.card, body.legacy .factor-card {
+  border: 2px solid #000000 !important;
+  box-shadow: 3px 3px 0 #808080 !important;   /* hard drop shadow, not blur */
+  background: #ffffff;
+}
+
+/* inputs: inset 3D fields */
+body.legacy input, body.legacy select, body.legacy textarea {
+  border: 2px inset #b0b0b0 !important;
+  border-radius: 0 !important;
+  background: #ffffff;
+  color: #000;
+  font-family: "VT323", "Courier New", monospace;
+  font-size: 17px;
+}
+
+/* top nav: a beveled toolbar with hard borders */
+body.legacy .topnav {
+  background: #c0c0c0 !important;
+  border-bottom: 3px solid #000080 !important;
+  box-shadow: none !important;
+}
+body.legacy .topnav-tab { color: #000080 !important; text-decoration: underline; font-family: "VT323","Courier New",monospace; font-size: 18px; }
+body.legacy .topnav-tab.is-active { background: #000080 !important; color: #ffff00 !important; text-decoration: none; border: 2px outset #4060c0; }
+
+/* tables get hard black gridlines */
+body.legacy table { border: 2px solid #000000; }
+body.legacy th, body.legacy td { border: 1px solid #000000; }
+body.legacy th { background: #000080 !important; color: #ffffff !important; }
+
+/* badges become little hard-bordered chips */
+body.legacy .badge, body.legacy .tag { border: 1px solid #000 !important; border-radius: 0 !important; font-family: "VT323","Courier New",monospace; }
+
+/* solid, high-contrast bars (RankICIR etc.) */
+body.legacy .lib-icirbar { background: #ffffff; border: 1px solid #000; }
+body.legacy .lib-icirbar > span { background: #000080; }
+
+/* the main content sits on a bordered "page" like a GeoCities site */
+body.legacy .app-main { background: #ffffff; border: 3px solid #000000; margin: 8px; }
+
+/* chart text → dot-matrix too (chart.js hardcodes its own font otherwise) */
+body.legacy .ck-axis, body.legacy .chart-legend2, body.legacy .chart-legend2 .seg,
+body.legacy .chart-tip, body.legacy .chart .ck-axis {
+  font-family: "VT323", "Courier New", monospace !important;
+}
+
+/* -------- injected retro chrome (banner + footer) -------- */
+.legacy-banner {
+  background: #000080;
+  color: #ffff00;
+  border-bottom: 3px solid #ffff00;
+  font-size: 11px;
+  line-height: 2.2;
+  padding: 6px 0;
+}
+.legacy-foot {
+  margin: 8px;
+  padding: 12px;
+  background: #c0c0c0;
+  border: 3px solid #000000;
+  text-align: center;
+  font-family: "VT323", "Courier New", monospace;
+  font-size: 18px;
+  color: #000;
+}
+.legacy-foot a { color: #0000ff; }
+.legacy-counter {
+  font-family: "VT323", "Courier New", monospace;
+  font-size: 20px;
+  background: #000;
+  color: #00ff00;
+  padding: 2px 8px;
+  border: 2px inset #808080;
+  letter-spacing: 5px;
+}
+.legacy-foot .uc { color: #cc0000; font-weight: bold; }
+.legacy-blink { animation: legacyBlink 1s steps(1) infinite; }
+@keyframes legacyBlink { 50% { opacity: 0; } }
+
+/* -------- Data Manager in legacy: jobs as classic Win9x dialog windows -------- */
+body.legacy .dm-job {
+  border: 3px outset #c0c0c0 !important;
+  background: #c0c0c0 !important;
+  box-shadow: 3px 3px 0 #000 !important;
+  border-radius: 0 !important;
+  margin-bottom: 12px !important;
+  overflow: hidden;
+}
+/* gradient title bar */
+body.legacy .dm-job-head {
+  background: linear-gradient(90deg, #000080, #1084d0) !important;
+  color: #ffffff !important;
+  padding: 3px 6px !important;
+}
+body.legacy .dm-job-head .dm-job-title { color: #ffffff !important; font-family: "VT323","Courier New",monospace; }
+body.legacy .dm-job-head .dm-job-icon { color: #ffff00; }
+body.legacy .dm-job-head .badge { background: #c0c0c0 !important; color: #000 !important; border: 2px outset #e0e0e0 !important; }
+/* window body */
+body.legacy .dm-job-body { background: #c0c0c0 !important; padding: 10px !important; border-top: 1px solid #fff; }
+body.legacy .dm-job-msg { color: #000 !important; }
+/* classic segmented progress bar (white inset trough, blue blocks) */
+body.legacy .dm-prog {
+  height: 18px !important;
+  background: #ffffff !important;
+  border: 2px inset #9a9a9a !important;
+  border-radius: 0 !important;
+  padding: 2px;
+}
+body.legacy .dm-prog > span {
+  background: repeating-linear-gradient(90deg, #000080 0 12px, #c0c0c0 12px 15px) !important;
+  border-radius: 0 !important;
+}
+body.legacy .dm-pct { color: #000 !important; }
+body.legacy .dm-log { border: 2px inset #9a9a9a !important; background: #000 !important; color: #00ff00 !important; }
+/* config section sub-headers as little group labels */
+body.legacy .dm-sub { color: #000080; font-family: "Press Start 2P","Courier New",monospace; font-size: 10px; }

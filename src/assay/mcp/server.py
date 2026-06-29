@@ -136,10 +136,11 @@ def assay_evaluate(
 ) -> dict[str, Any]:
     """Evaluate one factor expression into a FactorReport dict (architecture §6.3).
 
-    ``universe`` is NASDAQ100 today (SP500 / Russell2000 are roadmap). ``period``
-    is ``["YYYY-MM-DD", "YYYY-MM-DD"]`` (defaults to the config period). A factor
-    that fails diagnostics returns a metrics-free report carrying ``failure_mode``
-    / ``suggestion`` / ``lookahead_detected`` rather than raising.
+    ``universe`` is any data-backed pool — US (NASDAQ100, SP500…) or A-share
+    (CSI300/CSI500/CSI1000); call ``assay_universes`` to see which are live.
+    ``period`` is ``["YYYY-MM-DD", "YYYY-MM-DD"]`` (defaults to the config period).
+    A factor that fails diagnostics returns a metrics-free report carrying
+    ``failure_mode`` / ``suggestion`` / ``lookahead_detected`` rather than raising.
     """
     svc = get_service()
     report = svc.evaluate(
@@ -188,6 +189,133 @@ def assay_batch(
 
 
 @mcp.tool(
+    name="assay_lint",
+    description=(
+        "Data-free, instant syntax + diagnostics check for a factor expression — "
+        "no panel load, never touches data. Call this BEFORE assay_evaluate / "
+        "assay_batch to catch syntax errors, unknown fields/operators and "
+        "lookahead-risk warnings cheaply, so you don't waste an evaluation on a "
+        "malformed candidate. Returns the detected dialect, the canonical "
+        "round-tripped expression, the fields/operators used, and a diagnostics "
+        "envelope (errors/warnings with codes and fix suggestions). "
+        "NOTE: fields beyond OHLCV (vwap, market_cap/cap) parse but have NO data "
+        "in the daily store, so factors using them fail at evaluate time."
+    ),
+)
+def assay_lint(expr: str) -> dict[str, Any]:
+    """Parse-only diagnostics: ``{dialect, canonical, fields, operators, diagnostics}``."""
+    from assay.engine import detect_dialect, iter_fields, iter_ops, lint, parse
+
+    diagnostics = lint(expr).to_dict()
+    dialect = detect_dialect(expr)
+    try:
+        node = parse(expr)
+        canonical = str(node)
+        fields = sorted(iter_fields(node))
+        operators = sorted(iter_ops(node))
+    except Exception:
+        canonical, fields, operators = None, [], []
+    return {
+        "dialect": dialect,
+        "canonical": canonical,
+        "fields": fields,
+        "operators": operators,
+        "diagnostics": diagnostics,
+    }
+
+
+@mcp.tool(
+    name="assay_universes",
+    description=(
+        "List the stock universes (pools) available for evaluation and backtesting, "
+        "each with its market and current symbol count. Call this FIRST to discover "
+        "what data is live before choosing a universe — US (NASDAQ100, SP500…) and "
+        "A-share (CSI300, CSI500, CSI1000) can be served side by side. A universe "
+        "with n_symbols=0 has no ingested data; don't evaluate against it."
+    ),
+)
+def assay_universes() -> dict[str, Any]:
+    """Available universes as ``{universes:[{id, market, n_symbols}], default}``."""
+    svc = get_service()
+    _start, end = svc.config.default_period
+    known = ["NASDAQ100", "SP500", "RUSSELL2000", "CSI300", "CSI500", "CSI1000"]
+    out: list[dict[str, Any]] = []
+    for uid in known:
+        n = 0
+        try:
+            n = len(svc.store_for_universe(uid).get_universe(uid, end, end))
+        except Exception:
+            pass
+        out.append({"id": uid, "market": svc._market_for(uid), "n_symbols": n})
+    return {"universes": out, "default": svc.config.default_universe}
+
+
+@mcp.tool(
+    name="assay_portfolio_backtest",
+    description=(
+        "Run a FULL portfolio backtest for a factor — the deepest performance test: "
+        "it turns the cross-sectional signal into an achievable NET return by "
+        "building a portfolio, rebalancing on a schedule, applying real constraints "
+        "and trading costs (commission / stamp duty / slippage; A-share ±price-limit "
+        "+ T+1 are auto-enforced for CSI* universes), then marking to market daily. "
+        "Returns Sharpe / Sortino / Calmar, annual & total return, excess return vs "
+        "benchmark, max drawdown, annual turnover, cost_drag, avg holding days, beta/"
+        "alpha and (for A-share) limit-hit / suspension stats. Use this on your BEST "
+        "few factors from assay_batch to confirm they survive costs — IC alone does "
+        "not. rebalance: daily|weekly|monthly|quarterly; weight_method: equal|"
+        "signal_prop|quintile. A-share is long-only (融券 not modelled)."
+    ),
+)
+def assay_portfolio_backtest(
+    expr: str,
+    universe: str = "NASDAQ100",
+    period: list[str] | None = None,
+    rebalance: str = "monthly",
+    weight_method: str = "equal",
+    long_short: bool = False,
+    max_single_weight: float = 0.05,
+) -> dict[str, Any]:
+    """Portfolio backtest -> compact performance summary (no heavy NAV/trade series).
+
+    Builds a market-appropriate :class:`PortfolioBacktestConfig` (A-share / US / HK
+    cost & limit preset chosen from the universe's market) and runs the §1.1 pipeline.
+    Returns the scalar performance metrics + monthly returns + a_share_metrics; the
+    full NAV/benchmark/trade series are omitted to keep the response compact.
+    """
+    from assay.portfolio import PortfolioBacktestConfig
+
+    svc = get_service()
+    period_t = tuple(period) if period else tuple(svc.config.default_period)
+    # service market codes are US/CN/HK; the portfolio preset uses US/A/HK.
+    market = {"CN": "A"}.get(svc._market_for(universe), svc._market_for(universe))
+    cfg = PortfolioBacktestConfig.preset(
+        market,
+        universe=universe,
+        period_start=period_t[0],
+        period_end=period_t[1],
+        rebalance_type=rebalance,
+        weight_method=weight_method,
+        long_short=(False if market == "A" else bool(long_short)),
+        max_single_weight=max_single_weight,
+        save_trade_log=False,
+        save_position_log=False,
+    )
+    d = svc.backtest_portfolio(expr, cfg).to_dict()
+    keep = [
+        "run_id", "factor_id", "period_start", "period_end", "n_trading_days",
+        "n_rebalances", "total_return", "annual_return", "gross_return", "excess_return",
+        "sharpe", "sortino", "calmar", "information_ratio", "max_drawdown",
+        "drawdown_recovery_days", "beta", "alpha_capm", "tracking_error",
+        "annual_turnover", "cost_drag", "avg_holding_days", "a_share_metrics",
+    ]
+    out = {k: d.get(k) for k in keep}
+    out["monthly_returns"] = d.get("monthly_returns")
+    out["config"] = {"universe": universe, "market": market, "rebalance": rebalance,
+                     "weight_method": weight_method, "long_short": cfg.long_short}
+    return out
+
+
+@mcp.tool(
     name="assay_library_list",
     description=(
         "List factors already in the Assay library, with optional filters. Call "
@@ -207,8 +335,9 @@ def assay_library_list(
     """Filtered/sorted library view as ``{total, factors}`` (architecture §6.3).
 
     ``min_rank_icir`` / ``max_redundancy`` floor/ceiling the quality and
-    uniqueness; ``source`` exact-matches lineage (AGENT | HUMAN | WQ101 |
-    IMPORTED); ``limit`` is capped at 100.
+    uniqueness; ``source`` exact-matches the provenance tag (AGENT | ALPHA101 |
+    ALPHA158 | CUSTOM | …); ``limit`` is capped at 100. Pass ``min_rank_icir=-1``
+    to include inverse-signal (negative-ICIR) factors, which are hidden by default.
     """
     svc = get_service()
     summaries = svc.library_query(

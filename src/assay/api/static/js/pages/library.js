@@ -69,18 +69,18 @@ function redundancyBadge(score, ctx) {
   }
   const v = Number(score);
   let cls = "badge--green";
-  let label = "unique";
+  let label = ctx.t("lib.redUnique");
   let glyph = "●"; // ●
   if (v > 0.7) {
     cls = "badge--red";
-    label = "redundant";
+    label = ctx.t("lib.redRedundant");
     glyph = "●";
   } else if (v >= 0.4) {
     cls = "badge--amber";
-    label = "similar";
+    label = ctx.t("lib.redSimilar");
     glyph = "◐"; // ◐
   }
-  return el("span", { className: `badge ${cls}`, title: `redundancy ${v.toFixed(2)}` }, glyph + " " + label);
+  return el("span", { className: `badge ${cls}`, title: ctx.t("lib.redundancyTitle", { v: v.toFixed(2) }) }, glyph + " " + label);
 }
 
 function decayClass(d) {
@@ -94,15 +94,15 @@ function decayClass(d) {
 function sourceTag(source, ctx) {
   const { el } = ctx;
   const s = source ? String(source).toUpperCase() : "—";
-  return el("span", { className: "tag lib-src", title: `source: ${s}` }, s);
+  return el("span", { className: "tag lib-src", title: ctx.t("lib.sourceTitle", { s }) }, s);
 }
 
 // --- error helper ------------------------------------------------------------
 
-function errMessage(err) {
-  if (!err) return "Unknown error";
+function errMessage(err, ctx) {
+  if (!err) return ctx.t("lib.errUnknown");
   if (err.status === 503 || err.code === "DATA_UNAVAILABLE") {
-    return "Data not ingested yet — live evaluation is unavailable. (NASDAQ-100 ingest required.)";
+    return ctx.t("lib.errDataUnavailable");
   }
   return err.message ? String(err.message) : String(err);
 }
@@ -187,6 +187,18 @@ function injectStyle() {
 .lib-prune-list li { font-family: var(--font-mono); font-size: 12px; padding: var(--sp-1) var(--sp-2); background: var(--gray-1); border-radius: var(--radius-badge); display: flex; gap: var(--sp-2); align-items: center; }
 
 .lib-mini-empty { padding: var(--sp-6); text-align: center; color: var(--text-muted); }
+
+.lib-add { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 460px; max-width: 560px; }
+.lib-add-textarea { width: 100%; resize: vertical; font-family: var(--font-mono); font-size: 13px; line-height: 1.5;
+  padding: var(--sp-2); border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--gray-1); color: var(--text); }
+.lib-add-textarea:focus-visible { outline: none; box-shadow: var(--focus-ring); border-color: var(--blue); }
+.lib-add-row { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.lib-add-field { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 130px; }
+.lib-add-field .input { width: 100%; }
+.lib-prog { width: 100%; height: 8px; background: var(--gray-1); border-radius: 4px; overflow: hidden; }
+.lib-prog.hidden { display: none; }
+.lib-prog-bar { display: block; height: 100%; width: 0%; background: var(--blue, #2D5BE3); transition: width .15s ease; }
+.lib-add-status { font-size: 12px; }
 `;
   const style = document.createElement("style");
   style.id = STYLE_ID;
@@ -207,6 +219,7 @@ export function render(root, ctx) {
     loadError: null,
     search: "",
     source: "",           // '' = all
+    pool: "",             // '' = all universes; else a universe_id
     sortBy: "rank_icir",
     minRankIcir: 0,
     maxRedundancy: 1,
@@ -227,13 +240,17 @@ export function render(root, ctx) {
     ui.loaded = false;
     ui.loadError = null;
     renderLeft();
-    const universe = ctx.store.get("universe");
+    // The library is a cross-universe catalog — list all factors regardless of the
+    // top-nav universe (each row shows its own universe_id). This keeps the seeded
+    // Alpha101 / Alpha158 demo (and any saved factor) visible in every context.
     const params = {
-      universe,
       sort_by: ui.sortBy,
       limit: 500,
     };
-    if (ui.minRankIcir > 0) params.min_rank_icir = ui.minRankIcir;
+    // Always send the slider value so it fully controls filtering: the route's
+    // default min_rank_icir is 0.0 (hides negative ICIR), so revealing inverse-signal
+    // factors requires explicitly sending a negative threshold.
+    params.min_rank_icir = ui.minRankIcir;
     if (ui.maxRedundancy < 1) params.max_redundancy = ui.maxRedundancy;
     if (ui.source) params.source = ui.source;
     ctx.api
@@ -284,6 +301,7 @@ export function render(root, ctx) {
         if (Number.isFinite(r) && r > ui.maxRedundancy) return false;
       }
       if (ui.source && String(f.source || "").toUpperCase() !== ui.source.toUpperCase()) return false;
+      if (ui.pool && String(f.universe_id || "") !== ui.pool) return false;
       return true;
     });
   }
@@ -292,9 +310,16 @@ export function render(root, ctx) {
     let n = 0;
     if (ui.search.trim()) n++;
     if (ui.source) n++;
+    if (ui.pool) n++;
     if (ui.minRankIcir > 0) n++;
     if (ui.maxRedundancy < 1) n++;
     return n;
+  }
+
+  function uniquePools() {
+    const set = new Set();
+    for (const f of ui.factors) if (f.universe_id) set.add(String(f.universe_id));
+    return [...set].sort();
   }
 
   // ---- left panel render ---------------------------------------------------
@@ -305,8 +330,8 @@ export function render(root, ctx) {
     const searchInput = el("input", {
       type: "search",
       className: "input lib-search",
-      placeholder: "Search expressions…",
-      "aria-label": "Search factor expressions",
+      placeholder: ctx.t("lib.searchPlaceholder"),
+      "aria-label": ctx.t("lib.searchAria"),
       value: ui.search,
       onInput: (e) => {
         ui.search = e.target.value;
@@ -320,14 +345,14 @@ export function render(root, ctx) {
       "select",
       {
         className: "select",
-        "aria-label": "Source filter",
+        "aria-label": ctx.t("lib.sourceAria"),
         onChange: (e) => {
           ui.source = e.target.value;
           loadList();
         },
       },
       ...sources.map((s) =>
-        el("option", { value: s, selected: s === ui.source }, s ? s : "All sources")
+        el("option", { value: s, selected: s === ui.source }, s ? s : ctx.t("lib.allSources"))
       )
     );
 
@@ -335,26 +360,26 @@ export function render(root, ctx) {
       "select",
       {
         className: "select",
-        "aria-label": "Sort by",
+        "aria-label": ctx.t("lib.sortAria"),
         onChange: (e) => {
           ui.sortBy = e.target.value;
           loadList();
         },
       },
-      el("option", { value: "rank_icir", selected: ui.sortBy === "rank_icir" }, "Sort: RankICIR"),
-      el("option", { value: "rank_ic", selected: ui.sortBy === "rank_ic" }, "Sort: RankIC"),
-      el("option", { value: "ic", selected: ui.sortBy === "ic" }, "Sort: IC"),
-      el("option", { value: "decay_halflife_days", selected: ui.sortBy === "decay_halflife_days" }, "Sort: Decay"),
-      el("option", { value: "redundancy_score", selected: ui.sortBy === "redundancy_score" }, "Sort: Redundancy"),
-      el("option", { value: "turnover_1d", selected: ui.sortBy === "turnover_1d" }, "Sort: Turnover")
+      el("option", { value: "rank_icir", selected: ui.sortBy === "rank_icir" }, ctx.t("lib.sortRankIcir")),
+      el("option", { value: "rank_ic", selected: ui.sortBy === "rank_ic" }, ctx.t("lib.sortRankIc")),
+      el("option", { value: "ic", selected: ui.sortBy === "ic" }, ctx.t("lib.sortIc")),
+      el("option", { value: "decay_halflife_days", selected: ui.sortBy === "decay_halflife_days" }, ctx.t("lib.sortDecay")),
+      el("option", { value: "redundancy_score", selected: ui.sortBy === "redundancy_score" }, ctx.t("lib.sortRedundancy")),
+      el("option", { value: "turnover_1d", selected: ui.sortBy === "turnover_1d" }, ctx.t("lib.sortTurnover"))
     );
 
     const minIcirVal = el("span", { className: "lib-slider-val" }, ui.minRankIcir.toFixed(2));
     const minIcir = el("label", { className: "lib-slider" },
-      "Min ICIR",
+      ctx.t("lib.minIcir"),
       el("input", {
-        type: "range", min: "0", max: "2", step: "0.05", value: String(ui.minRankIcir),
-        "aria-label": "Minimum RankICIR",
+        type: "range", min: "-1", max: "2", step: "0.05", value: String(ui.minRankIcir),
+        "aria-label": ctx.t("lib.minIcirAria"),
         onInput: (e) => { ui.minRankIcir = Number(e.target.value); minIcirVal.textContent = ui.minRankIcir.toFixed(2); renderList(); },
         onChange: () => loadList(),
       }),
@@ -363,14 +388,28 @@ export function render(root, ctx) {
 
     const maxRedVal = el("span", { className: "lib-slider-val" }, ui.maxRedundancy.toFixed(2));
     const maxRed = el("label", { className: "lib-slider" },
-      "Max redund.",
+      ctx.t("lib.maxRedund"),
       el("input", {
         type: "range", min: "0", max: "1", step: "0.05", value: String(ui.maxRedundancy),
-        "aria-label": "Maximum redundancy",
+        "aria-label": ctx.t("lib.maxRedundAria"),
         onInput: (e) => { ui.maxRedundancy = Number(e.target.value); maxRedVal.textContent = ui.maxRedundancy.toFixed(2); renderList(); },
         onChange: () => loadList(),
       }),
       maxRedVal
+    );
+
+    // Pool (universe) selector — '全部' or one of the universes present in the library.
+    const pools = ["", ...uniquePools()];
+    const poolSel = el(
+      "select",
+      {
+        className: "select",
+        "aria-label": ctx.t("lib.poolAria"),
+        onChange: (e) => { ui.pool = e.target.value; renderList(); updateBulkBar(); },
+      },
+      ...pools.map((p) =>
+        el("option", { value: p, selected: p === ui.pool }, p ? p : ctx.t("lib.allPools"))
+      )
     );
 
     const fcount = activeFilterCount();
@@ -378,22 +417,30 @@ export function render(root, ctx) {
       type: "button", className: "btn btn--sm btn--ghost",
       disabled: fcount === 0,
       onClick: () => {
-        ui.search = ""; ui.source = ""; ui.minRankIcir = 0; ui.maxRedundancy = 1;
+        ui.search = ""; ui.source = ""; ui.pool = ""; ui.minRankIcir = 0; ui.maxRedundancy = 1;
         loadList();
       },
-    }, fcount ? `× Clear filters (${fcount})` : "× Clear filters");
+    }, fcount ? ctx.t("lib.clearFiltersN", { n: fcount }) : ctx.t("lib.clearFiltersX"));
 
     const filters = el("div", { className: "lib-filters" },
       el("div", { className: "lib-filterrow" }, searchInput),
-      el("div", { className: "lib-filterrow" }, sourceSel, sortSel, clearBtn),
+      el("div", { className: "lib-filterrow" }, poolSel, sourceSel, sortSel, clearBtn),
       el("div", { className: "lib-filterrow" }, minIcir, maxRed)
     );
+
+    const addBtn = el("button", {
+      type: "button", className: "btn btn--sm btn--primary",
+      title: ctx.t("lib.addTitle"), onClick: () => openAddModal(),
+    }, "+ " + ctx.t("lib.add"));
 
     leftPanel.appendChild(
       el("div", { className: "lib-toolbar" },
         el("div", { className: "flex items-center justify-between" },
-          el("h2", { className: "section-title" }, "Factors"),
-          el("span", { className: "label", id: "lib-count" }, listCountLabel())
+          el("h2", { className: "section-title" }, ctx.t("lib.factors")),
+          el("span", { className: "flex items-center gap-2" },
+            addBtn,
+            el("span", { className: "label", id: "lib-count" }, listCountLabel())
+          )
         ),
         filters
       )
@@ -415,7 +462,7 @@ export function render(root, ctx) {
   }
 
   function listCountLabel() {
-    if (!ui.loaded) return "loading…";
+    if (!ui.loaded) return ctx.t("lib.loading");
     if (ui.loadError) return "—";
     const vis = visibleFactors().length;
     const tot = ui.factors.length;
@@ -445,8 +492,8 @@ export function render(root, ctx) {
 
     if (ui.loadError) {
       listWrap.appendChild(el("li", { className: "lib-mini-empty" },
-        el("div", { className: "error-state-title" }, "Couldn't load library"),
-        el("div", { className: "muted", style: { fontSize: "12px" } }, errMessage(ui.loadError))
+        el("div", { className: "error-state-title" }, ctx.t("lib.errLoadLibrary")),
+        el("div", { className: "muted", style: { fontSize: "12px" } }, errMessage(ui.loadError, ctx))
       ));
       return;
     }
@@ -459,10 +506,10 @@ export function render(root, ctx) {
     const vis = visibleFactors();
     if (vis.length === 0) {
       listWrap.appendChild(el("li", { className: "lib-mini-empty" },
-        el("div", { className: "empty-state-title" }, "No factors match your filters"),
+        el("div", { className: "empty-state-title" }, ctx.t("lib.noMatch")),
         el("button", { type: "button", className: "btn btn--sm mt-2", onClick: () => {
-          ui.search = ""; ui.source = ""; ui.minRankIcir = 0; ui.maxRedundancy = 1; loadList();
-        } }, "Clear filters")
+          ui.search = ""; ui.source = ""; ui.pool = ""; ui.minRankIcir = 0; ui.maxRedundancy = 1; loadList();
+        } }, ctx.t("lib.clearFilters"))
       ));
       return;
     }
@@ -472,11 +519,11 @@ export function render(root, ctx) {
 
   function emptyLibraryNode() {
     return el("li", { className: "lib-mini-empty" },
-      el("div", { className: "empty-state-title" }, "Your factor library is empty"),
+      el("div", { className: "empty-state-title" }, ctx.t("lib.empty")),
       el("div", { className: "muted", style: { fontSize: "12px", maxWidth: "320px" } },
-        "Evaluate a factor in the Single Factor Test and save it, or run a batch to populate the library."),
+        ctx.t("lib.emptyHint")),
       el("button", { type: "button", className: "btn btn--sm btn--primary mt-2",
-        onClick: () => ctx.router.navigate("#/factor") }, "Open Single Factor Test")
+        onClick: () => ctx.router.navigate("#/factor") }, ctx.t("lib.openTester"))
     );
   }
 
@@ -487,7 +534,7 @@ export function render(root, ctx) {
 
     const checkbox = el("input", {
       type: "checkbox", className: "lib-item-check", checked: isChecked,
-      "aria-label": "Select factor for bulk actions",
+      "aria-label": ctx.t("lib.selectFactorAria"),
       onClick: (e) => e.stopPropagation(),
       onChange: (e) => {
         if (e.target.checked) ui.checked.add(id);
@@ -499,12 +546,12 @@ export function render(root, ctx) {
 
     const icir = Number(f.rank_icir);
     const icirFill = Number.isFinite(icir) ? Math.max(0, Math.min(1, icir / 2)) * 100 : 0;
-    const icirBar = el("div", { className: "lib-icirbar", title: `RankICIR ${ctx.fmt(f.rank_icir, 2)}` },
+    const icirBar = el("div", { className: "lib-icirbar", title: ctx.t("lib.rankIcirTitle", { v: ctx.fmt(f.rank_icir, 2) }) },
       el("span", { style: { width: icirFill.toFixed(0) + "%" } }));
 
     const decayTxt = (f.decay_halflife_days === null || f.decay_halflife_days === undefined)
       ? "—"
-      : `${ctx.fmt(f.decay_halflife_days, 0)}d decay`;
+      : ctx.t("lib.decayDays", { d: ctx.fmt(f.decay_halflife_days, 0) });
 
     const meta = el("div", { className: "lib-item-meta" },
       icirBar,
@@ -523,12 +570,12 @@ export function render(root, ctx) {
     },
       checkbox,
       el("div", { className: "lib-item-main" },
-        el("div", { className: "lib-item-expr", title: f.expr || "" }, f.expr || "(no expression)"),
+        el("div", { className: "lib-item-expr", title: f.expr || "" }, f.expr || ctx.t("lib.noExpr")),
         meta
       ),
       el("div", { className: "lib-item-side" },
         sourceTag(f.source, ctx),
-        f.failure_mode ? el("span", { className: "badge badge--red", title: "failure mode" }, String(f.failure_mode)) : null
+        f.failure_mode ? el("span", { className: "badge badge--red", title: ctx.t("lib.failureMode") }, String(f.failure_mode)) : null
       )
     );
     return item;
@@ -565,20 +612,20 @@ export function render(root, ctx) {
       return;
     }
     bar.classList.remove("hidden");
-    bar.appendChild(el("span", { className: "lib-bulk-count" }, `${n} selected`));
+    bar.appendChild(el("span", { className: "lib-bulk-count" }, ctx.t("lib.nSelected", { n })));
     bar.appendChild(el("button", {
-      type: "button", className: "btn btn--sm", title: "Compare in correlation matrix",
+      type: "button", className: "btn btn--sm", title: ctx.t("lib.compareTitle"),
       disabled: n < 2,
       onClick: () => setMode("matrix"),
-    }, "Compare"));
+    }, ctx.t("lib.compare")));
     bar.appendChild(el("button", {
       type: "button", className: "btn btn--sm btn--danger",
       onClick: () => bulkDelete(),
-    }, "Delete"));
+    }, ctx.t("lib.delete")));
     bar.appendChild(el("button", {
       type: "button", className: "btn btn--sm btn--ghost",
       onClick: () => { ui.checked.clear(); renderLeft(); },
-    }, "× Clear"));
+    }, ctx.t("lib.clearX")));
   }
 
   function bulkDelete() {
@@ -588,8 +635,8 @@ export function render(root, ctx) {
       return f ? (f.expr || id) : id;
     });
     const ok = window.confirm(
-      `Delete ${ids.length} factor(s)?\n\n` + exprs.slice(0, 12).join("\n") +
-      (exprs.length > 12 ? `\n… and ${exprs.length - 12} more` : "")
+      ctx.t("lib.deleteConfirm", { n: ids.length }) + "\n\n" + exprs.slice(0, 12).join("\n") +
+      (exprs.length > 12 ? "\n" + ctx.t("lib.andMore", { n: exprs.length - 12 }) : "")
     );
     if (!ok) return;
     ctx.api.libraryDelete(ids)
@@ -599,7 +646,7 @@ export function render(root, ctx) {
         loadList();
       })
       .catch((err) => {
-        window.alert("Delete failed: " + errMessage(err));
+        window.alert(ctx.t("lib.deleteFailed", { msg: errMessage(err, ctx) }));
       });
   }
 
@@ -623,11 +670,11 @@ export function render(root, ctx) {
     }, label);
 
     const tabs = el("div", { className: "lib-modetabs", role: "tablist" },
-      tab("detail", "Factor Detail"),
-      tab("matrix", "Correlation Matrix"),
-      tab("umap", "Alpha Space Map", { disabled: true, title: "Needs backend (UMAP) — not available yet" }),
-      tab("icheat", "IC Heatmap", { disabled: true, title: "Needs backend (IC heatmap) — not available yet" }),
-      tab("lineage", "Lineage", { disabled: true, title: "Needs backend (lineage DAG) — not available yet" })
+      tab("detail", ctx.t("lib.tabDetail")),
+      tab("matrix", ctx.t("lib.tabMatrix")),
+      tab("umap", ctx.t("lib.tabUmap"), { disabled: true, title: ctx.t("lib.tabUmapTitle") }),
+      tab("icheat", ctx.t("lib.tabIcHeatmap"), { disabled: true, title: ctx.t("lib.tabIcHeatmapTitle") }),
+      tab("lineage", ctx.t("lib.tabLineage"), { disabled: true, title: ctx.t("lib.tabLineageTitle") })
     );
     rightPanel.appendChild(tabs);
 
@@ -636,8 +683,8 @@ export function render(root, ctx) {
 
     if (ui.loadError && ui.factors.length === 0) {
       body.appendChild(el("div", { className: "error-state" },
-        el("div", { className: "error-state-title" }, "Library unavailable"),
-        el("div", { className: "muted" }, errMessage(ui.loadError))
+        el("div", { className: "error-state-title" }, ctx.t("lib.libUnavailable")),
+        el("div", { className: "muted" }, errMessage(ui.loadError, ctx))
       ));
       return;
     }
@@ -650,15 +697,15 @@ export function render(root, ctx) {
   function renderDetail(body) {
     if (!ui.activeId) {
       body.appendChild(el("div", { className: "empty-state" },
-        el("div", { className: "empty-state-title" }, "Select a factor"),
-        el("div", { className: "muted" }, "Choose a factor from the list to see its full report.")
+        el("div", { className: "empty-state-title" }, ctx.t("lib.selectFactor")),
+        el("div", { className: "muted" }, ctx.t("lib.selectFactorHint"))
       ));
       return;
     }
 
     const card = el("div", { className: "card" });
     body.appendChild(card);
-    card.appendChild(el("div", { className: "muted" }, "Loading factor report…"));
+    card.appendChild(el("div", { className: "muted" }, ctx.t("lib.loadingReport")));
 
     const targetId = ui.activeId;
     ctx.api.libraryGet(targetId)
@@ -671,8 +718,8 @@ export function render(root, ctx) {
         if (ui.activeId !== targetId) return;
         clear(card);
         card.appendChild(el("div", { className: "error-state" },
-          el("div", { className: "error-state-title" }, "Couldn't load this factor"),
-          el("div", { className: "muted" }, errMessage(err))
+          el("div", { className: "error-state-title" }, ctx.t("lib.errLoadFactor")),
+          el("div", { className: "muted" }, errMessage(err, ctx))
         ));
       });
   }
@@ -683,17 +730,17 @@ export function render(root, ctx) {
 
     const head = el("div", { className: "lib-detail-head" },
       el("div", {},
-        el("div", { className: "lib-detail-expr", title: rep.expr_canonical || rep.expr }, rep.expr || "(no expression)"),
+        el("div", { className: "lib-detail-expr", title: rep.expr_canonical || rep.expr }, rep.expr || ctx.t("lib.noExpr")),
         el("div", { className: "lib-detail-sub" },
-          `Factor ID: ${rep.factor_id || "—"}`,
-          evalDate ? `  ·  Evaluated: ${evalDate}` : "",
+          ctx.t("lib.factorId", { id: rep.factor_id || "—" }),
+          evalDate ? "  ·  " + ctx.t("lib.evaluated", { date: evalDate }) : "",
           rep.universe_id ? `  ·  ${rep.universe_id}` : "",
           (rep.lineage && rep.lineage.source) ? `  ·  ${String(rep.lineage.source).toUpperCase()}` : ""
         )
       ),
       el("button", { type: "button", className: "btn btn--sm btn--primary",
         onClick: () => ctx.router.navigate("#/factor/" + encodeURIComponent(rep.factor_id)) },
-        "Open in tester →")
+        ctx.t("lib.openInTester"))
     );
     card.appendChild(head);
 
@@ -705,20 +752,20 @@ export function render(root, ctx) {
     );
 
     const lookahead = rep.lookahead_detected
-      ? el("span", { className: "badge badge--red" }, "⚠ detected")
-      : el("span", { className: "badge badge--green" }, "✓ clean");
+      ? el("span", { className: "badge badge--red" }, ctx.t("lib.lookaheadDetected"))
+      : el("span", { className: "badge badge--green" }, ctx.t("lib.lookaheadClean"));
 
     const grid = el("div", { className: "lib-metricgrid mt-4" },
-      metric("RankIC", ctx.fmt(rep.rank_ic, 3)),
-      metric("RankICIR", ctx.fmt(rep.rank_icir, 2)),
-      metric("IC", ctx.fmt(rep.ic, 3)),
-      metric("ICIR", ctx.fmt(rep.icir, 2)),
-      metric("Decay", rep.decay_halflife_days == null ? "—" : ctx.fmt(rep.decay_halflife_days, 0) + "d"),
-      metric("Turnover", ctx.fmt(rep.turnover_1d, 2)),
-      metric("Redundancy", ctx.fmt(rep.redundancy_score, 2),
-        rep.most_similar_factor ? `nearest: ${rep.most_similar_factor}` : null),
+      metric(ctx.t("lib.mRankIc"), ctx.fmt(rep.rank_ic, 3)),
+      metric(ctx.t("lib.mRankIcir"), ctx.fmt(rep.rank_icir, 2)),
+      metric(ctx.t("lib.mIc"), ctx.fmt(rep.ic, 3)),
+      metric(ctx.t("lib.mIcir"), ctx.fmt(rep.icir, 2)),
+      metric(ctx.t("lib.mDecay"), rep.decay_halflife_days == null ? "—" : ctx.fmt(rep.decay_halflife_days, 0) + "d"),
+      metric(ctx.t("lib.mTurnover"), ctx.fmt(rep.turnover_1d, 2)),
+      metric(ctx.t("lib.mRedundancy"), ctx.fmt(rep.redundancy_score, 2),
+        rep.most_similar_factor ? ctx.t("lib.nearest", { id: rep.most_similar_factor }) : null),
       el("div", { className: "lib-metric" },
-        el("span", { className: "lib-metric-label" }, "Lookahead"),
+        el("span", { className: "lib-metric-label" }, ctx.t("lib.mLookahead")),
         lookahead
       )
     );
@@ -729,15 +776,15 @@ export function render(root, ctx) {
       : (Array.isArray(rep.rank_ic_series) ? rep.rank_ic_series : []);
     const sparkBlock = el("div", { className: "card-body mt-4" },
       el("div", { className: "flex items-center justify-between" },
-        el("span", { className: "card-title" }, "IC series"),
-        el("span", { className: "label" }, series.length ? `${series.length} points` : "no series")
+        el("span", { className: "card-title" }, ctx.t("lib.icSeries")),
+        el("span", { className: "label" }, series.length ? ctx.t("lib.nPoints", { n: series.length }) : ctx.t("lib.noSeries"))
       )
     );
     if (series.length >= 2) {
       const spark = ctx.charts.sparkline(series, { width: 560, height: 56, color: "#2D5BE3" });
       sparkBlock.appendChild(el("div", { className: "chart-wrap" }, spark));
     } else {
-      sparkBlock.appendChild(el("div", { className: "muted", style: { fontSize: "12px" } }, "IC series not available for this factor."));
+      sparkBlock.appendChild(el("div", { className: "muted", style: { fontSize: "12px" } }, ctx.t("lib.icSeriesNa")));
     }
     card.appendChild(sparkBlock);
 
@@ -746,12 +793,12 @@ export function render(root, ctx) {
       const sug = el("div", { className: "card mt-4", style: { background: "var(--gray-1)", border: "none" } });
       if (rep.failure_mode) {
         sug.appendChild(el("div", { className: "flex items-center gap-2", style: { marginBottom: "var(--sp-1)" } },
-          el("span", { className: "badge badge--amber" }, "failure mode"),
+          el("span", { className: "badge badge--amber" }, ctx.t("lib.failureMode")),
           el("span", { className: "mono" }, String(rep.failure_mode))
         ));
       }
       if (rep.suggestion) {
-        sug.appendChild(el("div", { className: "card-title", style: { marginBottom: "2px" } }, "Suggestion"));
+        sug.appendChild(el("div", { className: "card-title", style: { marginBottom: "2px" } }, ctx.t("lib.suggestion")));
         sug.appendChild(el("div", {}, String(rep.suggestion)));
       }
       card.appendChild(sug);
@@ -759,7 +806,7 @@ export function render(root, ctx) {
 
     // collapsible raw JSON
     const json = el("details", { className: "lib-collapse mt-4" },
-      el("summary", {}, "Full FactorReport JSON"),
+      el("summary", {}, ctx.t("lib.fullJson")),
       el("pre", { className: "lib-json" }, safeJson(rep))
     );
     card.appendChild(json);
@@ -775,8 +822,8 @@ export function render(root, ctx) {
 
     if (ids.length < 2) {
       body.appendChild(el("div", { className: "empty-state" },
-        el("div", { className: "empty-state-title" }, "Select at least 2 factors"),
-        el("div", { className: "muted" }, "Check two or more factors (or have at least two in the list) to compute a correlation matrix.")
+        el("div", { className: "empty-state-title" }, ctx.t("lib.selectTwo")),
+        el("div", { className: "muted" }, ctx.t("lib.selectTwoHint"))
       ));
       return;
     }
@@ -788,15 +835,15 @@ export function render(root, ctx) {
 
     const controls = el("div", { className: "lib-matrix-controls" },
       el("label", { className: "lib-slider" },
-        "Redundancy threshold",
+        ctx.t("lib.redundancyThreshold"),
         el("input", {
           type: "range", min: "0", max: "1", step: "0.05", value: String(ui.matrixThreshold),
-          "aria-label": "Correlation threshold",
+          "aria-label": ctx.t("lib.correlationThresholdAria"),
           onInput: (e) => { ui.matrixThreshold = Number(e.target.value); threshVal.textContent = ui.matrixThreshold.toFixed(2); refreshOverlay(); },
         }),
         threshVal
       ),
-      el("span", { className: "label" }, `${ids.length} factors`)
+      el("span", { className: "label" }, ctx.t("lib.nFactors", { n: ids.length }))
     );
 
     const card = el("div", { className: "card" });
@@ -806,7 +853,7 @@ export function render(root, ctx) {
     card.appendChild(heatWrap);
     card.appendChild(summaryLine);
     card.appendChild(pruneSlot);
-    heatWrap.appendChild(el("div", { className: "muted" }, "Computing correlation matrix…"));
+    heatWrap.appendChild(el("div", { className: "muted" }, ctx.t("lib.computingMatrix")));
 
     let matrixData = null; // {factor_ids, matrix}
 
@@ -818,7 +865,7 @@ export function render(root, ctx) {
         matrixData = res;
         clear(heatWrap);
         if (!res || !Array.isArray(res.matrix) || !res.matrix.length) {
-          heatWrap.appendChild(el("div", { className: "muted" }, "Correlation matrix returned no data."));
+          heatWrap.appendChild(el("div", { className: "muted" }, ctx.t("lib.matrixNoData")));
           return;
         }
         heatWrap.appendChild(buildHeatmap(res));
@@ -828,8 +875,8 @@ export function render(root, ctx) {
         if (ui.mode !== "matrix") return;
         clear(heatWrap);
         heatWrap.appendChild(el("div", { className: "error-state" },
-          el("div", { className: "error-state-title" }, "Correlation matrix unavailable"),
-          el("div", { className: "muted" }, errMessage(err))
+          el("div", { className: "error-state-title" }, ctx.t("lib.matrixUnavailable")),
+          el("div", { className: "muted" }, errMessage(err, ctx))
         ));
       });
 
@@ -903,7 +950,7 @@ export function render(root, ctx) {
           rect.dataset.j = String(j);
           rect.dataset.v = Number.isFinite(v) ? v.toFixed(4) : "";
           const ct = document.createElementNS(NS, "title");
-          ct.textContent = `${truncate(rowExpr, 30)}  ×  ${truncate(exprFor(fids[j]), 30)}\ncorrelation: ${Number.isFinite(v) ? v.toFixed(3) : "—"}`;
+          ct.textContent = `${truncate(rowExpr, 30)}  ×  ${truncate(exprFor(fids[j]), 30)}\n` + ctx.t("lib.correlationLabel", { v: Number.isFinite(v) ? v.toFixed(3) : "—" });
           rect.appendChild(ct);
           svg.appendChild(rect);
         }
@@ -941,44 +988,139 @@ export function render(root, ctx) {
         }
       }
       clear(summaryLine);
-      summaryLine.appendChild(document.createTextNode(`${pairs} pair${pairs === 1 ? "" : "s"} at or above ${thr.toFixed(2)} threshold. `));
+      summaryLine.appendChild(document.createTextNode(ctx.t("lib.pairsAboveThreshold", { pairs, thr: thr.toFixed(2) }) + " "));
       const previewBtn = el("button", { type: "button", className: "btn btn--sm mt-2",
-        onClick: () => previewPruning() }, "Preview pruning →");
+        onClick: () => previewPruning() }, ctx.t("lib.previewPruning"));
       summaryLine.appendChild(previewBtn);
     }
 
+    // Greedy redundancy pruning, computed CLIENT-SIDE from the already-loaded
+    // correlation matrix — instant, no extra backend round-trip (the /prune endpoint
+    // would re-build the engine and re-evaluate every factor, which is slow). For each
+    // over-threshold pair (in descending |corr|) drop the lower-RankICIR factor.
     function previewPruning() {
       clear(pruneSlot);
-      pruneSlot.appendChild(el("div", { className: "muted" }, "Computing pruning preview…"));
-      ctx.api.prune({ redundancy_threshold: ui.matrixThreshold, dry_run: true })
-        .then((res) => {
-          clear(pruneSlot);
-          const would = (res && (res.would_delete || res.would_remove || res.deleted)) || [];
-          const idList = Array.isArray(would) ? would : [];
-          if (idList.length === 0) {
-            pruneSlot.appendChild(el("div", { className: "placeholder-note" },
-              "No factors would be pruned at this threshold."));
-            return;
-          }
-          const list = el("ul", { className: "lib-prune-list" });
-          for (const item of idList) {
-            const id = typeof item === "string" ? item : (item.factor_id || item.id || JSON.stringify(item));
-            const expr = typeof item === "object" && item.expr ? item.expr : exprFor(id);
-            list.appendChild(el("li", {},
-              el("span", { className: "badge badge--red" }, "remove"),
-              el("span", { title: id }, truncate(expr, 60))
-            ));
-          }
-          pruneSlot.appendChild(el("div", { className: "card-title", style: { marginBottom: "var(--sp-1)" } },
-            `Pruning would remove ${idList.length} dominated factor(s)`));
-          pruneSlot.appendChild(list);
-        })
-        .catch((err) => {
-          clear(pruneSlot);
-          pruneSlot.appendChild(el("div", { className: "placeholder-note" },
-            "Pruning preview unavailable: " + errMessage(err)));
-        });
+      if (!matrixData || !Array.isArray(matrixData.matrix) || !matrixData.matrix.length) {
+        pruneSlot.appendChild(el("div", { className: "placeholder-note" }, ctx.t("lib.matrixNoData")));
+        return;
+      }
+      const fids = matrixData.factor_ids || ids;
+      const M = matrixData.matrix;
+      const thr = ui.matrixThreshold;
+      const scoreOf = (id) => {
+        const f = ui.factors.find((x) => x.factor_id === id);
+        const v = f ? Number(f.rank_icir) : NaN;
+        return Number.isFinite(v) ? v : -Infinity;
+      };
+      const pairs = [];
+      for (let i = 0; i < fids.length; i++) {
+        for (let j = i + 1; j < fids.length; j++) {
+          const v = Number((M[i] || [])[j]);
+          if (Number.isFinite(v) && Math.abs(v) >= thr) pairs.push([Math.abs(v), i, j]);
+        }
+      }
+      pairs.sort((a, b) => b[0] - a[0]);
+      const removed = new Set();
+      for (const [, i, j] of pairs) {
+        if (removed.has(fids[i]) || removed.has(fids[j])) continue;
+        removed.add(scoreOf(fids[i]) >= scoreOf(fids[j]) ? fids[j] : fids[i]);
+      }
+      const idList = [...removed];
+      if (idList.length === 0) {
+        pruneSlot.appendChild(el("div", { className: "placeholder-note" }, ctx.t("lib.noPrune")));
+        return;
+      }
+      const list = el("ul", { className: "lib-prune-list" });
+      for (const id of idList) {
+        list.appendChild(el("li", {},
+          el("span", { className: "badge badge--red" }, ctx.t("lib.remove")),
+          el("span", { title: id }, truncate(exprFor(id), 60))
+        ));
+      }
+      pruneSlot.appendChild(el("div", { className: "card-title", style: { marginBottom: "var(--sp-1)" } },
+        ctx.t("lib.pruneWouldRemove", { n: idList.length })));
+      pruneSlot.appendChild(list);
     }
+  }
+
+  // ---- add factors (bulk import) modal ------------------------------------
+  function openAddModal() {
+    const textarea = el("textarea", {
+      className: "lib-add-textarea mono", spellcheck: "false", autocomplete: "off", rows: "10",
+      placeholder: ctx.t("lib.addExprPlaceholder"),
+    });
+    const fileInput = el("input", { type: "file", accept: ".txt,.csv,text/plain", className: "input" });
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const cur = textarea.value.trim();
+        textarea.value = (cur ? cur + "\n" : "") + String(reader.result || "");
+      };
+      reader.readAsText(file);
+    });
+
+    const uniInput = el("input", { className: "input", value: ctx.store.get("universe") || "", "aria-label": ctx.t("lib.addUniverse") });
+    const srcInput = el("input", { className: "input", value: "CUSTOM", "aria-label": ctx.t("lib.addSource") });
+
+    const bar = el("span", { className: "lib-prog-bar" });
+    const progWrap = el("div", { className: "lib-prog hidden" }, bar);
+    const status = el("div", { className: "muted lib-add-status" }, "");
+
+    const importBtn = el("button", { className: "btn btn--primary", type: "button" }, ctx.t("lib.addImport"));
+    let closeFn = () => {};
+    let busy = false;
+
+    function parseExprs() {
+      return [...new Set(
+        textarea.value.split(/\r?\n/).map((s) => s.trim()).filter((s) => s && !s.startsWith("#"))
+      )];
+    }
+
+    async function runImport() {
+      if (busy) return;
+      const exprs = parseExprs();
+      if (!exprs.length) { status.textContent = ctx.t("lib.addEmpty"); return; }
+      busy = true; importBtn.disabled = true; fileInput.disabled = true; textarea.disabled = true;
+      progWrap.classList.remove("hidden");
+      const universe = uniInput.value.trim() || undefined;
+      const source = (srcInput.value.trim() || "CUSTOM").toUpperCase();
+      const period = ctx.store.get("period");
+      const CH = 8;
+      let done = 0, saved = 0, failed = 0;
+      for (let i = 0; i < exprs.length; i += CH) {
+        const chunk = exprs.slice(i, i + CH);
+        try {
+          const res = await ctx.api.libraryBulkAdd({ exprs: chunk, universe, source, period });
+          for (const r of (res && res.results) || []) { if (r.saved) saved++; else failed++; }
+        } catch (_) { failed += chunk.length; }
+        done += chunk.length;
+        bar.style.width = Math.round((done / exprs.length) * 100) + "%";
+        status.textContent = ctx.t("lib.importing", { done: Math.min(done, exprs.length), total: exprs.length, saved, failed });
+      }
+      status.textContent = ctx.t("lib.importDone", { saved, failed });
+      importBtn.textContent = ctx.t("lib.addClose");
+      importBtn.disabled = false;
+      busy = false;
+      loadList(); // refresh the library with the new factors
+      importBtn.onclick = () => closeFn();
+    }
+    importBtn.addEventListener("click", () => { if (!busy) runImport(); });
+
+    const content = el("div", { className: "lib-add" },
+      el("div", { className: "muted", style: { fontSize: "12px", marginBottom: "8px" } }, ctx.t("lib.addHint")),
+      el("label", { className: "label" }, ctx.t("lib.addExprLabel")),
+      textarea,
+      el("div", { className: "lib-add-row mt-2" },
+        el("label", { className: "lib-add-field" }, el("span", { className: "label" }, ctx.t("lib.addUpload")), fileInput),
+        el("label", { className: "lib-add-field" }, el("span", { className: "label" }, ctx.t("lib.addUniverse")), uniInput),
+        el("label", { className: "lib-add-field" }, el("span", { className: "label" }, ctx.t("lib.addSource")), srcInput)
+      ),
+      progWrap,
+      el("div", { className: "flex items-center justify-between mt-2" }, status, importBtn)
+    );
+    closeFn = ctx.lightbox({ title: ctx.t("lib.addHeading"), content, wide: false });
   }
 
   // ---- initial paint -------------------------------------------------------

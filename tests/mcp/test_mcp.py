@@ -10,7 +10,7 @@ imports the module or invokes a tool whose service has been monkeypatched. Run::
 These tests pin three things about the server (architecture §6.2 / §6.3):
 
 1. The module imports cleanly with no credentials.
-2. Exactly the eight documented tools are registered on the ``FastMCP`` server
+2. Exactly the documented tool set is registered on the ``FastMCP`` server
    (assay_evaluate, assay_batch, the five library ops, assay_system_status).
 3. ``assay_evaluate`` runs end-to-end against a monkeypatched ``AssayService``
    and returns the report dict (carrying ``factor_id``), converting ``period``
@@ -34,12 +34,15 @@ import inspect
 import pytest
 
 
-# The eight tools the server documents (architecture §6.2). Exact set — the test
-# asserts both directions (none missing, none extra) so adding/removing a tool
-# without updating this list fails loudly.
+# The tools the server documents (architecture §6.2). Exact set — the test asserts
+# both directions (none missing, none extra) so adding/removing a tool without
+# updating this list fails loudly.
 EXPECTED_TOOLS = {
     "assay_evaluate",
     "assay_batch",
+    "assay_lint",
+    "assay_universes",
+    "assay_portfolio_backtest",
     "assay_library_list",
     "assay_library_get",
     "assay_library_save",
@@ -151,13 +154,15 @@ def test_package_reexports():
 
 
 # ---------------------------------------------------------------------------
-# registration: exactly the eight documented tools
+# registration: exactly the documented tool set
 # ---------------------------------------------------------------------------
-def test_eight_tools_registered():
-    """Exactly the eight architecture-§6.2 tools are registered — no more, no fewer."""
+def test_tools_registered():
+    """Exactly the documented tool set is registered — no more, no fewer."""
     mod = _server_module()
     names = set(_registered_tools(mod))
-    assert len(names) == 8, f"expected 8 tools, found {len(names)}: {sorted(names)}"
+    assert len(names) == len(EXPECTED_TOOLS), (
+        f"expected {len(EXPECTED_TOOLS)} tools, found {len(names)}: {sorted(names)}"
+    )
     assert names == EXPECTED_TOOLS, (
         f"missing={sorted(EXPECTED_TOOLS - names)} extra={sorted(names - EXPECTED_TOOLS)}"
     )

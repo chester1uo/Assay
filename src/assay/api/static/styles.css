@@ -142,6 +142,23 @@ h1, h2, h3, h4 { margin: 0; font-weight: 500; }
 .input-date { padding: var(--sp-1); }
 .select:focus-visible, .input:focus-visible { box-shadow: var(--focus-ring); border-color: var(--blue); }
 
+/* ------------------------------------------------------------- lang toggle --- */
+.lang-toggle {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-btn);
+  height: 30px;
+  min-width: 44px;
+  padding: 0 var(--sp-2);
+  cursor: pointer;
+}
+.lang-toggle:hover { background: var(--gray-1); border-color: var(--blue); }
+.lang-toggle:focus-visible { box-shadow: var(--focus-ring); border-color: var(--blue); }
+
 /* --------------------------------------------------------------- status dot --- */
 .status-dot {
   width: 12px;
