@@ -79,6 +79,36 @@ def _digest(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
 
+def hash_tree(node, out: dict | None = None) -> dict:
+    """Structural hash of every node in ``node``, computed bottom-up in O(n).
+
+    Returns ``{id(n): struct_hash}`` for every node ``n`` in the tree, filling the
+    optional ``out`` map (so several trees can share one map). Each hash is byte-
+    identical to :meth:`OpNode.struct_hash` / leaf ``struct_hash`` — but computed
+    once per node from its children's cached hashes, instead of re-walking the whole
+    subtree on every call. Calling ``struct_hash()`` at each node during evaluation
+    is O(n²); this is the O(n) replacement the CSE evaluator uses.
+    """
+    out = {} if out is None else out
+
+    def _h(n):
+        nid = id(n)
+        cached = out.get(nid)
+        if cached is not None:
+            return cached
+        if isinstance(n, OpNode):
+            r = _digest(f"op:{n.op}({','.join(_h(c) for c in n.children)})")
+        elif isinstance(n, FieldNode):
+            r = _digest(f"field:{n.name}")
+        else:  # LitNode
+            r = _digest(f"lit:{type(n.value).__name__}:{n.value!r}")
+        out[nid] = r
+        return r
+
+    _h(node)
+    return out
+
+
 def iter_ops(node) -> set[str]:
     """Return the set of operator names used anywhere in ``node``.
 

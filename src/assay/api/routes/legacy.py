@@ -42,7 +42,8 @@ _FOOTER = (
     '<a href="/">&laquo; back to the modern site</a>'
     "<div style=\"margin-top:6px\">[ "
     '<a href="#/dashboard">Home</a> | <a href="#/library">Factors</a> | '
-    '<a href="#/factor">Test</a> | <a href="#/portfolio">Backtest</a> | '
+    '<a href="#/factor">Test</a> | <a href="#/combination">Combine</a> | '
+    '<a href="#/portfolio">Backtest</a> | '
     '<a href="#/chart">Charts</a> | <a href="#/data">Data</a> | <a href="/admin">Admin</a>'
     ' ] &middot; <span class="uc">This site is under construction</span> &#128679;</div>'
     "</div>"

@@ -529,6 +529,40 @@ def cmd_seed_demo(args, config: AssayConfig | None) -> None:
     print(f"done — {total} demo factor(s) now in the library.")
 
 
+def cmd_precompute(args, config: AssayConfig | None) -> None:
+    """Mine common sub-expressions of a factor corpus and precompute them for all assets."""
+    import assay
+
+    svc = assay.init()
+    if args.action in ("build", "top") and not args.corpus:
+        raise SystemExit("precompute {build,top} requires --corpus <factor-file>")
+    if args.action == "stats":
+        st = svc.precompute_store.stats()
+        print(f"precompute store: {st['entries']} entries, {st['bytes'] / 1e6:.1f} MB "
+              f"at {svc.precompute_store.cache_dir}")
+        return
+    if args.action == "top":
+        top = svc.common_subexpressions(args.corpus, top_k=args.top_k)
+        print(f"top {len(top)} common sub-expressions in {args.corpus}:")
+        for c in top:
+            print(f"  x{c['count']:<6d} nodes={c['n_nodes']:<3d} score={c['score']:<8d} {c['expr'][:90]}")
+        return
+    # build
+    period = (args.start, args.end) if (args.start and args.end) else None
+    print(f"mining + precomputing top-{args.top_k} sub-expressions from {args.corpus} "
+          f"(universe={args.universe or '(config default)'}) ...")
+    info = svc.build_precompute(
+        args.corpus, universe=args.universe, period=period, as_of=args.as_of, top_k=args.top_k
+    )
+    print(f"corpus factors: {info['n_corpus']} | universe {info['universe']} {info['period']}")
+    print(f"built {info['built']} precomputed sub-expressions "
+          f"(~{info['est_evals_saved']:,} operator-evals saved per full corpus pass)")
+    print(f"store: {svc.precompute_store.stats()['entries']} entries at {svc.precompute_store.cache_dir}")
+    print("top sub-expressions:")
+    for c in info.get("top", [])[:12]:
+        print(f"  x{c['count']:<6d} nodes={c['n_nodes']:<3d} {c['expr'][:88]}")
+
+
 def cmd_serve_api(args, config: AssayConfig | None) -> None:
     """Launch the FastAPI REST service (uvicorn assay.api.app:app). Imports lazily."""
     try:
@@ -762,6 +796,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--as-of", dest="as_of", help="point-in-time cutoff (default: end)")
     sp.add_argument("--sources", help="comma-separated subset of ALPHA101,ALPHA158 (default: both)")
     sp.set_defaults(func=cmd_seed_demo, needs_config=False)
+
+    sp = sub.add_parser("precompute",
+                        help="mine common sub-expressions of a corpus and precompute them for all assets (CSE acceleration)")
+    sp.add_argument("action", nargs="?", default="build", choices=["build", "top", "stats"],
+                    help="build the store (default), list 'top' common sub-expressions, or 'stats'")
+    sp.add_argument("--corpus", help="path to a newline-delimited factor file (e.g. factors_canonical_unique.txt)")
+    sp.add_argument("--top-k", dest="top_k", type=int, default=512, help="number of sub-expressions to precompute (default 512)")
+    sp.add_argument("--universe", help="evaluation universe (default: config default)")
+    sp.add_argument("--start", help="YYYY-MM-DD (default: config period)")
+    sp.add_argument("--end", help="YYYY-MM-DD (default: config period)")
+    sp.add_argument("--as-of", dest="as_of", help="point-in-time cutoff (default: end)")
+    sp.set_defaults(func=cmd_precompute, needs_config=False)
 
     return p
 

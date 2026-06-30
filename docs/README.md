@@ -16,8 +16,10 @@ New here? Start with **[Getting Started](guide/getting-started.md)**.
 | [REST API](guide/rest-api.md) | `/v1/*` endpoints, SSE streaming, lint, auth |
 | [MCP Server](guide/mcp-server.md) | The 8 agent tools and client setup |
 | [WebUI](guide/webui.md) | The zero-install web app served by FastAPI |
+| [Factor Combination](guide/factor-combination.md) | Blend factors into a composite; train/val/test; analytic, optimization & ML methods |
 | [Portfolio Backtest](guide/portfolio-backtest.md) | Config, running, metrics, A-share notes |
 | [Performance](guide/performance.md) | The Alpha-101 cache-vs-no-cache benchmark |
+| [Precompute & CSE](guide/precompute-cse.md) | Mine common sub-expressions, precompute for all assets, accelerate sweeps |
 
 ## Design specs — `design/`
 

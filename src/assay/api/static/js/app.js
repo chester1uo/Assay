@@ -40,6 +40,7 @@ import { t, getLang, toggleLang, onLang } from "./i18n.js";
 import * as dashboard from "./pages/dashboard.js";
 import * as library from "./pages/library.js";
 import * as factor from "./pages/factor.js";
+import * as combination from "./pages/combination.js";
 import * as portfolio from "./pages/portfolio.js";
 import * as chart from "./pages/chart.js";
 import * as dataManager from "./pages/data.js";
@@ -257,6 +258,18 @@ async function refreshStatus() {
   }
 }
 
+async function showVersion() {
+  const node = document.getElementById("app-version");
+  if (!node) return;
+  try {
+    const h = await api.health();
+    const v = h && h.engine_version;
+    if (v) node.textContent = "v" + v;
+  } catch (_) {
+    /* health unreachable — leave the badge blank */
+  }
+}
+
 async function loadUniverses() {
   try {
     const universes = await api.universes();
@@ -291,6 +304,7 @@ function registerRoutes() {
     .route("#/library", ({ path }) => mount(library, {}, path))
     .route("#/factor", ({ path }) => mount(factor, {}, path))
     .route("#/factor/:id", ({ params, path }) => mount(factor, params, path))
+    .route("#/combination", ({ path }) => mount(combination, {}, path))
     .route("#/portfolio", ({ path }) => mount(portfolio, {}, path))
     .route("#/portfolio/:id", ({ params, path }) => mount(portfolio, params, path))
     .route("#/chart", ({ path }) => mount(chart, {}, path))
@@ -325,6 +339,7 @@ function boot() {
   // Fire-and-forget async chrome; never blocks first paint.
   loadUniverses();
   refreshStatus();
+  showVersion();
   // Refresh status when universe/period change (session/data context shifts).
   store.subscribe(() => refreshStatus());
   router.start("#/dashboard");

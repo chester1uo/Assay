@@ -283,3 +283,109 @@ def test_stream_failure_still_brackets(service):
     assert names[0] == "eval.started"
     assert names[-1] == "eval.complete"
     assert events[-1]["data"]["failure_mode"] == "LOOKAHEAD"
+
+
+# ---------------------------------------------------------------------------
+# precompute / CSE (engineering-docs §4.3) — common sub-expression acceleration
+# ---------------------------------------------------------------------------
+def test_common_subexpressions_service(service):
+    corpus = [
+        "Div(Sub(high, low), close)",
+        "Mul(Sub(high, low), Mean(volume, 20))",
+        "Div(Sub(high, low), Add(Mean(volume, 20), 1e-12))",
+    ]
+    cs = service.common_subexpressions(corpus, top_k=10, min_count=2)
+    exprs = {c["expr"] for c in cs}
+    assert "sub(high, low)" in exprs and "ts_mean(volume, 20)" in exprs
+
+
+def test_build_precompute_then_evaluate_many_matches(service):
+    corpus = [
+        "Div(Sub(high, low), close)",
+        "Mul(Sub(high, low), Mean(volume, 20))",
+        "Sub(close, open)",
+        "Div(Sub(close, open), Add(Sub(high, low), 1e-12))",
+    ]
+    info = service.build_precompute(corpus, top_k=20, min_count=2)
+    assert info["built"] >= 1 and info["n_corpus"] == 4
+    assert service.precompute_store.stats()["entries"] >= 1
+
+    # CSE-accelerated values (precompute-warm) must equal a plain per-factor evaluate
+    from assay.engine import FactorEngine
+
+    results = service.evaluate_many(corpus, use_precompute=True)
+    assert [r.expr for r in results] == corpus
+    eng = FactorEngine.from_store(None, universe="NASDAQ100",
+                                  period=("2024-01-01", "2024-02-29"), as_of="2024-02-29")
+    for expr, r in zip(corpus, results):
+        a = eng.evaluate(expr).values
+        assert np.array_equal(np.isfinite(a), np.isfinite(r.values))
+        m = np.isfinite(a)
+        assert np.allclose(a[m], r.values[m], rtol=0, atol=0)
+
+
+# ---------------------------------------------------------------------------
+# hot-cache <-> daily-data coupling (precompute refresh + status/freshness)
+# ---------------------------------------------------------------------------
+def test_precompute_refresh_and_freshness(service, monkeypatch):
+    import assay.data.orchestrate as orch
+
+    # seed a few overlapping library factors (share sub(high,low) / ts_mean(volume,20))
+    for e in ["Div(Sub(high, low), close)",
+              "Mul(Sub(high, low), Mean(volume, 20))",
+              "Div(Sub(high, low), Add(Mean(volume, 20), 1e-12))"]:
+        service.evaluate(e, save=True)
+
+    # pretend the US data's latest ingested date is some value
+    monkeypatch.setattr(orch, "status",
+                        lambda: {"today": "x", "markets": [{"market": "US", "assay_latest": "2024-02-29"}]})
+
+    info = service.refresh_precompute_for_market("US", universes=["NASDAQ100"], top_k=50)
+    assert info["data_latest"] == "2024-02-29"
+    assert info["refreshed"][0]["built"] >= 1   # common subtrees were precomputed
+
+    st = service.precompute_status()
+    assert st["store"]["entries"] >= 1
+    scope = st["scopes"][0]
+    assert scope["universe"] == "NASDAQ100" and scope["fresh"] is True  # aligned to data
+
+    # advance the data -> the cache must report stale (refresh due)
+    monkeypatch.setattr(orch, "status",
+                        lambda: {"today": "y", "markets": [{"market": "US", "assay_latest": "2024-03-15"}]})
+    st2 = service.precompute_status()
+    assert st2["scopes"][0]["fresh"] is False
+    import json
+    json.dumps(st2)  # JSON-safe for the admin page
+
+
+def test_apply_system_config_hot_reloads_defaults(service, monkeypatch, tmp_path):
+    # point config_store at a temp file, save system settings, apply, verify they
+    # land on the live config and drive _resolve (no restart).
+    import os
+
+    from assay import config_store
+    monkeypatch.setenv("ASSAY_CONFIG_FILE", str(tmp_path / "cfg.json"))
+    config_store.update({"system": {
+        "n_workers": 16, "default_universe": "CSI300",
+        "default_period_start": "2023-01-01", "default_period_end": "2023-12-31",
+        "default_horizons": "1,3,7", "default_execution": "next_close", "default_adj": "total",
+        "precompute_top_k": 999, "precompute_auto_refresh": False,
+    }})
+    service.apply_system_config()
+    assert service.config.n_workers == 16
+    assert service.config.default_universe == "CSI300"
+    assert service.config.default_period == ("2023-01-01", "2023-12-31")
+    assert service.config.default_horizons == (1, 3, 7)
+    assert service.config.precompute_top_k == 999
+    assert service.config.precompute_auto_refresh is False
+    u, p, h, ex, ao, adj = service._resolve(None, None, None, None, None, None)
+    assert u == "CSI300" and ex == "next_close" and adj == "total" and list(h) == [1, 3, 7]
+    os.unlink(tmp_path / "cfg.json")
+
+
+def test_precompute_refresh_empty_library_is_noop(service, monkeypatch):
+    import assay.data.orchestrate as orch
+    monkeypatch.setattr(orch, "status",
+                        lambda: {"today": "x", "markets": [{"market": "US", "assay_latest": "2024-02-29"}]})
+    info = service.refresh_precompute_for_market("US")
+    assert info["refreshed"] == [] and "note" in info  # nothing to mine, graceful

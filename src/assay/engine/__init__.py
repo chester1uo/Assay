@@ -29,7 +29,9 @@ from assay.engine.diagnostics import (
     Stage,
     lint,
 )
+from assay.engine.cse import CommonSubexpr, common_subexpressions
 from assay.engine.engine import EvalContext, EvaluationError, FactorEngine, FactorResult
+from assay.engine.precompute import BoundPrecompute, PrecomputeStore
 from assay.engine.operators import (
     OPERATOR_SCHEMA,
     OpSpec,
@@ -59,6 +61,10 @@ __all__ = [
     "FactorResult",
     "EvalContext",
     "EvaluationError",
+    "common_subexpressions",
+    "CommonSubexpr",
+    "PrecomputeStore",
+    "BoundPrecompute",
     "diagnostics",
     "FactorDiagnostics",
     "Diagnostic",

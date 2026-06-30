@@ -104,6 +104,22 @@ class FakeService:
     def library_query(self, **_filters):
         return []
 
+    # -- library advanced views --
+    def ic_heatmap(self, factor_ids, **kw):
+        return {"factor_ids": factor_ids, "exprs": factor_ids,
+                "periods": ["2024-01", "2024-02"], "horizon": 1, "bucket": kw.get("bucket", "month"),
+                "matrix": [[0.01, 0.02] for _ in factor_ids], "summary": [0.015 for _ in factor_ids]}
+
+    def factor_embedding(self, factor_ids, **kw):
+        return {"method": kw.get("method", "mds"), "factor_ids": factor_ids,
+                "points": [{"id": f, "expr": f, "x": 0.0, "y": 0.0, "cluster": 0,
+                            "rank_ic": 0.0, "rank_icir": 0.0, "source": "TEST"} for f in factor_ids]}
+
+    def factor_lineage(self, factor_ids=None, **kw):
+        ids = factor_ids or ["a", "b"]
+        return {"nodes": [{"id": i, "expr": i, "depth": 1, "n_ops": 0, "ops": [], "fields": []} for i in ids],
+                "edges": []}
+
     # -- evaluate / stream --
     def evaluate(self, expr, **_kw):
         return self.report
@@ -122,6 +138,56 @@ class FakeService:
     # -- session --
     def create_session(self, **_kw):
         return {"session_id": "sess_test"}
+
+    # -- system settings --
+    def apply_system_config(self):
+        return {}
+
+    # -- hot cache (precompute) --
+    def precompute_status(self):
+        return {
+            "store": {"entries": 2, "bytes": 4096, "dir": "/tmp/precompute"},
+            "current_data_latest": {"US": "2026-06-09", "CN": None, "HK": None},
+            "scopes": [{
+                "scope": "NASDAQ100", "universe": "NASDAQ100", "market": "US",
+                "period": ["2025-01-02", "2026-06-09"], "as_of": "2026-06-09",
+                "fingerprint": "abc", "built_at": "2026-06-10T00:00:00", "data_latest": "2026-06-09",
+                "n_entries": 2, "fresh": True, "current_data_latest": "2026-06-09", "top": [],
+            }],
+        }
+
+    def refresh_precompute_for_market(self, market, **kw):
+        return {"market": market, "data_latest": "2026-06-09",
+                "refreshed": [{"universe": "NASDAQ100", "built": 2}]}
+
+    def cache_entries(self, scope):
+        return {"scope": scope, "universe": scope, "fingerprint": "abc123def456",
+                "period": ["2025-01-02", "2026-06-09"], "count": 1, "bytes": 19200,
+                "entries": [{"struct_hash": "deadbeef", "expr": "sub(high, low)", "count": 3,
+                             "n_factors": 3, "n_nodes": 3, "score": 6, "shape": [300, 100],
+                             "bytes": 240000, "coverage": 1.0, "present": True}]}
+
+    # -- combination --
+    def combination_methods(self):
+        return [
+            {"name": "equal", "kind": "analytic", "available": True},
+            {"name": "ridge", "kind": "analytic", "available": True},
+            {"name": "lightgbm", "kind": "boost", "available": True},
+        ]
+
+    def combine_factors(self, factors, **kw):
+        # Echo a minimal, well-formed combination payload (the kernel is unit-tested
+        # separately; here we only assert the route wiring + arg forwarding).
+        names = [f if isinstance(f, str) else (f.get("name") or "f") for f in factors]
+        return {
+            "method": kw.get("method", "icir_weight"),
+            "factor_names": names,
+            "weights": {n: 1.0 / len(names) for n in names},
+            "train": {"n_dates": 5, "ic": 0.01},
+            "val": {"n_dates": 2, "ic": 0.02},
+            "test": {"n_dates": 2, "ic": 0.03},
+            "splits": {"train": list(kw["train"]), "val": list(kw["val"]), "test": list(kw["test"])},
+        }
 
 
 class UnavailableService(FakeService):
@@ -314,6 +380,123 @@ def test_session_create_with_params(client, no_auth):
     )
     assert r.status_code == 200
     assert r.json()["session_id"] == "sess_test"
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/admin/config — data + system settings surface
+# ---------------------------------------------------------------------------
+def test_admin_config_exposes_system_settings(client, no_auth, monkeypatch, tmp_path):
+    # point the config store at a fresh temp file -> returns seeded defaults
+    monkeypatch.setenv("ASSAY_CONFIG_FILE", str(tmp_path / "cfg.json"))
+    r = client.get("/v1/admin/config")
+    assert r.status_code == 200
+    body = r.json()
+    # data settings present (existing)
+    assert "dirs" in body and "massive_s3" in body
+    # system settings present (new) — parallelism / cache / eval defaults
+    sysc = body["system"]
+    assert "n_workers" in sysc and "l2_max_gb" in sysc
+    assert "precompute_top_k" in sysc and "precompute_auto_refresh" in sysc
+    assert "default_universe" in sysc and "default_execution" in sysc and "default_horizons" in sysc
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/admin/cache/status + POST /v1/admin/cache/rebuild — hot cache
+# ---------------------------------------------------------------------------
+def test_admin_cache_status(client, no_auth):
+    r = client.get("/v1/admin/cache/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["store"]["entries"] == 2
+    assert body["scopes"][0]["universe"] == "NASDAQ100" and body["scopes"][0]["fresh"] is True
+
+
+def test_admin_cache_entries_lists_contents(client, no_auth):
+    r = client.get("/v1/admin/cache/entries", params={"scope": "NASDAQ100"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["universe"] == "NASDAQ100" and body["count"] == 1
+    e = body["entries"][0]
+    assert e["expr"] == "sub(high, low)" and e["shape"] == [300, 100]
+    assert {"count", "n_nodes", "score", "bytes", "coverage", "present"} <= set(e)
+
+
+def test_admin_cache_rebuild_queues_job(client, no_auth):
+    r = client.post("/v1/admin/cache/rebuild", json={"market": "US"})
+    # the route queues a background job and returns its descriptor
+    assert r.status_code == 200
+    assert "status" in r.json() or "id" in r.json()
+
+
+def test_admin_cache_rebuild_bad_market_422(client, no_auth):
+    r = client.post("/v1/admin/cache/rebuild", json={"market": "ZZ"})
+    assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/library/{ic-heatmap,embedding,lineage} — advanced library views
+# ---------------------------------------------------------------------------
+def test_library_ic_heatmap(client, no_auth):
+    r = client.get("/v1/library/ic-heatmap", params={"factor_ids": "a,b", "bucket": "month"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["periods"] and len(body["matrix"]) == 2 and body["bucket"] == "month"
+
+
+def test_library_embedding(client, no_auth):
+    r = client.get("/v1/library/embedding", params={"factor_ids": "a,b,c", "method": "mds"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["method"] == "mds" and len(body["points"]) == 3
+    assert all({"x", "y", "cluster"} <= set(p) for p in body["points"])
+
+
+def test_library_lineage(client, no_auth):
+    r = client.get("/v1/library/lineage", params={"factor_ids": "a,b"})
+    assert r.status_code == 200
+    body = r.json()
+    assert [n["id"] for n in body["nodes"]] == ["a", "b"] and "edges" in body
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/combination — factor combination with train/val/test
+# ---------------------------------------------------------------------------
+def test_combination_runs_and_returns_scorecard(client, no_auth):
+    """A valid body -> 200 with the chosen method, weights and train/val/test splits."""
+    r = client.post("/v1/combination", json={
+        "factors": ["rank(close)", {"name": "mom", "expr": "delta(close, 10)"}],
+        "train": ["2021-01-01", "2021-06-30"],
+        "val": ["2021-07-01", "2021-08-31"],
+        "test": ["2021-09-01", "2021-12-31"],
+        "method": "auto",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["method"] == "auto"
+    assert body["factor_names"] == ["rank(close)", "mom"]
+    assert body["splits"]["test"] == ["2021-09-01", "2021-12-31"]
+    for split in ("train", "val", "test"):
+        assert "ic" in body[split]
+
+
+def test_combination_methods_lists_schemes(client, no_auth):
+    """GET /v1/combination/methods -> available analytic + learned-model schemes."""
+    r = client.get("/v1/combination/methods")
+    assert r.status_code == 200
+    methods = r.json()["methods"]
+    names = {m["name"] for m in methods}
+    assert {"equal", "ridge"} <= names
+
+
+def test_combination_empty_factors_is_422(client, no_auth):
+    """No factors -> 422 (client error), never a 500."""
+    r = client.post("/v1/combination", json={
+        "factors": [],
+        "train": ["2021-01-01", "2021-06-30"],
+        "val": ["2021-07-01", "2021-08-31"],
+        "test": ["2021-09-01", "2021-12-31"],
+    })
+    assert r.status_code == 422
 
 
 # ---------------------------------------------------------------------------

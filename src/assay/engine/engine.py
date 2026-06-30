@@ -190,6 +190,136 @@ class FactorEngine:
                 raise EvaluationError(str(exc), op=node.op, cause=type(exc).__name__) from exc
         raise TypeError(f"unexpected AST node: {node!r}")
 
+    # -- batch evaluation with common-sub-expression elimination (CSE) --------
+    def _eval_cse(self, node, ctx: EvalContext, memo: dict, hashes: dict):
+        """Evaluate ``node`` reusing a structural-hash memo (shared across a batch).
+
+        Every :class:`OpNode` result is cached in ``memo`` keyed by its structural
+        hash (looked up from the precomputed ``hashes`` map — O(1), never re-walking
+        the subtree), so a sub-expression shared across the batch or repeated within
+        one factor is computed exactly once. ``memo`` may be pre-seeded from a
+        precompute store before the walk; a seeded hash short-circuits the whole
+        subtree. Field/literal leaves are returned directly — they cost nothing.
+        """
+        if isinstance(node, FieldNode):
+            return ctx.matrices[node.name]
+        if isinstance(node, LitNode):
+            return node.value
+        if not isinstance(node, OpNode):
+            raise TypeError(f"unexpected AST node: {node!r}")
+
+        h = hashes[id(node)]
+        cached = memo.get(h)
+        if cached is not None:
+            return cached
+
+        spec = operators.get(node.op)
+        args = [self._eval_cse(child, ctx, memo, hashes) for child in node.children]
+        try:
+            val = spec.fn(*args, ctx=ctx) if spec.needs_ctx else spec.fn(*args)
+        except EvaluationError:
+            raise
+        except Exception as exc:
+            raise EvaluationError(str(exc), op=node.op, cause=type(exc).__name__) from exc
+        if np.isscalar(val) or np.ndim(val) == 0:  # a constant subtree
+            val = np.full(self._shape, float(val), dtype=np.float64)
+        else:
+            val = np.asarray(val, dtype=np.float64)
+        memo[h] = val
+        return val
+
+    def evaluate_many(self, exprs, *, precompute=None, precompute_min_nodes: int = 3) -> list[FactorResult]:
+        """Evaluate many expressions over one shared panel with CSE (engineering §4.3).
+
+        Builds the field matrices once and threads a single structural-hash memo
+        across **all** expressions, so a sub-expression that recurs across the batch
+        (``sub(high, low)``, ``ts_mean(volume, 20)``, …) is computed only once.
+        Structural hashes are computed bottom-up in O(n) (not the O(n²) of calling
+        ``struct_hash`` per node). With a bound ``precompute`` store the memo is
+        **pre-seeded once** from disk — the batch's distinct subtrees of at least
+        ``precompute_min_nodes`` nodes are looked up up front, so there is no per-node
+        disk overhead during the walk (tiny subtrees are cheaper to recompute than to
+        load, so they are not fetched).
+
+        Returns one :class:`FactorResult` per input (aligned to ``exprs`` order). An
+        expression that fails to parse / evaluate raises, exactly as :meth:`evaluate`
+        would — call per-expression :meth:`diagnose` if you need soft failures.
+        """
+        from assay.engine.ast import hash_tree
+
+        nodes = [parse(e) if isinstance(e, str) else e for e in exprs]
+        fields: set[str] = set()
+        hashes: dict[int, str] = {}
+        for nd in nodes:
+            fields |= iter_fields(nd)
+            hash_tree(nd, hashes)
+        matrices = {f: self._matrix(f) for f in fields}
+        ctx = EvalContext(self.dates.tolist(), self.symbols.tolist(), matrices, self._groups)
+
+        memo: dict[str, np.ndarray] = {}
+        if precompute is not None:
+            self._seed_from_precompute(nodes, hashes, memo, precompute, precompute_min_nodes)
+
+        out: list[FactorResult] = []
+        for src, nd in zip(exprs, nodes):
+            expr_str = src if isinstance(src, str) else str(nd)
+            values = self._eval_cse(nd, ctx, memo, hashes)
+            if np.isscalar(values) or np.ndim(values) == 0:
+                values = np.full(self._shape, float(values), dtype=np.float64)
+            out.append(FactorResult(expr_str, np.asarray(values, dtype=np.float64), ctx.dates, ctx.symbols))
+        return out
+
+    @staticmethod
+    def _seed_from_precompute(nodes, hashes: dict, memo: dict, precompute, min_nodes: int) -> None:
+        """Pre-load precomputed matrices for the batch's distinct subtrees (>= ``min_nodes``).
+
+        One disk lookup per distinct qualifying subtree hash (not per node), so the
+        per-node walk stays pure in-memory. Misses are silently skipped.
+        """
+        sizes: dict[str, int] = {}
+
+        def _walk(n):  # subtree node-count per hash, distinct over the batch
+            if not isinstance(n, OpNode):
+                return 1
+            h = hashes[id(n)]
+            if h in sizes:
+                return sizes[h]
+            sz = 1 + sum(_walk(c) for c in n.children)
+            sizes[h] = sz
+            return sz
+
+        for nd in nodes:
+            _walk(nd)
+        for h, sz in sizes.items():
+            if sz >= min_nodes and h not in memo:
+                mat = precompute.get(h)
+                if mat is not None:
+                    memo[h] = mat
+
+    def panel_fingerprint(self) -> str:
+        """Stable digest of *this panel's identity* — dates × symbols × fields.
+
+        Two engines built over the same universe/period/as-of/adjustment produce the
+        same fingerprint; **growing the history (new dates) changes it**, so a
+        precompute store keyed by the fingerprint refreshes automatically as data is
+        ingested (it simply misses the stale key and recomputes). Cheap: hashes the
+        first/last date, the date count, and a digest of the sorted symbol + field
+        axes — not the matrix contents.
+        """
+        import hashlib
+
+        d = self.dates
+        first = str(d[0]) if d.size else ""
+        last = str(d[-1]) if d.size else ""
+        sym_digest = hashlib.blake2b(
+            "\x1f".join(map(str, self.symbols.tolist())).encode(), digest_size=8
+        ).hexdigest()
+        fld_digest = hashlib.blake2b(
+            "\x1f".join(sorted(self._field_cols)).encode(), digest_size=4
+        ).hexdigest()
+        preimage = f"{first}|{last}|{int(d.size)}|{int(self._shape[1])}|{sym_digest}|{fld_digest}"
+        return hashlib.blake2b(preimage.encode(), digest_size=16).hexdigest()
+
     # -- diagnostics ----------------------------------------------------------
     def diagnose(
         self,

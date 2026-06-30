@@ -1,194 +1,300 @@
-/* legacy.css — a 2000s-era retro skin for Assay, served only under /legacy/ as an
- * Easter egg. Loaded AFTER styles.css so it wins. The trick: re-declare the design
- * tokens on body.legacy (they cascade to the whole app), then a few component
- * overrides for the beveled, underlined, square-cornered Web-1.0 feel. Plus retro
- * chrome (marquee banner + hit counter footer) injected by the /legacy route.
+/* legacy.css — a Windows 98 desktop skin for Assay, served only under /legacy/.
  *
- * Fonts: VT323 (dot-matrix / CRT terminal — readable even small) as the body font,
- * Press Start 2P (8-bit) for the banner / wordmark / headings. Falls back to Courier
- * if offline. High contrast throughout: black text/borders, bright links. */
-@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
+ * The whole modern SPA (including the newer Factor-Combination page, the library
+ * Alpha-map / IC-heatmap / lineage tabs, the precompute hot-cache card and the
+ * System-Settings form) is reskinned at once by:
+ *   1. re-declaring the design TOKENS on body.legacy — colours, square corners and
+ *      the Tahoma/MS-Sans-Serif font cascade into every component that uses var(),
+ *      so new pages conform automatically;
+ *   2. classic Win98 3D bevels (raised / sunken box-shadows) on the generic widget
+ *      classes every page reuses — .card (a window), .btn / button, inputs, tables,
+ *      tabs, .badge — plus a navy title-bar treatment for card headers.
+ *
+ * Loaded AFTER styles.css (and AFTER the pages' own injected <style>, whose colours
+ * resolve through the overridden var() tokens). The retro chrome (a title-bar
+ * marquee + a status-bar footer) is injected by the /legacy route.
+ *
+ * Font: Win98 shipped 8pt "MS Sans Serif" (a bitmap face). On the web we fall back
+ * to Tahoma/Verdana — the same proportions — so it stays crisp and offline-safe. */
 
 body.legacy {
-  /* re-skin every component at once by overriding the design tokens */
+  /* ---- Win98 palette as design tokens (cascade into every component) ---- */
   --navy: #000080;
-  --blue: #0000ff;
-  --teal: #006d6d;
-  --amber: #9a5b00;
-  --red: #cc0000;
+  --blue: #000080;          /* the one accent — navy (no bright web-blue in Win98) */
+  --teal: #008080;
+  --amber: #7a4d00;
+  --red: #aa0000;
   --green: #007000;
-  --gray-1: #fffff0;        /* alt rows: faint cream */
-  --gray-4: #1a1a1a;        /* "muted" is still near-black for contrast */
-  --bg: #ffffff;
+  --gray-1: #dfdfdf;        /* alt rows: light silver */
+  --gray-4: #404040;        /* "muted" still dark for contrast on silver */
+  --bg: #c0c0c0;            /* silver button-face — the Win98 client colour */
   --text: #000000;
-  --text-muted: #1a1a1a;
-  --border: #000000;        /* high-contrast black gridlines */
+  --text-muted: #404040;
+  --border: #808080;        /* mid-grey 1px rules */
   --border-strong: #000000;
   --radius-card: 0;
   --radius-badge: 0;
   --radius-btn: 0;
-  --font-sans: "VT323", "Courier New", monospace;
-  --font-mono: "VT323", "Courier New", monospace;
-  --focus-ring: 0 0 0 2px #000080;
+  --font-sans: "Tahoma", "Geneva", "MS Sans Serif", "Segoe UI", sans-serif;
+  --font-mono: "Lucida Console", "Courier New", monospace;
+  --focus-ring: 0 0 0 1px #000;
+
+  /* Win98 3D bevel kits (reused via box-shadow below) */
+  --w98-raised: inset -1px -1px #0a0a0a, inset 1px 1px #ffffff, inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+  --w98-sunken: inset -1px -1px #ffffff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080;
+  --w98-window: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #ffffff;
+  --w98-field:  inset -1px -1px #ffffff, inset 1px 1px #808080, inset -2px -2px #dfdfdf, inset 2px 2px #0a0a0a;
 
   background: #008080;       /* the classic teal "desktop" */
   background-attachment: fixed;
-  /* VT323 renders small — bump the base size so dense data stays legible */
-  font-size: 18px;
-  -webkit-font-smoothing: none;        /* crisp pixels, no antialias */
-  font-smooth: never;
-  text-rendering: optimizeSpeed;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: #000;
 }
 
-/* 8-bit accents — short text only (Press Start 2P is chunky) */
-body.legacy .topnav-wordmark,
-body.legacy h1, body.legacy .page-title, body.legacy .section-title,
-body.legacy h2, body.legacy .card-title, body.legacy .legacy-banner {
-  font-family: "Press Start 2P", "Courier New", monospace;
-  letter-spacing: 0;
+body.legacy, body.legacy * { font-family: var(--font-sans); }
+body.legacy .mono, body.legacy code, body.legacy pre,
+body.legacy .pf-mono, body.legacy .cb-mono, body.legacy [class*="-json"] { font-family: var(--font-mono) !important; }
+
+/* headings: bold Tahoma, navy — no pixel-art, Win98 used the system face everywhere */
+body.legacy h1, body.legacy .page-title { font-size: 15px; font-weight: bold; color: #fff; text-shadow: 1px 1px 0 #000; }
+/* page subtitle sits on the teal desktop -> light, not dark */
+body.legacy .page-subtitle { color: #e6f2f2; }
+body.legacy h2, body.legacy .section-title { font-size: 12px; font-weight: bold; color: #000080; }
+
+/* links: classic underlined navy/blue, purple visited */
+body.legacy a { color: #0000c0; text-decoration: underline; }
+body.legacy a:visited { color: #600080; }
+body.legacy a:hover { color: #0000ff; }
+
+/* ---- the desktop: cards float as windows on teal; main area is just padding ---- */
+body.legacy .app-main { background: transparent; border: 0; margin: 0; padding: 8px; }
+body.legacy .page { gap: 10px; }
+
+/* ---- .card == a Win98 window: silver, raised bevel, navy title bar ---- */
+body.legacy .card, body.legacy section.card, body.legacy .panel, body.legacy .factor-card,
+body.legacy details.card {
+  background: #c0c0c0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: var(--w98-window) !important;
+  padding: 3px !important;
 }
-body.legacy h1, body.legacy .page-title { font-size: 16px; line-height: 1.5; text-shadow: 2px 2px 0 #c0c0c0; color: #000080; }
-body.legacy .section-title, body.legacy h2, body.legacy .card-title { font-size: 11px; line-height: 1.6; color: #000080; }
-body.legacy .topnav-wordmark { font-size: 13px; color: #000080; }
+/* title bar (gradient navy) wherever a card has a head/summary */
+body.legacy .card-head, body.legacy details.card > summary {
+  background: linear-gradient(90deg, #000080, #1084d0) !important;
+  color: #fff !important;
+  padding: 3px 6px !important;
+  margin: 0 0 3px 0 !important;
+  border: 0 !important;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+body.legacy .card-head .card-title, body.legacy details.card > summary { color: #fff !important; font-weight: bold; }
+/* any descriptive text that lives *inside* a navy title bar must be light, not muted-dark */
+body.legacy .card-head .muted, body.legacy .card-head .pf-hint, body.legacy .card-head .cb-hint,
+body.legacy .card-head .page-subtitle { color: #dfe7ff !important; }
+body.legacy .card-body { background: #c0c0c0; padding: 8px !important; }
 
-/* links: underlined, bright blue, purple when visited */
-body.legacy a { color: #0000ff; text-decoration: underline; font-weight: bold; }
-body.legacy a:visited { color: #800080; }
-body.legacy a:hover { color: #cc0000; background: #ffff00; }
+/* Factor-test chart cards have a COLUMN head (title row + an insight/hint line).
+ * Put the navy title bar on the title ROW only, and drop the hint onto the silver
+ * client area below — otherwise the muted hint text is unreadable on navy. */
+body.legacy .factor-card .card-head {
+  background: #c0c0c0 !important; padding: 0 !important; margin: 0 0 3px 0 !important;
+  display: flex !important; flex-direction: column !important;
+}
+body.legacy .factor-card .card-head > .card-title,
+body.legacy .factor-card .factor-card-titlerow {
+  background: linear-gradient(90deg, #000080, #1084d0) !important;
+  color: #fff !important; padding: 3px 6px !important; width: 100%;
+}
+body.legacy .factor-card .factor-card-titlerow .card-title { color: #fff !important; }
+body.legacy .factor-card .factor-hint { color: #101010 !important; padding: 4px 6px 1px !important; }
 
-/* body text + muted text: pure black for max contrast */
-body.legacy, body.legacy .muted, body.legacy .label, body.legacy .text-muted { color: #000000; }
-
-/* beveled gray buttons (Win9x) */
+/* ---- buttons: raised silver, sunken when pressed ---- */
 body.legacy .btn,
-body.legacy button:not(.lang-toggle):not(.status-dot) {
-  border: 2px outset #c0c0c0 !important;
+body.legacy button:not(.lang-toggle):not(.status-dot):not(.topnav-tab) {
   background: #c0c0c0 !important;
   color: #000 !important;
+  border: 0 !important;
   border-radius: 0 !important;
-  box-shadow: none !important;
-  font-family: "VT323", "Courier New", monospace !important;
-  font-size: 17px !important;
+  box-shadow: var(--w98-raised) !important;
+  padding: 4px 12px !important;
+  font-size: 12px !important;
+  min-height: 0 !important;
 }
 body.legacy .btn:active,
-body.legacy button:not(.lang-toggle):not(.status-dot):active { border-style: inset !important; }
-body.legacy .btn--primary { background: #000080 !important; color: #ffff00 !important; border: 2px outset #4060c0 !important; }
-body.legacy .btn--danger { background: #800000 !important; color: #fff !important; }
-
-/* cards / panels: hard black ridged borders, no soft shadows */
-body.legacy .card, body.legacy .panel, body.legacy section.card, body.legacy .factor-card {
-  border: 2px solid #000000 !important;
-  box-shadow: 3px 3px 0 #808080 !important;   /* hard drop shadow, not blur */
-  background: #ffffff;
+body.legacy button:not(.lang-toggle):not(.status-dot):not(.topnav-tab):active {
+  box-shadow: var(--w98-sunken) !important;
+  padding: 5px 11px 3px 13px !important;   /* text nudges down-right when pressed */
 }
+body.legacy .btn:focus-visible { outline: 1px dotted #000; outline-offset: -4px; }
+body.legacy .btn--primary { background: #c0c0c0 !important; color: #000 !important; font-weight: bold; }
+body.legacy .btn--danger { color: #800000 !important; }
+body.legacy .btn--sm { padding: 2px 8px !important; }
 
-/* inputs: inset 3D fields */
+/* ---- inputs / selects / textareas: sunken white fields ---- */
 body.legacy input, body.legacy select, body.legacy textarea {
-  border: 2px inset #b0b0b0 !important;
+  background: #ffffff !important;
+  color: #000 !important;
+  border: 0 !important;
   border-radius: 0 !important;
-  background: #ffffff;
-  color: #000;
-  font-family: "VT323", "Courier New", monospace;
-  font-size: 17px;
+  box-shadow: var(--w98-field) !important;
+  padding: 3px 4px !important;
+  font-size: 12px !important;
 }
+body.legacy input[type="checkbox"], body.legacy input[type="radio"] { box-shadow: none !important; }
+body.legacy textarea, body.legacy .pf-editor, body.legacy .cb-factors { font-family: var(--font-mono) !important; }
 
-/* top nav: a beveled toolbar with hard borders */
+/* ---- top nav: a Win98 menu/toolbar; tabs as raised buttons (active = sunken) ---- */
 body.legacy .topnav {
   background: #c0c0c0 !important;
-  border-bottom: 3px solid #000080 !important;
-  box-shadow: none !important;
+  border: 0 !important;
+  box-shadow: var(--w98-raised) !important;
+  padding: 3px 6px !important;
 }
-body.legacy .topnav-tab { color: #000080 !important; text-decoration: underline; font-family: "VT323","Courier New",monospace; font-size: 18px; }
-body.legacy .topnav-tab.is-active { background: #000080 !important; color: #ffff00 !important; text-decoration: none; border: 2px outset #4060c0; }
+body.legacy .topnav-wordmark { color: #000080 !important; font-weight: bold; font-size: 13px; }
+body.legacy .topnav-version { color: #000 !important; }
+body.legacy .topnav-tab {
+  color: #000 !important;
+  text-decoration: none !important;
+  background: #c0c0c0 !important;
+  box-shadow: var(--w98-raised);
+  padding: 3px 9px !important;
+  margin: 0 1px;
+  border-radius: 0 !important;
+}
+body.legacy .topnav-tab:hover { background: #d4d0c8 !important; }
+body.legacy .topnav-tab.is-active { box-shadow: var(--w98-sunken) !important; background: #d8d8d8 !important; font-weight: bold; }
 
-/* tables get hard black gridlines */
-body.legacy table { border: 2px solid #000000; }
-body.legacy th, body.legacy td { border: 1px solid #000000; }
-body.legacy th { background: #000080 !important; color: #ffffff !important; }
+/* ---- tabs inside pages (library mode tabs, portfolio chart tabs) ---- */
+body.legacy .lib-modetab, body.legacy .pf-tab {
+  background: #c0c0c0 !important; color: #000 !important;
+  box-shadow: var(--w98-raised) !important; border-radius: 0 !important;
+  padding: 3px 10px !important; margin-right: 2px;
+}
+body.legacy .lib-modetab.is-active, body.legacy .pf-tab.is-active {
+  background: #000080 !important; color: #fff !important; box-shadow: var(--w98-sunken) !important;
+}
+body.legacy .lib-modetab:disabled { color: #808080 !important; }
 
-/* badges become little hard-bordered chips */
-body.legacy .badge, body.legacy .tag { border: 1px solid #000 !important; border-radius: 0 !important; font-family: "VT323","Courier New",monospace; }
+/* ---- fieldsets / group boxes (combination & portfolio forms) ---- */
+body.legacy .cb-fieldset, body.legacy .pf-fieldset, body.legacy fieldset {
+  background: #c0c0c0 !important; border: 0 !important; border-radius: 0 !important;
+  box-shadow: var(--w98-window) !important; padding: 10px !important;
+}
+body.legacy .cb-fieldset > legend, body.legacy .pf-fieldset > legend, body.legacy fieldset > legend {
+  background: #c0c0c0; padding: 0 4px; font-weight: bold; color: #000080;
+}
 
-/* solid, high-contrast bars (RankICIR etc.) */
-body.legacy .lib-icirbar { background: #ffffff; border: 1px solid #000; }
+/* ---- tables: sunken white list with grey gridlines + navy header ---- */
+body.legacy table, body.legacy .cb-table, body.legacy .pf-table {
+  background: #fff !important; box-shadow: var(--w98-field); border: 0 !important; border-collapse: separate !important;
+}
+body.legacy th, body.legacy td { border: 1px solid #c0c0c0 !important; }
+body.legacy thead th, body.legacy .cb-table thead th, body.legacy .pf-table thead th {
+  background: #000080 !important; color: #fff !important; font-weight: bold;
+}
+body.legacy tbody tr:hover { background: #d8e0ff !important; }
+body.legacy .cb-pos, body.legacy .pos { color: #007000 !important; }
+body.legacy .cb-neg, body.legacy .neg { color: #aa0000 !important; }
+
+/* ---- badges: tiny raised silver chips; keep semantic fills readable ---- */
+body.legacy .badge, body.legacy .tag {
+  border: 0 !important; border-radius: 0 !important; box-shadow: var(--w98-raised);
+  background: #c0c0c0 !important; color: #000 !important; padding: 1px 6px !important;
+}
+body.legacy .badge--green { color: #006000 !important; font-weight: bold; }
+body.legacy .badge--red, body.legacy .badge--amber { color: #800000 !important; font-weight: bold; }
+
+/* combination chosen-method chip → a navy "selected" pill */
+body.legacy .cb-chosen { background: #000080 !important; color: #fff !important; box-shadow: var(--w98-sunken); border-radius: 0; }
+
+/* KPI / metric values stay mono for that data-grid feel */
+body.legacy .pf-kpi .val, body.legacy .lib-metric-val, body.legacy .cb-kpi .val { font-family: var(--font-mono) !important; }
+
+/* JSON / log panes: sunken white */
+body.legacy .pf-json, body.legacy .cb-json { background: #fff !important; box-shadow: var(--w98-field) !important; border: 0 !important; }
+
+/* RankICIR bars etc. → sunken trough, navy fill */
+body.legacy .lib-icirbar { background: #fff; box-shadow: var(--w98-field); border: 0; border-radius: 0; }
 body.legacy .lib-icirbar > span { background: #000080; }
 
-/* the main content sits on a bordered "page" like a GeoCities site */
-body.legacy .app-main { background: #ffffff; border: 3px solid #000000; margin: 8px; }
+/* empty/skeleton/error states sit on the silver client area */
+body.legacy .empty-state, body.legacy .error-state { background: transparent; }
 
-/* chart text → dot-matrix too (chart.js hardcodes its own font otherwise) */
-body.legacy .ck-axis, body.legacy .chart-legend2, body.legacy .chart-legend2 .seg,
-body.legacy .chart-tip, body.legacy .chart .ck-axis {
-  font-family: "VT323", "Courier New", monospace !important;
-}
+/* status dot keeps working; give it a sunken socket */
+body.legacy .status-dot { box-shadow: var(--w98-sunken); border-radius: 0 !important; }
 
-/* -------- injected retro chrome (banner + footer) -------- */
+/* ============================================================= retro chrome */
+/* Banner styled as an ACTIVE Win98 title bar (navy gradient, white text). */
 .legacy-banner {
-  background: #000080;
-  color: #ffff00;
-  border-bottom: 3px solid #ffff00;
-  font-size: 11px;
-  line-height: 2.2;
-  padding: 6px 0;
+  background: linear-gradient(90deg, #000080, #1084d0);
+  color: #ffffff;
+  border-bottom: 1px solid #000;
+  box-shadow: var(--w98-raised);
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 2;
+  padding: 3px 0;
 }
+
+/* Footer styled as a Win98 status/task bar: raised silver strip. */
 .legacy-foot {
   margin: 8px;
-  padding: 12px;
+  padding: 8px 10px;
   background: #c0c0c0;
-  border: 3px solid #000000;
+  box-shadow: var(--w98-raised);
   text-align: center;
-  font-family: "VT323", "Courier New", monospace;
-  font-size: 18px;
+  font-family: "Tahoma", "Geneva", sans-serif;
+  font-size: 12px;
   color: #000;
 }
-.legacy-foot a { color: #0000ff; }
+.legacy-foot hr { border: 0; border-top: 1px solid #808080; border-bottom: 1px solid #fff; margin: 6px 0; }
+.legacy-foot a { color: #0000c0; }
+/* the visitor counter: a sunken LCD readout */
 .legacy-counter {
-  font-family: "VT323", "Courier New", monospace;
-  font-size: 20px;
+  font-family: "Lucida Console", "Courier New", monospace;
+  font-size: 13px;
   background: #000;
-  color: #00ff00;
-  padding: 2px 8px;
-  border: 2px inset #808080;
-  letter-spacing: 5px;
+  color: #00ff66;
+  padding: 1px 8px;
+  box-shadow: var(--w98-field);
+  letter-spacing: 4px;
 }
-.legacy-foot .uc { color: #cc0000; font-weight: bold; }
+.legacy-foot .uc { color: #800000; font-weight: bold; }
 .legacy-blink { animation: legacyBlink 1s steps(1) infinite; }
 @keyframes legacyBlink { 50% { opacity: 0; } }
 
-/* -------- Data Manager in legacy: jobs as classic Win9x dialog windows -------- */
+/* ============================ Data Manager: jobs as classic Win98 dialogs === */
 body.legacy .dm-job {
-  border: 3px outset #c0c0c0 !important;
-  background: #c0c0c0 !important;
-  box-shadow: 3px 3px 0 #000 !important;
-  border-radius: 0 !important;
-  margin-bottom: 12px !important;
-  overflow: hidden;
+  border: 0 !important; background: #c0c0c0 !important;
+  box-shadow: var(--w98-window) !important; border-radius: 0 !important;
+  margin-bottom: 10px !important; overflow: hidden; padding: 2px !important;
 }
-/* gradient title bar */
 body.legacy .dm-job-head {
   background: linear-gradient(90deg, #000080, #1084d0) !important;
-  color: #ffffff !important;
-  padding: 3px 6px !important;
+  color: #ffffff !important; padding: 2px 6px !important;
 }
-body.legacy .dm-job-head .dm-job-title { color: #ffffff !important; font-family: "VT323","Courier New",monospace; }
-body.legacy .dm-job-head .dm-job-icon { color: #ffff00; }
-body.legacy .dm-job-head .badge { background: #c0c0c0 !important; color: #000 !important; border: 2px outset #e0e0e0 !important; }
-/* window body */
-body.legacy .dm-job-body { background: #c0c0c0 !important; padding: 10px !important; border-top: 1px solid #fff; }
+body.legacy .dm-job-head .dm-job-title { color: #fff !important; font-weight: bold; }
+body.legacy .dm-job-head .dm-job-icon { color: #ffff66; }
+body.legacy .dm-job-head .badge { background: #c0c0c0 !important; color: #000 !important; box-shadow: var(--w98-raised) !important; }
+body.legacy .dm-job-body { background: #c0c0c0 !important; padding: 8px !important; }
 body.legacy .dm-job-msg { color: #000 !important; }
-/* classic segmented progress bar (white inset trough, blue blocks) */
+/* classic segmented progress bar (sunken white trough, blue blocks) */
 body.legacy .dm-prog {
-  height: 18px !important;
-  background: #ffffff !important;
-  border: 2px inset #9a9a9a !important;
-  border-radius: 0 !important;
-  padding: 2px;
+  height: 18px !important; background: #fff !important;
+  box-shadow: var(--w98-field) !important; border: 0 !important; border-radius: 0 !important; padding: 2px;
 }
 body.legacy .dm-prog > span {
-  background: repeating-linear-gradient(90deg, #000080 0 12px, #c0c0c0 12px 15px) !important;
-  border-radius: 0 !important;
+  background: repeating-linear-gradient(90deg, #000080 0 12px, #c0c0c0 12px 15px) !important; border-radius: 0 !important;
 }
 body.legacy .dm-pct { color: #000 !important; }
-body.legacy .dm-log { border: 2px inset #9a9a9a !important; background: #000 !important; color: #00ff00 !important; }
-/* config section sub-headers as little group labels */
-body.legacy .dm-sub { color: #000080; font-family: "Press Start 2P","Courier New",monospace; font-size: 10px; }
+body.legacy .dm-log { box-shadow: var(--w98-field) !important; border: 0 !important; background: #000 !important; color: #00ff66 !important; }
+/* group sub-headers in the data / system settings forms */
+body.legacy .dm-sub { color: #000080; font-weight: bold; font-size: 11px; text-transform: none; margin-top: 8px; }
+
+/* ============================ Win98 scrollbars (webkit) ===================== */
+body.legacy ::-webkit-scrollbar { width: 17px; height: 17px; }
+body.legacy ::-webkit-scrollbar-track { background: #dfdfdf; box-shadow: var(--w98-field); }
+body.legacy ::-webkit-scrollbar-thumb { background: #c0c0c0; box-shadow: var(--w98-raised); }
+body.legacy ::-webkit-scrollbar-button { background: #c0c0c0; box-shadow: var(--w98-raised); display: block; height: 17px; width: 17px; }

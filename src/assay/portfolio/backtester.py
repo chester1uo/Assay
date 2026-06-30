@@ -224,8 +224,15 @@ class PortfolioBacktester:
         )
 
         # --- 9. benchmark series ------------------------------------------------
+        # The equal-weight index proxy must be *factor-independent* — keyed off
+        # price + tradability only — so the benchmark universe does not shrink or
+        # shift with the tested factor's NaN pattern (a factor-eligible benchmark
+        # would otherwise depend on the very factor it is meant to measure).
+        market_eligible = self._eligibility(
+            np.ones((T, N), dtype=np.float64), close, tradable_mask, T, N
+        )
         bench_nav = self._benchmark_nav(
-            config, daily_ret, eligible, acct.nav_series, benchmark
+            config, daily_ret, market_eligible, acct.nav_series, benchmark
         )
 
         # --- 10. assemble the report -------------------------------------------
@@ -362,28 +369,33 @@ class PortfolioBacktester:
         groups: np.ndarray | None,
         T: int,
         N: int,
-    ) -> tuple[dict[int, np.ndarray], int]:
-        """Map each rebalance to ``{execution_index: constrained_target_weights}``.
+    ) -> tuple[dict[int, Any], int]:
+        """Map each rebalance to ``{execution_index: rebalance_closure}``.
 
         For each scheduled signal date ``s`` the execution date is ``s + offset``
-        (``execution_offset_days``, >= 1 — no look-ahead). The signal at ``s`` is run
-        through :func:`construct_weights` (with a trailing returns window for the
-        risk-aware methods) and :func:`apply_constraints`. For the ``threshold`` type
-        the per-date :func:`should_rebalance` gate decides whether the candidate
-        actually fires, comparing the prior target's ranks/weights to the new ones.
+        (``execution_offset_days``, >= 1 — no look-ahead). The schedule value is a
+        *closure* (not a precomputed vector): the accountant calls it at the
+        execution date with the **live drifted book**, and only then are
+        :func:`construct_weights` (with a trailing returns window for the risk-aware
+        methods) and :func:`apply_constraints` evaluated — so the optimiser's
+        warm-start and the §2.5 turnover cap diff against the *actual* current
+        position rather than a stale prior target (design-doc 2.5/3.3). For the
+        ``threshold`` type the closure additionally applies the :func:`should_rebalance`
+        gate, comparing the new target's weights/ranks to the live book and returning
+        ``None`` (no trade) when neither breaches its threshold (design-doc 3.2).
 
         Two executions colliding on the same date keep the later signal (a dict
         overwrite); the accountant applies one rebalance per keyed date.
         """
-        schedule: dict[int, np.ndarray] = {}
+        schedule: dict[int, Any] = {}
         if not reb_idx:
             return schedule, 0
 
         cov_window = max(2, int(config.cov_window))
         is_threshold = config.rebalance_type == "threshold"
-        # Threshold needs the previous target to diff against; track it + its ranks.
-        prev_target = np.zeros(N, dtype=np.float64)
-        prev_ranks = np.full(N, np.nan)
+        # Threshold gate state, threaded across closures in execution order (the
+        # accountant invokes them chronologically, so this evolves with the book).
+        gate_state = {"prev_ranks": np.full(N, np.nan), "established": False}
         n_scheduled = 0
 
         for s in reb_idx:
@@ -393,30 +405,56 @@ class PortfolioBacktester:
             sig_row = signal[s]
             if not np.isfinite(sig_row).any():
                 continue  # no eligible name on the signal date
-
-            if is_threshold:
-                new_ranks = normalize(sig_row, method="rank").ravel() * 10.0  # decile scale
-                # Weight-drift gate compares the *current book* (prev_target) to the
-                # new signal magnitude; rank-shift gate compares decile ranks.
-                fire, _ = should_rebalance(
-                    prev_target, _nan_to_zero(sig_row),
-                    prev_ranks, new_ranks, config,
-                )
-                # On the very first candidate (no prior book) always establish a
-                # position; thereafter respect the threshold gate.
-                first = n_scheduled == 0
-                prev_ranks = new_ranks
-                if not first and not fire:
-                    continue
-
-            returns_window = self._returns_window(daily_ret, s, cov_window)
-            raw = construct_weights(sig_row, returns_window, prev_target, config)
-            target = apply_constraints(raw, prev_target, config, sectors=groups)
-            schedule[exec_idx] = target
-            prev_target = target
+            schedule[exec_idx] = self._make_rebalance_fn(
+                s, sig_row, daily_ret, cov_window, config, groups,
+                is_threshold, gate_state,
+            )
             n_scheduled += 1
 
         return schedule, n_scheduled
+
+    def _make_rebalance_fn(
+        self,
+        s: int,
+        sig_row: np.ndarray,
+        daily_ret: np.ndarray,
+        cov_window: int,
+        config: PortfolioBacktestConfig,
+        groups: np.ndarray | None,
+        is_threshold: bool,
+        gate_state: dict[str, Any],
+    ):
+        """Build the per-rebalance closure the accountant calls with the live book.
+
+        The returned ``fn(cur_w)`` constructs the target weights from the signal at
+        ``s`` against the *drifted* current book ``cur_w`` — so the mean-variance
+        warm-start and the turnover cap in :func:`apply_constraints` measure the
+        trade against the real position (fixes the stale-``prev_target`` baseline).
+        For ``threshold`` rebalancing it then runs :func:`should_rebalance` on the
+        new target vs the live book (weight drift) and the new vs prior decile ranks
+        (rank shift), returning ``None`` when the gate does not fire — except the
+        first established position, which always trades. ``gate_state`` (shared
+        across the run's closures) carries the prior ranks and the established flag.
+        """
+
+        def _fn(cur_w: np.ndarray) -> np.ndarray | None:
+            returns_window = self._returns_window(daily_ret, s, cov_window)
+            raw = construct_weights(sig_row, returns_window, cur_w, config)
+            target = apply_constraints(raw, cur_w, config, sectors=groups)
+            if is_threshold:
+                new_ranks = normalize(sig_row, method="rank").ravel() * 10.0  # decile
+                # Gate the *target* (real weights) against the live drifted book and
+                # the new decile ranks against the prior ones.
+                fire, _ = should_rebalance(
+                    cur_w, target, gate_state["prev_ranks"], new_ranks, config
+                )
+                gate_state["prev_ranks"] = new_ranks
+                if gate_state["established"] and not fire:
+                    return None  # neither drift nor rank-shift breached → hold
+                gate_state["established"] = True
+            return target
+
+        return _fn
 
     @staticmethod
     def _returns_window(daily_ret: np.ndarray, s: int, window: int) -> np.ndarray:
@@ -881,15 +919,6 @@ class PortfolioBacktester:
                 adj_version=self._adj(config),
             ),
         )
-
-
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-def _nan_to_zero(x: np.ndarray) -> np.ndarray:
-    """Replace non-finite entries with 0.0 (for the threshold weight-drift diff)."""
-    a = np.asarray(x, dtype=np.float64)
-    return np.where(np.isfinite(a), a, 0.0)
 
 
 # ---------------------------------------------------------------------------

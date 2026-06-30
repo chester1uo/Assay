@@ -15,10 +15,19 @@ Modules:
 * :mod:`.decay`           — exponential decay half-life.
 * :mod:`.groups`          — quantile-group returns and long-short spread.
 * :mod:`.turnover`        — rank-autocorrelation turnover.
+* :mod:`.combination`     — multi-factor combination with train/val/test scoring.
 """
 
 from __future__ import annotations
 
+from .combination import (
+    CombinationResult,
+    SplitMetrics,
+    available_methods,
+    combine_factors,
+    make_splits,
+    standardize_xs,
+)
 from .decay import decay_halflife
 from .forward_returns import forward_returns
 from .groups import group_returns
@@ -40,4 +49,10 @@ __all__ = [
     "group_returns",
     "turnover",
     "rank_autocorr",
+    "combine_factors",
+    "available_methods",
+    "make_splits",
+    "standardize_xs",
+    "CombinationResult",
+    "SplitMetrics",
 ]

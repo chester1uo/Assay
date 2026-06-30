@@ -158,12 +158,12 @@ def _run_us(start: dt.date, end: dt.date, job) -> dict[str, Any]:
     )
     job.log(f"download: {dl}")
 
-    job.progress_to(0.55, "ingesting US → ASSAY (universe, corp-actions, prices) …")
+    job.progress_to(0.55, "ingesting US → ASSAY (NASDAQ100 + SP500: universe, corp-actions, prices) …")
     from assay.config import AssayConfig, MassiveConfig
-    from assay.data.pipeline import prepare_nasdaq100
+    from assay.data.pipeline import prepare_us
 
     cfg = AssayConfig(massive=MassiveConfig(source_dir=Path(raw)), data_dir=Path(assay), market="US")
-    rep = prepare_nasdaq100(cfg, start, end)
+    rep = prepare_us(cfg, start, end, index_ids=("NASDAQ100", "SP500"))
     job.progress_to(1.0, "US update complete")
     return {"download": dl, "ingest": rep}
 

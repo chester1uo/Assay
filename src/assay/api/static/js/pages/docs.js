@@ -70,6 +70,32 @@ const CONTENT = {
         ],
       },
       {
+        id: "combination", title: "Factor Combination",
+        blocks: [
+          ["p", "The Factor Combination workspace blends several factors into one composite alpha and scores it honestly out-of-sample. Pick constituents (library ids, Alpha101/Alpha158 catalog numbers, or raw expressions — one per line), choose three date windows, and click Combine."],
+          ["p", "The pipeline mirrors how production factor systems combine signals:"],
+          ["ul", [
+            "Standardize — each factor is z-scored or ranked cross-sectionally per day so different scales blend sanely.",
+            "Orient — each factor is flipped to point at positive train IC (the sign is reported).",
+            "Fit on TRAIN only — combination weights / a model are learned on the train window.",
+            "Select on VALIDATION — with method 'auto', every candidate is fit on train and the best validation ICIR wins.",
+            "Score on TEST — the frozen composite's IC / RankIC / ICIR is reported on the untouched test window.",
+            "Embargo — the last few days of train/val are purged (default = max horizon) so overlapping forward labels never leak across a split.",
+          ]],
+          ["h3", "Methods (qlib-style)"],
+          ["ul", [
+            "Analytic / optimization (always available): equal, IC-weighted, ICIR-weighted, OLS, ridge, NNLS (non-negative, long-only optimization), and max-ICIR (Grinold's Σ⁻¹·IC̄ optimal blend).",
+            "Linear models: Lasso, ElasticNet, plain linear.",
+            "Tree ensembles: Random Forest, Extra Trees.",
+            "Gradient boosting: scikit-learn GBRT / HistGBRT, LightGBM, XGBoost.",
+            "Neural: a small MLP regressor.",
+          ]],
+          ["p", "Learned models predict the forward return from the oriented factors, so the per-factor numbers shown are feature importances rather than linear weights. Models appear in the dropdown only when their library (scikit-learn / lightgbm / xgboost) is installed; otherwise install it: pip install scikit-learn lightgbm xgboost."],
+          ["p", "REST / SDK equivalent:"],
+          ["code", "curl -X POST localhost:8000/v1/combination -H 'content-type: application/json' -d '{\n  \"factors\": [\"rank(close)\", \"alpha101:1\", \"lib:<id>\"],\n  \"train\": [\"2025-01-02\",\"2025-10-31\"],\n  \"val\":   [\"2025-11-01\",\"2026-01-31\"],\n  \"test\":  [\"2026-02-01\",\"2026-06-09\"],\n  \"universe\": \"NASDAQ100\", \"method\": \"auto\"\n}'\n# methods list: GET /v1/combination/methods"],
+        ],
+      },
+      {
         id: "metrics", title: "Metrics glossary",
         blocks: [
           ["ul", [
@@ -130,6 +156,32 @@ const CONTENT = {
           ["p", "示例："],
           ["code", "cs_rank(ts_corr(close, volume, 20))\nts_mean(close, 5) / ts_mean(close, 60) - 1\nDiv($close, EMA($close, 200))"],
           ["p", "可用字段：open、high、low、close、volume（捆绑的美股数据没有 vwap/market_cap）。在测试页用 ⇄ 转换 可在浏览器内于两种语法间互转。"],
+        ],
+      },
+      {
+        id: "combination", title: "因子合成",
+        blocks: [
+          ["p", "「因子合成」工作区把多个因子合成为一个复合因子,并做诚实的样本外评估。选择成分(因子库 id、Alpha101/Alpha158 编号,或直接写表达式,每行一个),设定三个日期区间,点「合成」。"],
+          ["p", "流程与业界因子系统一致:"],
+          ["ul", [
+            "标准化 —— 每个因子按日做横截面 z-score 或排名,使不同量纲可以合理混合。",
+            "定向 —— 把每个因子翻转到训练集 IC 为正的方向(方向会展示)。",
+            "仅在「训练集」拟合 —— 合成权重 / 模型只在训练窗口学习。",
+            "在「验证集」选择 —— method 选 auto 时,所有候选都在训练集拟合,取验证集 ICIR 最高者。",
+            "在「测试集」评分 —— 冻结的复合因子在未被触碰的测试窗口报告 IC / RankIC / ICIR。",
+            "隔离期 —— 训练/验证末尾若干天被剔除(默认=最大持有期),避免重叠的前瞻标签跨区间泄漏。",
+          ]],
+          ["h3", "合成方法(qlib 风格)"],
+          ["ul", [
+            "解析 / 优化(始终可用):等权、IC 加权、ICIR 加权、OLS、岭回归、NNLS(非负、长仓优化)、最大 ICIR(Grinold 的 Σ⁻¹·IC̄ 最优组合)。",
+            "线性模型:Lasso、ElasticNet、普通线性。",
+            "树集成:随机森林、极端随机树。",
+            "梯度提升:scikit-learn GBRT / HistGBRT、LightGBM、XGBoost。",
+            "神经网络:小型 MLP 回归。",
+          ]],
+          ["p", "学习类模型用定向后的因子预测未来收益,因此每个因子显示的是「特征重要度」而非线性权重。模型只有在其依赖库(scikit-learn / lightgbm / xgboost)已安装时才出现在下拉框中;否则请安装:pip install scikit-learn lightgbm xgboost。"],
+          ["p", "REST / SDK 等价调用:"],
+          ["code", "curl -X POST localhost:8000/v1/combination -H 'content-type: application/json' -d '{\n  \"factors\": [\"rank(close)\", \"alpha101:1\", \"lib:<id>\"],\n  \"train\": [\"2025-01-02\",\"2025-10-31\"],\n  \"val\":   [\"2025-11-01\",\"2026-01-31\"],\n  \"test\":  [\"2026-02-01\",\"2026-06-09\"],\n  \"universe\": \"NASDAQ100\", \"method\": \"auto\"\n}'\n# 方法列表: GET /v1/combination/methods"],
         ],
       },
       {
