@@ -15,12 +15,13 @@ import polars as pl
 from assay.config import AssayConfig
 from assay.data.io_utils import upsert_parquet
 from assay.data.schemas import UNIVERSE_SNAPSHOTS_SCHEMA, universe_snapshots_path
-from assay.data.universe import nasdaq100
+from assay.data.universe import nasdaq100, sp500
 
 log = logging.getLogger(__name__)
 
 _BUILDERS = {
     "NASDAQ100": nasdaq100.membership_snapshots,
+    "SP500": sp500.membership_snapshots,
 }
 
 
