@@ -192,9 +192,37 @@ export class ApiClient {
       body: { redundancy_threshold, dry_run, factor_ids },
     });
   }
+  /** Per-factor RankIC bucketed over time -> {factor_ids, periods, matrix, summary}. */
+  icHeatmap(factorIds, { universe, period, horizon, bucket } = {}) {
+    return request("GET", this._p("/v1/library/ic-heatmap"), {
+      query: { factor_ids: factorIds, universe, period, horizon, bucket },
+    });
+  }
+  /** 2-D similarity map of factors -> {points:[{id,expr,x,y,cluster,...}], method}. */
+  factorEmbedding(factorIds, { universe, period, method } = {}) {
+    return request("GET", this._p("/v1/library/embedding"), {
+      query: { factor_ids: factorIds, universe, period, method },
+    });
+  }
+  /** Expression-derivation DAG -> {nodes:[{id,expr,depth,...}], edges:[{from,to}]}. */
+  factorLineage(factorIds, { limit } = {}) {
+    return request("GET", this._p("/v1/library/lineage"), {
+      query: { factor_ids: factorIds, limit },
+    });
+  }
   /** Bulk-import expressions: evaluate + save the good ones. body: {exprs, universe?, source?, period?}. */
   libraryBulkAdd(body, { signal } = {}) {
     return request("POST", this._p("/v1/library/factors/bulk"), { body, signal });
+  }
+
+  // ---- factor combination --------------------------------------------------
+  /** Combine factors with train/val/test scoring. body: {factors, train, val, test, ...}. */
+  combineFactors(body, { signal } = {}) {
+    return request("POST", this._p("/v1/combination"), { body, signal });
+  }
+  /** Available combination methods -> {methods:[{name, kind, available}]}. */
+  combinationMethods() {
+    return request("GET", this._p("/v1/combination/methods"));
   }
 
   // ---- market data ---------------------------------------------------------
@@ -221,6 +249,10 @@ export class ApiClient {
   adminJobStart(body) { return request("POST", this._p("/v1/admin/data/jobs"), { body }); }
   adminJobs() { return request("GET", this._p("/v1/admin/data/jobs")); }
   adminJob(id) { return request("GET", this._p(`/v1/admin/data/jobs/${encodeURIComponent(id)}`)); }
+  // hot cache (precompute) — status + manual rebuild
+  adminCacheStatus() { return request("GET", this._p("/v1/admin/cache/status")); }
+  adminCacheEntries(scope) { return request("GET", this._p("/v1/admin/cache/entries"), { query: { scope } }); }
+  adminCacheRebuild(market) { return request("POST", this._p("/v1/admin/cache/rebuild"), { body: { market } }); }
 
   // ---- session -------------------------------------------------------------
   createSession({ universe, period } = {}) {

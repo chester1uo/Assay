@@ -122,6 +122,74 @@ class AssayService:
         self.library = FactorLibrary(config.library_path)
         self.cache = L2FactorCache(config.cache_path)
         self.sessions = SessionRegistry()
+        # Apply admin-editable system settings (parallelism / cache / eval defaults)
+        # onto the live config, so a customised store takes effect at startup.
+        self.apply_system_config()
+
+    # ----------------------------------------------------- system settings -----
+    def apply_system_config(self) -> dict:
+        """Apply the admin ``system`` settings onto the live :class:`AssayConfig`.
+
+        Reads the editable ``system`` section (parallelism / cache budgets /
+        evaluation defaults / precompute knobs) and writes it onto ``self.config``,
+        so changes saved via ``PUT /v1/admin/config`` take effect on the **next
+        request** without a restart (the dataclass is intentionally non-frozen). The
+        hot-changeable knobs — default universe/period/horizons/execution/adj,
+        ``n_workers``, and the precompute parameters — are all read live by
+        :meth:`_resolve`, :meth:`batch`, :meth:`evaluate_many` and the refresh hook.
+        Best-effort: a missing / malformed store leaves the config untouched.
+        """
+        from assay import config_store
+
+        try:
+            sysc = config_store.persisted_system()  # only operator-saved keys
+        except Exception:  # noqa: BLE001
+            return {}
+        if not sysc:
+            return {}
+        c = self.config
+
+        def _set(attr: str, key: str, cast) -> None:
+            if key in sysc and sysc[key] not in (None, ""):
+                try:
+                    setattr(c, attr, cast(sysc[key]))
+                except (TypeError, ValueError):
+                    pass
+
+        _set("n_workers", "n_workers", int)
+        _set("l1_memory_gb", "l1_memory_gb", float)
+        _set("l2_max_gb", "l2_max_gb", float)
+        _set("default_universe", "default_universe", str)
+        _set("default_execution", "default_execution", str)
+        _set("default_adj", "default_adj", str)
+        _set("default_frequency", "default_frequency", str)
+        _set("annualization_basis", "annualization_basis", str)
+        ps, pe = sysc.get("default_period_start"), sysc.get("default_period_end")
+        if ps and pe:
+            c.default_period = (str(ps), str(pe))
+        h = sysc.get("default_horizons")
+        if h:
+            try:
+                hs = tuple(int(x) for x in str(h).replace(" ", "").split(",") if x)
+                if hs:
+                    c.default_horizons = hs
+            except (TypeError, ValueError):
+                pass
+        # precompute knobs live on the config as plain attributes (read by the
+        # refresh hook / evaluate_many); AssayConfig is non-frozen so this is fine.
+        c.precompute_enabled = bool(sysc.get("precompute_enabled", True))
+        c.precompute_auto_refresh = bool(sysc.get("precompute_auto_refresh", True))
+        try:
+            c.precompute_top_k = int(sysc.get("precompute_top_k", 256) or 256)
+            c.precompute_min_count = int(sysc.get("precompute_min_count", 2) or 2)
+        except (TypeError, ValueError):
+            c.precompute_top_k, c.precompute_min_count = 256, 2
+        c.precompute_corpus = (sysc.get("precompute_corpus") or "") or None
+        try:
+            c.risk_free_rate = float(sysc.get("risk_free_rate", 0.015))
+        except (TypeError, ValueError):
+            c.risk_free_rate = 0.015
+        return sysc
 
     # ------------------------------------------------------- market routing ----
     def _market_for(self, universe: str | None) -> str:
@@ -597,8 +665,10 @@ class AssayService:
         :class:`ThreadPoolExecutor` runs the per-factor numerics concurrently (the
         numba IC kernels release the GIL; the engine pivots are read-only/shared).
 
-        Note: DAG/CSE de-duplication of shared sub-expressions across the batch is
-        future work — each factor is still evaluated independently here.
+        Note: this path scores each factor independently (IC / decay / groups /
+        turnover per factor). For raw factor *values* over a large corpus, use
+        :meth:`evaluate_many` — it shares common sub-expressions across the batch
+        (CSE) and can be pre-seeded from :attr:`precompute_store` (§4.3).
         """
         exprs = list(exprs)
         if not exprs:
@@ -634,6 +704,260 @@ class AssayService:
 
         reports.sort(key=lambda r: _sort_key(r, sort_by), reverse=True)
         return reports
+
+    # ----------------------------------------------------- precompute (CSE) ---
+    @property
+    def precompute_store(self):
+        """Lazily-built :class:`PrecomputeStore` under ``<data_dir>/precompute``.
+
+        Holds the materialised common sub-expression matrices, content-addressed by
+        subtree hash + panel fingerprint, so it is shared across processes and
+        auto-refreshes when new history changes the fingerprint (engineering §4.3).
+        """
+        if getattr(self, "_precompute", None) is None:
+            from pathlib import Path
+
+            from assay.engine import PrecomputeStore
+
+            self._precompute = PrecomputeStore(Path(self.config.data_dir) / "precompute")
+        return self._precompute
+
+    @staticmethod
+    def _read_corpus(corpus) -> list[str]:
+        """Coerce a corpus (list of exprs, or a path to a newline-delimited file) to a list."""
+        if isinstance(corpus, (str, bytes)):
+            from pathlib import Path
+
+            p = Path(corpus)
+            if p.is_file():
+                return [ln.strip() for ln in p.read_text().splitlines() if ln.strip()]
+            return [str(corpus).strip()]
+        return [str(e).strip() for e in corpus if str(e).strip()]
+
+    def build_precompute(
+        self,
+        corpus,
+        *,
+        universe: str | None = None,
+        period: tuple[str, str] | None = None,
+        as_of: str | None = None,
+        adj: str | None = None,
+        top_k: int = 512,
+        min_count: int = 3,
+        min_nodes: int = 2,
+    ) -> dict:
+        """Mine the most common sub-expressions of ``corpus`` and precompute them for all assets.
+
+        ``corpus`` is a list of expressions or a path to a newline-delimited factor
+        file (e.g. the sweep's ``factors_canonical_unique.txt``). Builds one PIT engine
+        over ``universe``/``period`` and stores the top-``top_k`` shared subtrees'
+        ``(T, N)`` matrices in :attr:`precompute_store`. Returns the build summary
+        (``built`` / ``est_evals_saved`` / ``top`` / ``fingerprint`` + the resolved
+        ``universe``/``period``/``n_corpus``). JSON-safe.
+        """
+        universe, period, _h, _ex, as_of, adj = self._resolve(
+            universe, period, None, None, as_of, adj
+        )
+        exprs = self._read_corpus(corpus)
+        engine = self._build_engine(universe, period, as_of, adj, None)
+        info = self.precompute_store.build(
+            engine, exprs, top_k=top_k, min_count=min_count, min_nodes=min_nodes
+        )
+        info.update({"universe": universe, "period": list(period), "n_corpus": len(exprs)})
+        return info
+
+    def common_subexpressions(self, corpus, *, top_k: int = 100, min_count: int = 3, min_nodes: int = 2) -> list[dict]:
+        """Rank a corpus's reusable sub-expressions (no data needed) -> ``[{expr, count, score, ...}]``."""
+        from assay.engine import common_subexpressions as _cse
+
+        cs = _cse(self._read_corpus(corpus), min_count=min_count, min_nodes=min_nodes, top_k=top_k)
+        return [c.to_dict() for c in cs]
+
+    def evaluate_many(
+        self,
+        exprs,
+        *,
+        universe: str | None = None,
+        period: tuple[str, str] | None = None,
+        as_of: str | None = None,
+        adj: str | None = None,
+        use_precompute: bool = True,
+    ):
+        """CSE-accelerated batch evaluation of factor **values** (SDK / sweep use).
+
+        Evaluates every expression over one shared panel with cross-factor common
+        sub-expression elimination, optionally pre-seeded from
+        :attr:`precompute_store`. Returns the list of
+        :class:`~assay.engine.FactorResult` (numpy ``(T, N)`` values) aligned to
+        ``exprs`` — values only (no IC metrics), so a sweep can pull raw factor
+        matrices fast. A bad expression raises (pre-filter with :meth:`evaluate`'s
+        diagnostics if you need soft failures).
+        """
+        universe, period, _h, _ex, as_of, adj = self._resolve(
+            universe, period, None, None, as_of, adj
+        )
+        engine = self._build_engine(universe, period, as_of, adj, None)
+        bound = self.precompute_store.bind(engine.panel_fingerprint()) if use_precompute else None
+        return engine.evaluate_many(list(exprs), precompute=bound)
+
+    # -- hot-cache <-> daily-data coupling -----------------------------------
+    # Universes to warm per market (primary first). The auto-refresh after a data
+    # update walks these; missing-data universes are skipped.
+    _PRECOMPUTE_UNIVERSES = {
+        "US": ["NASDAQ100", "SP500"],
+        "CN": ["CSI300", "CSI500", "CSI1000"],
+        "HK": ["HSI"],
+    }
+
+    def _precompute_corpus(self) -> list[str]:
+        """Default corpus to mine: every expression in the factor library (de-duped).
+
+        A configured ``precompute_corpus`` path (newline-delimited file) wins when set.
+        """
+        path = getattr(self.config, "precompute_corpus", None)
+        if path:
+            from pathlib import Path
+
+            p = Path(path)
+            if p.is_file():
+                return [ln.strip() for ln in p.read_text().splitlines() if ln.strip()]
+        seen: set[str] = set()
+        out: list[str] = []
+        for s in self.library_query(limit=-1, min_rank_icir=float("-inf")):
+            e = (s.expr or "").strip()
+            if e and e not in seen:
+                seen.add(e)
+                out.append(e)
+        return out
+
+    def _market_data_latest(self, market: str) -> str | None:
+        """Latest ingested ASSAY date for ``market`` (cheap; no panel load)."""
+        try:
+            from assay.data import orchestrate
+
+            for m in orchestrate.status().get("markets", []):
+                if m.get("market") == market:
+                    return m.get("assay_latest")
+        except Exception:  # noqa: BLE001 — status is best-effort
+            return None
+        return None
+
+    def refresh_precompute_for_market(
+        self,
+        market: str,
+        *,
+        corpus: list[str] | None = None,
+        universes: list[str] | None = None,
+        top_k: int | None = None,
+        progress=None,
+    ) -> dict:
+        """Rebuild the hot cache for ``market``, aligned to the latest ingested data.
+
+        Called automatically after a successful daily data-update job (and on demand
+        from the admin page). Mines the corpus's common sub-expressions (default: the
+        factor library) and precomputes them for each of the market's universes over
+        the **full current data range**, recording a manifest per universe so the
+        cache's validity period and freshness are inspectable. ``progress(frac, msg)``
+        is an optional callback (the data job forwards it). Never raises: a universe
+        with no data is skipped with a noted reason.
+        """
+        market = market.upper()
+        if not getattr(self.config, "precompute_enabled", True):
+            return {"market": market, "refreshed": [], "note": "precompute disabled in system settings"}
+        top_k = int(top_k if top_k is not None else getattr(self.config, "precompute_top_k", 256))
+        min_count = int(getattr(self.config, "precompute_min_count", 2))
+        corpus = corpus if corpus is not None else self._precompute_corpus()
+        unis = universes or self._PRECOMPUTE_UNIVERSES.get(market, [])
+        data_latest = self._market_data_latest(market)
+        built_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        results: list[dict] = []
+        if not corpus:
+            return {"market": market, "refreshed": [], "note": "no factors in library to mine"}
+        if not data_latest:
+            return {"market": market, "refreshed": [], "note": f"{market} not initialized (no data)"}
+
+        # Span the full ingested history so the fingerprint reflects the data validity.
+        period = ("2000-01-01", data_latest)
+        adj = self.config.default_adj
+        for i, uni in enumerate(unis):
+            if progress:
+                progress(0.1 + 0.85 * i / max(len(unis), 1), f"warming hot cache: {uni} …")
+            try:
+                engine = self._build_engine(uni, period, data_latest, adj, None)
+            except Exception as exc:  # noqa: BLE001 — universe absent for this data
+                results.append({"universe": uni, "built": 0, "skipped_reason": str(exc)[:120]})
+                continue
+            fp = engine.panel_fingerprint()
+            # min_count from system settings (default 2): a subtree shared by >= that
+            # many library factors is worth caching (library corpus < a raw sweep).
+            info = self.precompute_store.build(engine, corpus, top_k=top_k, min_count=min_count)
+            meta = {
+                "universe": uni, "market": market,
+                "period": [str(engine.dates[0]), str(engine.dates[-1])] if len(engine.dates) else list(period),
+                "as_of": data_latest, "adj": adj, "fingerprint": fp,
+                "built_at": built_at, "data_latest": data_latest,
+                "n_entries": info.get("built", 0), "n_corpus": len(corpus),
+                "est_evals_saved": info.get("est_evals_saved", 0),
+                "top": info.get("top", [])[:8],
+            }
+            self.precompute_store.record_manifest(uni, meta)
+            self.precompute_store.record_entries(uni, info.get("entries", []))
+            results.append({"universe": uni, "built": info.get("built", 0),
+                            "period": meta["period"], "fingerprint": fp})
+        if progress:
+            progress(1.0, "hot cache refreshed")
+        return {"market": market, "data_latest": data_latest, "refreshed": results}
+
+    def precompute_status(self) -> dict:
+        """Hot-cache status for the admin page — footprint + per-scope freshness.
+
+        Returns ``{store:{entries,bytes,dir}, scopes:[{...manifest, fresh,
+        current_data_latest}]}``. ``fresh`` is ``True`` when the manifest's
+        ``data_latest`` still equals the market's current latest ingested date — i.e.
+        the cache is aligned to the live data validity period; ``False`` means the
+        data has advanced since the cache was built (a refresh is due).
+        """
+        store = self.precompute_store
+        current = {mk: self._market_data_latest(mk) for mk in ("US", "CN", "HK")}
+        scopes = []
+        for m in store.manifests():
+            cur = current.get(m.get("market"))
+            scopes.append({
+                **m,
+                "current_data_latest": cur,
+                "fresh": bool(cur and m.get("data_latest") == cur),
+            })
+        st = store.stats()
+        return {
+            "store": {"entries": st["entries"], "bytes": st["bytes"], "dir": str(store.cache_dir)},
+            "current_data_latest": current,
+            "scopes": scopes,
+        }
+
+    def cache_entries(self, scope: str) -> dict:
+        """The detailed **contents** of one cache scope (e.g. ``'NASDAQ100'``).
+
+        Returns every precomputed sub-expression with its expression, occurrence
+        count, node count, recompute-saved score, the cached matrix shape ``(T, N)``,
+        on-disk bytes and finite coverage — plus ``present`` (still on disk for the
+        scope's current fingerprint). The list is what is *actually* materialised in
+        the hot cache, sorted by score (most recompute saved first).
+        """
+        store = self.precompute_store
+        man = store.manifest(scope) or {}
+        fp = man.get("fingerprint")
+        ents = store.entries(scope)
+        for e in ents:
+            e["present"] = bool(fp) and store.has(e.get("struct_hash", ""), fp)
+        ents.sort(key=lambda e: e.get("score", 0), reverse=True)
+        return {
+            "scope": scope, "universe": man.get("universe", scope),
+            "fingerprint": fp, "period": man.get("period"),
+            "as_of": man.get("as_of"), "built_at": man.get("built_at"),
+            "data_latest": man.get("data_latest"), "count": len(ents),
+            "bytes": int(sum(int(e.get("bytes", 0)) for e in ents)),
+            "entries": ents,
+        }
 
     # --------------------------------------------------------- portfolio bt ---
     def backtest_portfolio(self, expr, config, *, as_of: str | None = None, **kw):
@@ -899,6 +1223,358 @@ class AssayService:
             if fd.ok and fd.result is not None:
                 values_by_id[fid] = fd.result.values
         return _corr(values_by_id)
+
+    # ------------------------------------------------------- library views -----
+    def ic_heatmap(
+        self,
+        factor_ids: list[str],
+        *,
+        universe: str | None = None,
+        period: tuple[str, str] | None = None,
+        as_of: str | None = None,
+        adj: str | None = None,
+        horizon: int | None = None,
+        bucket: str = "month",
+    ) -> dict:
+        """Per-factor RankIC bucketed over calendar time (the **IC heatmap** view).
+
+        Re-evaluates each stored factor on one shared PIT engine, computes the
+        horizon-``h`` forward returns once, and reduces each factor's per-date RankIC
+        into calendar buckets (``month`` / ``quarter`` / ``week``). Returns
+        ``{factor_ids, exprs, periods, horizon, bucket, matrix, summary, ...}`` where
+        ``matrix[i][k]`` is factor ``i``'s mean RankIC in period ``k`` (``None`` when
+        empty) and ``summary[i]`` its overall mean RankIC. JSON-safe (NaN -> None).
+        """
+        from assay.library.analysis import bucket_periods
+
+        empty = {"factor_ids": [], "exprs": [], "periods": [], "matrix": [],
+                 "summary": [], "bucket": bucket, "horizon": None}
+        if not factor_ids:
+            return empty
+        universe, period, horizons, execution, as_of, adj = self._resolve(
+            universe, period, None, None, as_of, adj
+        )
+        h = int(horizon) if horizon else int(min(horizons))
+        engine = self._build_engine(universe, period, as_of, adj, None)
+        close = engine.field_matrix("close")
+        open_ = engine.field_matrix("open") if "open" in engine._field_cols else None
+        fwd = evaluator.forward_returns(close, open_, [h], execution)[h]
+        labels, groups = bucket_periods(list(engine.dates), bucket)
+
+        fids, exprs, matrix, summary = [], [], [], []
+        for fid in factor_ids:
+            report = self.library.get(fid)
+            if report is None:
+                continue
+            fd = engine.diagnose(report.expr)
+            if not (fd.ok and fd.result is not None):
+                continue
+            ric = evaluator.rank_ic_series(fd.result.values, fwd)  # (T,)
+            row = []
+            for idxs in groups:
+                seg = ric[idxs]
+                seg = seg[np.isfinite(seg)]
+                row.append(float(seg.mean()) if seg.size else None)
+            mean = evaluator.ic_summary(ric)[0]
+            fids.append(fid)
+            exprs.append(report.expr)
+            matrix.append(row)
+            summary.append(float(mean) if np.isfinite(mean) else None)
+        return {
+            "factor_ids": fids, "exprs": exprs, "periods": labels, "horizon": h,
+            "bucket": bucket, "matrix": matrix, "summary": summary,
+            "universe": universe, "period": list(period),
+        }
+
+    @staticmethod
+    def _project_2d(dist: np.ndarray, method: str) -> tuple[np.ndarray, str]:
+        """Project a precomputed distance matrix to 2-D; returns ``(coords, used_method)``.
+
+        ``mds`` (classical, numpy) is the always-available default; ``tsne`` / ``umap``
+        are used when requested *and* their library is importable, else they degrade
+        to ``mds`` (so the endpoint never fails on a missing optional dependency).
+        """
+        from assay.library.analysis import classical_mds
+
+        m = (method or "mds").lower()
+        n = dist.shape[0]
+        if m in ("tsne", "umap") and n >= 4:
+            try:
+                if m == "umap":
+                    import umap  # type: ignore
+
+                    emb = umap.UMAP(n_components=2, metric="precomputed", random_state=0).fit_transform(dist)
+                    return np.asarray(emb, dtype=np.float64), "umap"
+                from sklearn.manifold import TSNE
+
+                emb = TSNE(
+                    n_components=2, metric="precomputed", init="random", random_state=0,
+                    perplexity=float(min(30, max(2, n // 3))),
+                ).fit_transform(dist)
+                return np.asarray(emb, dtype=np.float64), "tsne"
+            except Exception:  # noqa: BLE001 — optional libs / degenerate input -> MDS
+                pass
+        return classical_mds(dist, 2), "mds"
+
+    @staticmethod
+    def _cluster_2d(coords: np.ndarray) -> np.ndarray:
+        """K-means cluster labels for the 2-D layout (single cluster if too few / no sklearn)."""
+        n = coords.shape[0]
+        if n < 4:
+            return np.zeros(n, dtype=np.int64)
+        try:
+            from sklearn.cluster import KMeans
+
+            k = max(2, min(8, n // 4))
+            return KMeans(n_clusters=k, n_init=10, random_state=0).fit_predict(coords).astype(np.int64)
+        except Exception:  # noqa: BLE001 — no sklearn -> a single cluster
+            return np.zeros(n, dtype=np.int64)
+
+    def factor_embedding(
+        self,
+        factor_ids: list[str],
+        *,
+        universe: str | None = None,
+        period: tuple[str, str] | None = None,
+        as_of: str | None = None,
+        adj: str | None = None,
+        method: str = "mds",
+    ) -> dict:
+        """2-D similarity map of factors (the **Alpha space map** view).
+
+        Builds the signed-Spearman similarity matrix (via :meth:`correlation_matrix`),
+        turns it into a distance (``1 - corr``), projects to 2-D (``mds`` default;
+        ``tsne`` / ``umap`` when installed), and K-means-clusters the layout. Each
+        returned point carries its expression, coordinates, ``rank_ic`` / ``rank_icir``
+        (size/colour hints), provenance ``source`` and ``cluster`` — so redundant
+        alphas visibly group together. JSON-safe.
+        """
+        corr = self.correlation_matrix(
+            factor_ids, universe=universe, period=period, as_of=as_of, adj=adj
+        )
+        fids = corr.get("factor_ids", []) or []
+        n = len(fids)
+        if n == 0:
+            return {"points": [], "method": method, "factor_ids": []}
+        mat = np.array(corr["matrix"], dtype=np.float64)
+        dist = 1.0 - mat
+        dist = np.where(np.isfinite(dist), dist, 1.0)
+        np.fill_diagonal(dist, 0.0)
+        coords, used = self._project_2d(dist, method)
+        clusters = self._cluster_2d(coords)
+
+        idx = {s.factor_id: s for s in self.library_query(limit=-1, min_rank_icir=float("-inf"))}
+        points = []
+        for i, fid in enumerate(fids):
+            s = idx.get(fid)
+            points.append({
+                "id": fid,
+                "expr": (s.expr if s else fid),
+                "x": float(coords[i, 0]), "y": float(coords[i, 1]),
+                "rank_ic": _f(s.rank_ic) if s else None,
+                "rank_icir": _f(s.rank_icir) if s else None,
+                "source": (s.source if s else None),
+                "cluster": int(clusters[i]),
+            })
+        return {"points": points, "method": used, "factor_ids": fids}
+
+    def factor_lineage(
+        self, factor_ids: list[str] | None = None, *, limit: int = 200
+    ) -> dict:
+        """Derivation DAG of the library's factors (the **Lineage** view).
+
+        Builds the expression-AST containment graph (see
+        :func:`assay.library.analysis.lineage_graph`): an edge ``a -> b`` means
+        factor ``a``'s whole expression is a sub-expression of ``b``. With
+        ``factor_ids`` the graph is restricted to those (else the top-``limit``
+        library factors). Nodes are enriched with ``rank_ic`` / ``rank_icir`` /
+        ``source`` for sizing/colour. Credential-free (no data load — ASTs only).
+        """
+        from assay.library.analysis import lineage_graph
+
+        if factor_ids:
+            id_to_expr: dict[str, str] = {}
+            for fid in factor_ids:
+                report = self.library.get(fid)
+                if report is not None:
+                    id_to_expr[fid] = report.expr
+        else:
+            id_to_expr = {s.factor_id: s.expr for s in self.library_query(limit=limit, min_rank_icir=float("-inf"))}
+
+        graph = lineage_graph(id_to_expr)
+        idx = {s.factor_id: s for s in self.library_query(limit=-1, min_rank_icir=float("-inf"))}
+        for nd in graph["nodes"]:
+            s = idx.get(nd["id"])
+            nd["rank_ic"] = _f(s.rank_ic) if s else None
+            nd["rank_icir"] = _f(s.rank_icir) if s else None
+            nd["source"] = s.source if s else None
+        return graph
+
+    # ----------------------------------------------------------- combination ---
+    @staticmethod
+    def combination_methods() -> list[dict]:
+        """List the available factor-combination methods (design-doc §6.3).
+
+        Credential-free: returns ``[{name, kind, available}]`` where analytic /
+        optimization schemes are always available and learned models are flagged by
+        whether their library (scikit-learn / lightgbm / xgboost) is installed.
+        """
+        return evaluator.available_methods()
+
+    def _resolve_factor_specs(self, factors: Iterable) -> list[tuple[str, str]]:
+        """Resolve combination inputs to ``[(unique_name, expression)]``.
+
+        Each spec selects a factor from a pool or supplies one inline:
+
+        * a bare expression string — ``"rank(close)"`` (name defaults to the expr);
+        * ``"lib:<factor_id>"`` — a stored library factor (its expression);
+        * ``"alpha101:<n>"`` / ``"alpha158:<n>"`` — a catalog factor by number;
+        * a dict ``{"name": ..., "expr": ...}`` or ``{"name": ..., "id": ...}``.
+
+        Unknown ids / catalog numbers are silently skipped (the caller reports the
+        drop). Names are made unique with a ``#k`` suffix so duplicates never
+        collide in the combination's factor map.
+        """
+        from assay.factors import ALPHA_101, ALPHA_158
+
+        resolved: list[tuple[str, str]] = []
+        for spec in factors:
+            name: str | None = None
+            expr: str | None = None
+            if isinstance(spec, dict):
+                expr = spec.get("expr")
+                if expr is None and spec.get("id"):
+                    rep = self.library.get(str(spec["id"]))
+                    expr = rep.expr if rep is not None else None
+                name = spec.get("name") or spec.get("id") or expr
+            else:
+                s = str(spec).strip()
+                low = s.lower()
+                if low.startswith("lib:"):
+                    fid = s[4:]
+                    rep = self.library.get(fid)
+                    if rep is not None:
+                        name, expr = fid, rep.expr
+                elif low.startswith("alpha101:") or low.startswith("alpha158:"):
+                    catalog = ALPHA_101 if low.startswith("alpha101:") else ALPHA_158
+                    try:
+                        n = int(s.split(":", 1)[1])
+                    except ValueError:
+                        n = None
+                    if n is not None and n in catalog:
+                        name, expr = f"{low.split(':', 1)[0]}_{n}", catalog[n]
+                else:
+                    name, expr = s, s  # raw expression
+            if expr:
+                resolved.append((str(name), str(expr)))
+
+        # De-duplicate names deterministically (keep order; suffix collisions).
+        seen: dict[str, int] = {}
+        out: list[tuple[str, str]] = []
+        for name, expr in resolved:
+            if name in seen:
+                seen[name] += 1
+                name = f"{name}#{seen[name]}"
+            else:
+                seen[name] = 0
+            out.append((name, expr))
+        return out
+
+    def combine_factors(
+        self,
+        factors: Iterable,
+        *,
+        train: tuple[str, str],
+        val: tuple[str, str],
+        test: tuple[str, str],
+        universe: str | None = None,
+        horizons: Iterable[int] | None = None,
+        execution: str | None = None,
+        as_of: str | None = None,
+        adj: str | None = None,
+        method: str = "icir_weight",
+        standardize: str = "zscore",
+        horizon: int | None = None,
+        ridge_lambda: float = 10.0,
+        embargo: int | None = None,
+        candidate_methods: list[str] | None = None,
+        model_params: dict | None = None,
+    ) -> dict:
+        """Combine factors and score the composite out-of-sample (design-doc §6.3).
+
+        Selects factors from the pool (library ids, Alpha101/Alpha158 catalog
+        numbers) and/or accepts inline expressions, evaluates them all on **one**
+        PIT engine spanning ``train``..``test``, computes forward returns, and runs
+        :func:`assay.evaluator.combine_factors`: weights are fit on the **train**
+        window, the scheme is validation-selected when ``method='auto'``, and the
+        composite's IC/RankIC/ICIR is reported on **train / val / test** (the test
+        window never touches the fit). A label embargo (default = max horizon) purges
+        the train/val tails so overlapping forward labels do not leak across splits.
+
+        Parameters mirror :meth:`evaluate` (``universe``/``horizons``/``execution``/
+        ``as_of``/``adj`` resolve from config) plus the combination knobs
+        (``method``, ``standardize``, ``horizon``, ``ridge_lambda``, ``embargo``,
+        ``candidate_methods``). The three split windows are required ``(start, end)``
+        ``YYYY-MM-DD`` pairs.
+
+        Returns a JSON-safe dict: :meth:`CombinationResult.to_dict` plus ``universe``,
+        ``period``, ``execution``, the resolved factor list, and any ``dropped`` specs
+        that failed to evaluate. Degrades to ``{"failure": "NO_FACTORS", ...}`` (never
+        raises) when fewer than one input evaluates on the available data.
+        """
+        # Engine spans the full train..test envelope; PIT cutoff at the test end.
+        period = (min(train[0], val[0], test[0]), max(train[1], val[1], test[1]))
+        universe, period, horizons, execution, as_of, adj = self._resolve(
+            universe, period, horizons, execution, as_of or test[1], adj
+        )
+
+        resolved = self._resolve_factor_specs(factors)
+        if not resolved:
+            return {"failure": "NO_FACTORS", "detail": "no spec resolved to an expression",
+                    "universe": universe, "period": list(period)}
+
+        try:
+            engine = self._build_engine(universe, period, as_of, adj, None)
+        except (ValueError, FileNotFoundError) as exc:
+            return {"failure": "NO_DATA", "detail": str(exc),
+                    "universe": universe, "period": list(period)}
+
+        # Evaluate every resolved factor on the shared grid; drop the failures.
+        matrices: dict[str, np.ndarray] = {}
+        dropped: list[dict] = []
+        for name, expr in resolved:
+            fd = engine.diagnose(expr)
+            if fd.ok and fd.result is not None:
+                matrices[name] = fd.result.values
+            else:
+                dropped.append({"name": name, "expr": expr, "failure_mode": fd.failure_mode})
+        if not matrices:
+            return {"failure": "NO_FACTORS", "detail": "no input factor evaluated cleanly",
+                    "universe": universe, "period": list(period), "dropped": dropped}
+
+        fwd_by_h = self._cold_forward_returns(engine, horizons, execution)
+        emb = max(horizons) if embargo is None else int(embargo)
+        train_mask, val_mask, test_mask = evaluator.make_splits(
+            engine.dates, train, val, test, embargo=emb
+        )
+        result = evaluator.combine_factors(
+            matrices, fwd_by_h, train_mask, val_mask, test_mask,
+            method=method, standardize=standardize, horizon=horizon,
+            ridge_lambda=ridge_lambda, candidate_methods=candidate_methods,
+            model_params=model_params,
+        )
+        out = result.to_dict()
+        out.update({
+            "universe": universe,
+            "period": list(period),
+            "execution": execution,
+            "adj": adj,
+            "splits": {"train": list(train), "val": list(val), "test": list(test),
+                       "embargo": emb},
+            "resolved_factors": [{"name": n, "expr": e} for n, e in resolved],
+            "dropped": dropped,
+        })
+        return out
 
     # --------------------------------------------------------------- session ---
     def create_session(

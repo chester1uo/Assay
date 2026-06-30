@@ -98,9 +98,12 @@ class PortfolioAccountant:
             is treated as 0 for that name (a missing symbol contributes nothing and
             does not poison the date's portfolio return).
         schedule:
-            ``{date_index: target_weights (N,)}`` — the rebalance schedule. On each
-            keyed date the target is applied through the simulator at that day's
-            drifted weights. Indices outside ``[0, T)`` are ignored.
+            ``{date_index: target}`` — the rebalance schedule. ``target`` is either
+            a target-weights ``(N,)`` vector or a **callable** ``fn(drifted_w) ->
+            (N,) | None`` invoked with that day's drifted book (so the target can be
+            built against the live position; ``None`` => skip this date, no trade).
+            On each keyed date the resolved target is applied through the simulator
+            at that day's drifted weights. Indices outside ``[0, T)`` are ignored.
         exec_prices, prev_closes, limit_ups, limit_downs, adv_fractions, tradable_masks:
             optional ``(T, N)`` per-date market inputs forwarded to the simulator
             (execution price, previous close for flat-pct price limits, explicit
@@ -158,43 +161,52 @@ class PortfolioAccountant:
             denom = 1.0 + port_ret
             cur_w = grown / denom if denom != 0.0 else grown
 
-            # 2) Rebalance, if scheduled for this date.
+            # 2) Rebalance, if scheduled for this date. A schedule entry is either a
+            #    precomputed target vector (the classic path) OR a callable that
+            #    builds the target from the *live drifted book* ``cur_w`` passed in —
+            #    so weight construction, the turnover cap and threshold gating all
+            #    see the real current position rather than a stale prior target. A
+            #    callable returning ``None`` means "do not trade this date" (e.g. a
+            #    threshold candidate whose drift did not breach the gate).
             if t in schedule:
-                target = np.asarray(schedule[t], dtype=np.float64)
-                px = exec_prices[t] if exec_prices is not None else np.ones(N)
-                prev = prev_closes[t] if prev_closes is not None else None
-                lim_up = limit_ups[t] if limit_ups is not None else None
-                lim_dn = limit_downs[t] if limit_downs is not None else None
-                advf = adv_fractions[t] if adv_fractions is not None else None
-                mask = tradable_masks[t] if tradable_masks is not None else None
-                d_lbl = dates[t] if dates is not None else ""
+                sched_val = schedule[t]
+                target = sched_val(cur_w) if callable(sched_val) else sched_val
+                if target is not None:
+                    target = np.asarray(target, dtype=np.float64)
+                    px = exec_prices[t] if exec_prices is not None else np.ones(N)
+                    prev = prev_closes[t] if prev_closes is not None else None
+                    lim_up = limit_ups[t] if limit_ups is not None else None
+                    lim_dn = limit_downs[t] if limit_downs is not None else None
+                    advf = adv_fractions[t] if adv_fractions is not None else None
+                    mask = tradable_masks[t] if tradable_masks is not None else None
+                    d_lbl = dates[t] if dates is not None else ""
 
-                res = self.simulator.execute(
-                    target,
-                    cur_w,
-                    exec_price=px,
-                    prev_close=prev,
-                    limit_up=lim_up,
-                    limit_down=lim_dn,
-                    adv_fraction=advf,
-                    tradable_mask=mask,
-                    acquired_step=acquired_step,
-                    step=step,
-                    symbols=symbols,
-                    date=d_lbl,
-                )
-                # One-way turnover realised by this rebalance.
-                turnover = 0.5 * float(np.nansum(np.abs(res.executed_weights - cur_w)))
-                turnover_per_rebalance.append(turnover)
-                rebalance_idx.append(t)
+                    res = self.simulator.execute(
+                        target,
+                        cur_w,
+                        exec_price=px,
+                        prev_close=prev,
+                        limit_up=lim_up,
+                        limit_down=lim_dn,
+                        adv_fraction=advf,
+                        tradable_mask=mask,
+                        acquired_step=acquired_step,
+                        step=step,
+                        symbols=symbols,
+                        date=d_lbl,
+                    )
+                    # One-way turnover realised by this rebalance.
+                    turnover = 0.5 * float(np.nansum(np.abs(res.executed_weights - cur_w)))
+                    turnover_per_rebalance.append(turnover)
+                    rebalance_idx.append(t)
 
-                # Cost is a one-off NAV haircut on the *net* path only.
-                nav_val *= 1.0 - res.total_cost
-                cur_w = res.executed_weights
-                trades.extend(res.trades)
-                for k in diag:
-                    diag[k] += res.diag.get(k, 0.0)
-                step += 1
+                    # Cost is a one-off NAV haircut on the *net* path only.
+                    nav_val *= 1.0 - res.total_cost
+                    cur_w = res.executed_weights
+                    trades.extend(res.trades)
+                    for k in diag:
+                        diag[k] += res.diag.get(k, 0.0)
+                    step += 1
 
             nav[t] = nav_val
             gross[t] = gross_val

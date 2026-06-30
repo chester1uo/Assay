@@ -96,6 +96,8 @@ h1, h2, h3, h4 { margin: 0; font-weight: 500; }
 .topnav-logo:hover { text-decoration: none; }
 .topnav-diamond { color: var(--blue); font-size: 14px; }
 .topnav-wordmark { font-size: 15px; }
+.topnav-version { font-size: 10px; font-family: var(--font-mono, monospace); color: var(--text-muted, #888);
+  margin-left: 4px; align-self: flex-start; letter-spacing: 0; }
 
 .topnav-tabs {
   display: flex;

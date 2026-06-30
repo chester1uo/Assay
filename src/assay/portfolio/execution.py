@@ -281,11 +281,12 @@ class ExecutionSimulator:
             if t_plus_1_on and fill > 0.0:
                 acquired_step[i] = step
 
-            # residual: if we capped+defer, we still want the rest next step.
+            # residual: if we capped+defer, we still want the rest next step. A
+            # partial fill is already counted in ``n_trades``; it is *not* also a
+            # ``blocked_adv`` event (that counts only fully-blocked orders), so the
+            # §4.4 attempt denominator never double-counts a single partial fill.
             if capped and cfg.partial_fill_handling == "defer":
                 residual[i] = tgt[i]
-                if abs(fill - delta) > _TRADE_EPS:
-                    diag["blocked_adv"] += 1.0
             else:
                 residual[i] = new_w
 

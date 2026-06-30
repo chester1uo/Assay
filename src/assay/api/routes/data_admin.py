@@ -37,8 +37,20 @@ def get_config(api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
 
 @router.put("/v1/admin/config", include_in_schema=False)
 def put_config(patch: dict, api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
-    """Merge ``patch`` into the config (secrets kept unless a fresh value is sent)."""
+    """Merge ``patch`` into the config (secrets kept unless a fresh value is sent).
+
+    Data settings (dirs / credentials) are pushed to the environment; **system
+    settings** (parallelism / cache / evaluation defaults) are applied onto the live
+    service so they take effect on the next request without a restart.
+    """
     config_store.update(patch or {})
+    if isinstance(patch, dict) and "system" in patch:
+        try:
+            from assay.api.app import get_service
+
+            get_service().apply_system_config()
+        except Exception:  # noqa: BLE001 — service may be uninitialised in some contexts
+            pass
     return config_store.masked()
 
 
@@ -81,7 +93,81 @@ def start_job(body: dict, api_key: str | None = Depends(get_api_key)) -> dict[st
         raise HTTPException(status_code=422, detail="start must be on or before end")
 
     label = f"{mode} {start.isoformat()}..{end.isoformat()}"
-    job = jobs.submit(mode, market, label, lambda j: orchestrate.run(market, mode, start, end, j))
+
+    def _task(j):
+        # 1) ingest, then 2) refresh the hot cache (precompute) so it stays aligned
+        #    to the freshly-ingested data validity period — automatically.
+        rep = orchestrate.run(market, mode, start, end, j)
+        try:
+            from assay.api.app import get_service
+
+            svc = get_service()
+            if not getattr(svc.config, "precompute_auto_refresh", True):
+                j.log("hot-cache auto-refresh disabled in system settings — skipped")
+                return rep
+            j.log("refreshing hot cache (precompute) to align with new data …")
+            cache = svc.refresh_precompute_for_market(
+                market,
+                universes=None if mode == "init" else _AUTO_REFRESH_UNIVERSES.get(market),
+                progress=lambda f, m: j.progress_to(1.0, m),  # keep the bar full, update msg
+            )
+            j.log(f"hot cache refreshed: {cache.get('refreshed') or cache.get('note')}")
+            rep = {**(rep or {}), "precompute": cache}
+        except Exception as exc:  # noqa: BLE001 — a cache hiccup must not fail the ingest
+            j.log(f"hot-cache refresh skipped: {type(exc).__name__}: {exc}")
+        return rep
+
+    job = jobs.submit(mode, market, label, _task)
+    return job.to_dict(with_logs=False)
+
+
+# Auto-refresh scope after an *update* run: just the primary universe per market
+# (fast, keeps the job snappy). An ``init`` run refreshes every universe (None).
+_AUTO_REFRESH_UNIVERSES = {"US": ["NASDAQ100"], "CN": ["CSI300"]}
+
+
+# ------------------------------------------------------------------ hot cache
+@router.get("/v1/admin/cache/status", include_in_schema=False)
+def cache_status(api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
+    """Hot-cache (precompute) status: footprint + per-universe validity & freshness."""
+    from assay.api.app import get_service
+
+    return get_service().precompute_status()
+
+
+@router.get("/v1/admin/cache/entries", include_in_schema=False)
+def cache_entries(scope: str, api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
+    """Detailed contents of one cache scope (e.g. ``?scope=NASDAQ100``).
+
+    Lists every precomputed sub-expression with its expression, occurrence count,
+    node count, recompute-saved score, cached matrix shape, bytes, coverage and
+    whether it is still present for the scope's current fingerprint.
+    """
+    from assay.api.app import get_service
+
+    return get_service().cache_entries(scope)
+
+
+@router.post("/v1/admin/cache/rebuild", include_in_schema=False)
+def cache_rebuild(body: dict | None = None, api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
+    """Queue a hot-cache rebuild job. Body: ``{market}`` (US|CN; default US).
+
+    Mines the factor library's common sub-expressions and precomputes them for the
+    market's universes over the current data range (all universes — the thorough
+    rebuild the data-update hook skips for speed).
+    """
+    market = str((body or {}).get("market", "US")).upper()
+    if market not in ("US", "CN", "HK"):
+        raise HTTPException(status_code=422, detail="market must be US, CN or HK")
+
+    def _task(j):
+        from assay.api.app import get_service
+
+        return get_service().refresh_precompute_for_market(
+            market, progress=lambda f, m: j.progress_to(f, m)
+        )
+
+    job = jobs.submit("cache", market, f"rebuild hot cache ({market})", _task)
     return job.to_dict(with_logs=False)
 
 

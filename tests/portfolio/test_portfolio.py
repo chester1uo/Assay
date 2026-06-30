@@ -645,3 +645,107 @@ def test_backtester_a_share_metrics_present_only_when_market_A(patched_engine):
     assert a.a_share_metrics["suspension_impact"] is None
     assert a.a_share_metrics["northbound_flow_corr"] is None
     json.dumps(a.to_dict())
+
+
+# ===========================================================================
+# 10. regression — rebalance/turnover faithfulness against the live drifted book
+# ===========================================================================
+def _flat_panel_constant_factor(t: int = 60, n: int = 12) -> pl.DataFrame:
+    """Flat market (no drift) + a per-name constant factor in the ``open`` column.
+
+    ``close`` is identical every day (zero returns, so the book never drifts) and
+    ``open`` encodes a stable cross-sectional rank (column index), so a factor of
+    ``open`` has zero rank-shift and a target that never drifts from the book.
+    """
+    close = np.full((t, n), 100.0)
+    open_ = (100.0 + np.arange(n)[None, :]).repeat(t, axis=0).astype(float)
+    dates = [dt.date(2021, 1, 4) + dt.timedelta(days=i) for i in range(t)]
+    syms = [f"S{j}" for j in range(n)]
+    return pl.DataFrame({
+        "date": np.repeat(np.array(dates), n), "symbol": syms * t,
+        "open": open_.reshape(-1), "high": (open_ + 1).reshape(-1),
+        "low": (open_ - 1).reshape(-1), "close": close.reshape(-1),
+        "volume": np.full((t, n), 1e6).reshape(-1),
+    })
+
+
+def test_threshold_rebalance_respects_gate_on_stable_factor(patched_engine):
+    # Regression: the threshold gate must compare the new *target weights* to the
+    # live book — not the raw signal. On a stable factor + flat market the book
+    # never drifts, so after the first establish the gate must hold (1 rebalance).
+    patched_engine(_flat_panel_constant_factor())
+    cfg = _cfg(
+        period_start="2021-01-04", period_end="2021-12-31", market="US",
+        rebalance_type="threshold", weight_method="signal_prop", long_short=False,
+        threshold_rank_shift=2, threshold_weight_drift=0.05, signal_transform="rank",
+        min_rebalance_interval=1, execution_offset_days=1, execution_price="next_close",
+        max_single_weight=0.30, min_stock_count=5, commission_rate=0.0001,
+        commission_min=0.0, transfer_fee_rate=0.00001, stamp_duty_rate=0.0,
+        slippage_model="zero", benchmark="none",
+    )
+    rep = PortfolioBacktester(store=None).run("open", cfg)
+    # Exactly one rebalance: establish once, then the gate holds every later day.
+    assert rep.n_rebalances == 1
+
+
+def test_turnover_cap_enforced_against_drifted_book(patched_engine, monkeypatch):
+    # Regression: realised per-rebalance one-way turnover must respect
+    # max_turnover_per_period measured against the DRIFTED book (apply_constraints
+    # now diffs the target vs the live position, not a stale prior target).
+    rng = np.random.default_rng(3)
+    t, n = 120, 25
+    rets = rng.normal(0.0, 0.03, (t, n))  # volatile -> large drift between rebalances
+    close = 100.0 * np.cumprod(1 + rets, axis=0)
+    dates = [dt.date(2021, 1, 4) + dt.timedelta(days=i) for i in range(t)]
+    syms = [f"S{j}" for j in range(n)]
+    panel = pl.DataFrame({
+        "date": np.repeat(np.array(dates), n), "symbol": syms * t,
+        "open": close.reshape(-1), "high": (close + 1).reshape(-1),
+        "low": (close - 1).reshape(-1), "close": close.reshape(-1),
+        "volume": np.full((t, n), 1e6).reshape(-1),
+    })
+    patched_engine(panel)
+    cap = 0.10
+    cfg = _cfg(
+        period_start="2021-01-04", period_end="2021-12-31", market="US",
+        rebalance_type="monthly", weight_method="signal_prop", long_short=False,
+        signal_transform="rank", max_turnover_per_period=cap, execution_offset_days=1,
+        execution_price="next_close", max_single_weight=0.10, min_stock_count=5,
+        commission_rate=0.0001, commission_min=0.0, transfer_fee_rate=0.00001,
+        stamp_duty_rate=0.0, slippage_model="zero", benchmark="none", save_trade_log=False,
+    )
+    captured = {}
+    orig_run = PortfolioAccountant.run
+    monkeypatch.setattr(
+        PortfolioAccountant, "run",
+        lambda self, *a, **k: captured.setdefault("res", orig_run(self, *a, **k)),
+    )
+    PortfolioBacktester(store=None).run("close", cfg)
+    tpr = captured["res"].turnover_per_rebalance
+    assert len(tpr) >= 2  # several monthly rebalances actually fired
+    assert max(tpr) <= cap + 1e-9  # every rebalance respected the cap on the live book
+
+
+def test_accountant_callable_schedule_uses_live_book_and_skips_on_none():
+    # The accountant accepts a callable schedule entry, invokes it with the live
+    # drifted book, and a None return means "no trade this date".
+    cfg = _cfg(market="US", commission_rate=0.0001, commission_min=0.0,
+               transfer_fee_rate=0.00001, stamp_duty_rate=0.0, slippage_model="zero")
+    acct = PortfolioAccountant(cfg)
+    T, N = 4, 2
+    rets = np.zeros((T, N))
+    rets[1] = [0.10, 0.0]  # asset0 +10% into day 1 so the day-2 book is drifted
+    seen = {}
+
+    def fn(cur_w):
+        seen["cur_w"] = cur_w.copy()
+        return None  # gate did not fire -> no trade
+
+    # t=1 establishes 100% asset0 (array entry); t=2 is a callable that inspects the
+    # drifted book and declines to trade.
+    schedule = {1: np.array([1.0, 0.0]), 2: fn}
+    res = acct.run(rets, schedule, exec_prices=np.ones((T, N)))
+    # the callable saw the post-day-2 drifted book (still ~100% asset0, finite)
+    assert "cur_w" in seen and np.isclose(seen["cur_w"].sum(), 1.0)
+    # None return => only the t=1 rebalance is recorded
+    assert res.rebalance_dates_idx == [1]

@@ -56,10 +56,12 @@ export function render(root, ctx) {
   );
   root.replaceChildren(page);
 
-  const configCard = el("section", { className: "card" }, el("div", { className: "card-body" }, el("div", { className: "muted" }, "Loading config…")));
+  const configCard = el("section", { className: "card" }, el("div", { className: "card-body" }, el("div", { className: "muted" }, "Loading data settings…")));
+  const systemCard = el("section", { className: "card" }, el("div", { className: "card-body" }, el("div", { className: "muted" }, "Loading system settings…")));
   const statusCard = el("section", { className: "card" }, el("div", { className: "card-body" }, el("div", { className: "muted" }, "Loading status…")));
+  const cacheCard = el("section", { className: "card" }, el("div", { className: "card-body" }, el("div", { className: "muted" }, "Loading hot cache…")));
   const jobsCard = el("section", { className: "card" }, el("div", { className: "card-body" }, el("div", { className: "muted" }, "Loading jobs…")));
-  page.append(configCard, statusCard, jobsCard);
+  page.append(configCard, systemCard, statusCard, cacheCard, jobsCard);
 
   // ---------------- config ----------------
   function renderConfig(cfg) {
@@ -87,7 +89,7 @@ export function render(root, ctx) {
     });
 
     configCard.replaceChildren(
-      el("div", { className: "card-head" }, el("span", { className: "card-title" }, "Configuration")),
+      el("div", { className: "card-head" }, el("span", { className: "card-title" }, "数据设置 · Data Settings")),
       el("div", { className: "card-body" },
         el("div", { className: "dm-sub" }, "Directories"),
         el("div", { className: "dm-grid" },
@@ -99,6 +101,83 @@ export function render(root, ctx) {
           field("S3 Endpoint", f.endpoint), field("Bucket", f.bucket)),
         el("div", { className: "dm-sub" }, "Tushare (CN download)"),
         el("div", { className: "dm-grid" }, field("API Token", f.token)),
+        el("div", { style: { marginTop: "12px" } }, saveBtn, note)
+      )
+    );
+  }
+
+  // ---------------- system settings ----------------
+  function renderSystem(cfg) {
+    const s = cfg.system || {};
+    const num = (v, step) => el("input", { className: "input", type: "number", step: step || "1", value: v == null ? "" : String(v) });
+    const txt = (v) => el("input", { className: "input", type: "text", value: v == null ? "" : String(v), spellcheck: "false", autocomplete: "off" });
+    const sel = (v, opts) => el("select", { className: "select" }, ...opts.map((o) => el("option", { value: o, selected: String(v) === o }, o)));
+    const chk = (v) => el("input", { type: "checkbox", checked: !!v });
+    const field = (label, node) => el("div", { className: "dm-field" }, el("span", { className: "label" }, label), node);
+
+    const f = {
+      // 并行
+      n_workers: num(s.n_workers),
+      // 缓存
+      l1_memory_gb: num(s.l1_memory_gb, "0.5"), l2_max_gb: num(s.l2_max_gb, "1"),
+      precompute_enabled: chk(s.precompute_enabled), precompute_auto_refresh: chk(s.precompute_auto_refresh),
+      precompute_top_k: num(s.precompute_top_k), precompute_min_count: num(s.precompute_min_count),
+      precompute_corpus: txt(s.precompute_corpus),
+      // 默认参数
+      default_universe: txt(s.default_universe),
+      default_period_start: el("input", { className: "input input-date", type: "date", value: s.default_period_start || "" }),
+      default_period_end: el("input", { className: "input input-date", type: "date", value: s.default_period_end || "" }),
+      default_horizons: txt(s.default_horizons),
+      default_execution: sel(s.default_execution, ["next_open", "next_close"]),
+      default_adj: sel(s.default_adj, ["split", "total", "none"]),
+      default_frequency: txt(s.default_frequency),
+      annualization_basis: sel(s.annualization_basis, ["daily", "bar"]),
+      risk_free_rate: num(s.risk_free_rate, "0.001"),
+    };
+    const saveBtn = el("button", { className: "btn btn--primary", type: "button" }, "Save system settings");
+    const note = el("span", { className: "muted", style: { fontSize: "12px", marginLeft: "8px" } }, "applies on the next request — no restart");
+    saveBtn.addEventListener("click", () => {
+      saveBtn.disabled = true;
+      api.adminConfigPut({ system: {
+        n_workers: Number(f.n_workers.value) || 1,
+        l1_memory_gb: Number(f.l1_memory_gb.value) || 0, l2_max_gb: Number(f.l2_max_gb.value) || 0,
+        precompute_enabled: f.precompute_enabled.checked, precompute_auto_refresh: f.precompute_auto_refresh.checked,
+        precompute_top_k: Number(f.precompute_top_k.value) || 256, precompute_min_count: Number(f.precompute_min_count.value) || 2,
+        precompute_corpus: f.precompute_corpus.value.trim(),
+        default_universe: f.default_universe.value.trim(),
+        default_period_start: f.default_period_start.value, default_period_end: f.default_period_end.value,
+        default_horizons: f.default_horizons.value.trim(),
+        default_execution: f.default_execution.value, default_adj: f.default_adj.value,
+        default_frequency: f.default_frequency.value.trim(), annualization_basis: f.annualization_basis.value,
+        risk_free_rate: Number(f.risk_free_rate.value) || 0,
+      } }).then((m) => { renderSystem(m); toast("System settings saved"); })
+        .catch((e) => toast("Save failed: " + (e.message || e), true))
+        .finally(() => { saveBtn.disabled = false; });
+    });
+
+    const chkField = (label, node) => el("label", { className: "dm-field", style: { flexDirection: "row", alignItems: "center", gap: "6px" } }, node, el("span", { className: "label", style: { margin: 0 } }, label));
+
+    systemCard.replaceChildren(
+      el("div", { className: "card-head" }, el("span", { className: "card-title" }, "系统设置 · System Settings")),
+      el("div", { className: "card-body" },
+        el("div", { className: "dm-sub" }, "并行 · Parallelism"),
+        el("div", { className: "dm-grid" }, field("Workers (batch threads)", f.n_workers)),
+        el("div", { className: "dm-sub" }, "缓存 · Cache & precompute"),
+        el("div", { className: "dm-grid" },
+          field("L1 memory (GB)", f.l1_memory_gb), field("L2 max (GB)", f.l2_max_gb),
+          field("Precompute top-K", f.precompute_top_k), field("Precompute min count", f.precompute_min_count),
+          field("Precompute corpus (path; blank = library)", f.precompute_corpus)),
+        el("div", { className: "dm-grid", style: { marginTop: "6px" } },
+          chkField("Precompute enabled", f.precompute_enabled),
+          chkField("Auto-refresh on data update", f.precompute_auto_refresh)),
+        el("div", { className: "dm-sub" }, "默认参数 · Evaluation defaults"),
+        el("div", { className: "dm-grid" },
+          field("Default universe", f.default_universe),
+          field("Period start", f.default_period_start), field("Period end", f.default_period_end),
+          field("Horizons (csv)", f.default_horizons),
+          field("Execution", f.default_execution), field("Adjustment", f.default_adj),
+          field("Frequency", f.default_frequency), field("Annualization", f.annualization_basis),
+          field("Risk-free rate", f.risk_free_rate)),
         el("div", { style: { marginTop: "12px" } }, saveBtn, note)
       )
     );
@@ -189,12 +268,106 @@ export function render(root, ctx) {
   }
 
   // ---------------- loaders + polling ----------------
-  function loadConfig() { api.adminConfigGet().then(renderConfig).catch((e) => configCard.replaceChildren(el("div", { className: "card-body error-state" }, "Config unavailable: " + (e.message || e)))); }
+  // ---------------- hot cache (precompute) ----------------
+  function fmtBytes(b) { b = Number(b) || 0; return b > 1e9 ? (b / 1e9).toFixed(1) + " GB" : b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : (b / 1e3).toFixed(0) + " KB"; }
+
+  function renderCache(st) {
+    const store = st.store || {};
+    const scopes = st.scopes || [];
+    const head = el("div", { className: "card-head" },
+      el("span", { className: "card-title" }, "Hot cache (precompute)"),
+      el("span", { className: "muted", style: { fontSize: "12px" } },
+        `${store.entries || 0} entries · ${fmtBytes(store.bytes)} · auto-refreshes with daily data`));
+
+    const body = el("div", { className: "card-body" });
+    if (!scopes.length) {
+      body.append(el("div", { className: "muted" }, "No precomputed sub-expressions yet. Run a data update, or rebuild below — it mines the factor library's common sub-expressions and computes them for every asset."));
+    } else {
+      const rows = scopes.map((s) => {
+        const fresh = !!s.fresh;
+        const badge = el("span", { className: "badge " + (fresh ? "badge--green" : "badge--amber") }, fresh ? "fresh" : "stale — refresh due");
+        const top = (s.top || []).slice(0, 3).map((c) => `${c.expr} ×${c.count}`).join(" · ");
+        const detail = el("div", { style: { padding: "0 10px 8px" } });   // expands with contents
+        let open = false;
+        const viewBtn = el("button", { className: "btn btn--sm", type: "button" }, "▸ Contents");
+        viewBtn.addEventListener("click", () => {
+          open = !open;
+          viewBtn.textContent = (open ? "▾" : "▸") + " Contents";
+          if (!open) { detail.replaceChildren(); return; }
+          detail.replaceChildren(el("div", { className: "muted" }, "Loading cache contents…"));
+          api.adminCacheEntries(s.universe)
+            .then((res) => detail.replaceChildren(buildCacheEntries(res)))
+            .catch((e) => detail.replaceChildren(el("div", { className: "error-state" }, "Contents unavailable: " + (e.message || e))));
+        });
+        return el("div", { className: "dm-job" },
+          el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", padding: "8px 10px" } },
+            el("div", {},
+              el("div", { style: { fontWeight: 600 } }, `${s.universe} `, badge),
+              el("div", { className: "muted", style: { fontSize: "12px", fontFamily: "var(--font-mono)" } },
+                `valid ${(s.period || []).join(" .. ")} · as-of ${s.as_of || "—"} · ${s.n_entries || 0} subexprs · built ${(s.built_at || "").slice(0, 16).replace("T", " ")}`),
+              top ? el("div", { className: "muted", style: { fontSize: "11px" } }, "top: " + top) : null,
+              (!fresh && s.current_data_latest) ? el("div", { style: { fontSize: "11px", color: "var(--amber)" } }, `data advanced to ${s.current_data_latest} since build`) : null),
+            viewBtn),
+          detail);
+      });
+      body.append(...rows);
+    }
+
+    const usBtn = el("button", { className: "btn btn--sm", type: "button", onClick: () => rebuild("US") }, "Rebuild US");
+    const cnBtn = el("button", { className: "btn btn--sm", type: "button", onClick: () => rebuild("CN") }, "Rebuild CN");
+    body.append(el("div", { style: { marginTop: "10px", display: "flex", gap: "8px" } }, usBtn, cnBtn));
+    cacheCard.replaceChildren(head, body);
+  }
+
+  function buildCacheEntries(res) {
+    const ents = res.entries || [];
+    const wrap = el("div", {});
+    wrap.append(el("div", { className: "muted", style: { fontSize: "12px", margin: "4px 0" } },
+      `${res.count || 0} cached sub-expressions · ${fmtBytes(res.bytes)} · fingerprint ${(res.fingerprint || "—").slice(0, 12)}`));
+    if (!ents.length) { wrap.append(el("div", { className: "muted" }, "No recorded contents (rebuild to populate).")); return wrap; }
+    const th = (t) => el("th", {}, t);
+    const head = el("thead", {}, el("tr", {}, th("Sub-expression"), th("×count"), th("factors"), th("nodes"), th("saved"), th("shape (T×N)"), th("size"), th("coverage"), th("on disk")));
+    const tb = el("tbody", {});
+    for (const e of ents.slice(0, 300)) {
+      const shape = Array.isArray(e.shape) ? e.shape.join("×") : "—";
+      tb.append(el("tr", {},
+        el("td", { className: "dm-mono", title: e.expr, style: { maxWidth: "360px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, e.expr),
+        el("td", { className: "dm-mono" }, String(e.count)),
+        el("td", { className: "dm-mono" }, String(e.n_factors)),
+        el("td", { className: "dm-mono" }, String(e.n_nodes)),
+        el("td", { className: "dm-mono" }, String(e.score)),
+        el("td", { className: "dm-mono" }, shape),
+        el("td", { className: "dm-mono" }, fmtBytes(e.bytes)),
+        el("td", { className: "dm-mono" }, Number.isFinite(e.coverage) ? (e.coverage * 100).toFixed(0) + "%" : "—"),
+        el("td", {}, e.present ? el("span", { className: "dm-st-yes" }, "✓") : el("span", { className: "dm-st-no" }, "missing"))));
+    }
+    wrap.append(el("div", { style: { overflow: "auto", maxHeight: "360px", marginTop: "4px" } }, el("table", { className: "dm-table" }, head, tb)));
+    if (ents.length > 300) wrap.append(el("div", { className: "muted", style: { fontSize: "11px" } }, `showing top 300 of ${ents.length}`));
+    return wrap;
+  }
+
+  function rebuild(market) {
+    api.adminCacheRebuild(market)
+      .then(() => { toast(`hot-cache rebuild (${market}) queued`); loadJobs(); })
+      .catch((e) => toast("rebuild failed: " + (e.message || e), true));
+  }
+
+  function loadConfig() {
+    api.adminConfigGet()
+      .then((cfg) => { renderConfig(cfg); renderSystem(cfg); })
+      .catch((e) => {
+        const msg = "Config unavailable: " + (e.message || e);
+        configCard.replaceChildren(el("div", { className: "card-body error-state" }, msg));
+        systemCard.replaceChildren(el("div", { className: "card-body error-state" }, msg));
+      });
+  }
   function loadStatus() { api.adminDataStatus().then(renderStatus).catch((e) => statusCard.replaceChildren(el("div", { className: "card-body error-state" }, "Status unavailable: " + (e.message || e)))); }
+  function loadCache() { api.adminCacheStatus().then(renderCache).catch((e) => cacheCard.replaceChildren(el("div", { className: "card-body error-state" }, "Hot cache unavailable: " + (e.message || e)))); }
   function loadJobs() { api.adminJobs().then((r) => renderJobs(r.jobs || [])).catch(() => {}); }
 
-  loadConfig(); loadStatus(); loadJobs();
-  const timer = setInterval(loadJobs, 2000);
+  loadConfig(); loadStatus(); loadCache(); loadJobs();
+  let _tick = 0;
+  const timer = setInterval(() => { loadJobs(); if (++_tick % 5 === 0) loadCache(); }, 2000);  // refresh cache view ~every 10s
   cleanups.push(() => clearInterval(timer));
 
   function toast(msg, err) {

@@ -54,6 +54,32 @@ def _defaults() -> dict[str, Any]:
             "bucket": os.environ.get("MASSIVE_S3_BUCKET", "flatfiles"),
         },
         "tushare": {"token": os.environ.get("TUSHARE_TOKEN", "")},
+        # System settings (non-secret) — applied onto the live AssayConfig by
+        # AssayService.apply_system_config(). Kept FLAT so the one-level deep-merge
+        # in update()/_merge() handles partial saves cleanly. Defaults mirror
+        # assay.config.AssayConfig so an un-customised store changes nothing.
+        "system": {
+            # parallelism
+            "n_workers": 8,
+            # cache budgets + precompute (CSE hot cache)
+            "l1_memory_gb": 4.0,
+            "l2_max_gb": 20.0,
+            "precompute_enabled": True,
+            "precompute_auto_refresh": True,
+            "precompute_top_k": 256,
+            "precompute_min_count": 2,
+            "precompute_corpus": "",
+            # evaluation defaults (the house defaults every SDK/REST/WebUI call inherits)
+            "default_universe": "NASDAQ100",
+            "default_period_start": "2020-01-01",
+            "default_period_end": "2024-12-31",
+            "default_horizons": "1,5,10,20",
+            "default_execution": "next_open",
+            "default_adj": "split",
+            "default_frequency": "1d",
+            "annualization_basis": "daily",
+            "risk_free_rate": 0.015,
+        },
     }
 
 
@@ -159,6 +185,28 @@ def tushare_token() -> str:
 
 def massive_s3() -> dict[str, str]:
     return dict(load().get("massive_s3", {}) or {})
+
+
+def system() -> dict[str, Any]:
+    """The effective system-settings section for *display* (defaults merged in)."""
+    return dict(load().get("system", {}) or {})
+
+
+def persisted_system() -> dict[str, Any]:
+    """Only the system settings the operator actually **saved** (raw file, no defaults).
+
+    :func:`system` merges seeded defaults for the admin form; this returns just what
+    is on disk, so :meth:`AssayService.apply_system_config` overrides the live config
+    *only* with values an operator deliberately set — never silently clobbering it
+    with defaults when nothing was saved.
+    """
+    p = config_path()
+    if not p.exists():
+        return {}
+    try:
+        return dict((json.loads(p.read_text(encoding="utf-8")).get("system") or {}))
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 def raw_dir(market: str) -> str:

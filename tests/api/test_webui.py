@@ -48,6 +48,26 @@ def test_v1_routes_still_resolve_under_static_mount() -> None:
     assert res.json()["status"] == "ok"
 
 
+def test_combination_page_assets_and_nav_present() -> None:
+    """The Factor Combination page module is served and linked from the top nav."""
+    js = client.get("/js/pages/combination.js")
+    assert js.status_code == 200
+    shell = client.get("/").text
+    assert 'data-route="#/combination"' in shell
+
+
+def test_legacy_skin_serves_updated_spa_with_win98_css() -> None:
+    """/legacy serves the same (updated) SPA in the Windows-98 skin."""
+    page = client.get("/legacy").text
+    assert 'class="legacy"' in page                      # body skin hook
+    assert "/legacy.css" in page                         # retro stylesheet injected
+    assert 'data-route="#/combination"' in page          # new page reachable (shared SPA)
+    assert '#/combination">Combine' in page              # added to the retro footer nav
+    css = client.get("/legacy.css")
+    assert css.status_code == 200
+    assert "#008080" in css.text and "--w98-raised" in css.text  # Win98 teal + 3D bevels
+
+
 # ---------------------------------------------------------------------------
 # /v1/factor/lint — data-free
 # ---------------------------------------------------------------------------

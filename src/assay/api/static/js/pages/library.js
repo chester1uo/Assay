@@ -672,9 +672,9 @@ export function render(root, ctx) {
     const tabs = el("div", { className: "lib-modetabs", role: "tablist" },
       tab("detail", ctx.t("lib.tabDetail")),
       tab("matrix", ctx.t("lib.tabMatrix")),
-      tab("umap", ctx.t("lib.tabUmap"), { disabled: true, title: ctx.t("lib.tabUmapTitle") }),
-      tab("icheat", ctx.t("lib.tabIcHeatmap"), { disabled: true, title: ctx.t("lib.tabIcHeatmapTitle") }),
-      tab("lineage", ctx.t("lib.tabLineage"), { disabled: true, title: ctx.t("lib.tabLineageTitle") })
+      tab("umap", ctx.t("lib.tabUmap"), { title: ctx.t("lib.tabUmapTitle") }),
+      tab("icheat", ctx.t("lib.tabIcHeatmap"), { title: ctx.t("lib.tabIcHeatmapTitle") }),
+      tab("lineage", ctx.t("lib.tabLineage"), { title: ctx.t("lib.tabLineageTitle") })
     );
     rightPanel.appendChild(tabs);
 
@@ -690,8 +690,340 @@ export function render(root, ctx) {
     }
 
     if (ui.mode === "matrix") renderMatrix(body);
+    else if (ui.mode === "umap") renderUmap(body);
+    else if (ui.mode === "icheat") renderIcHeat(body);
+    else if (ui.mode === "lineage") renderLineage(body);
     else renderDetail(body);
   }
+
+  // ---- shared: which factor ids feed the multi-factor views -----------------
+  // Checked factors if >=2, else the visible top-N (mirrors the matrix view).
+  function viewIds(cap) {
+    let ids = [...ui.checked];
+    if (ids.length < 2) ids = visibleFactors().slice(0, cap).map((f) => f.factor_id);
+    return ids;
+  }
+
+  function viewLoading(body, msg) {
+    const card = el("div", { className: "card" });
+    card.appendChild(el("div", { className: "muted" }, msg));
+    body.appendChild(card);
+    return card;
+  }
+
+  function viewError(card, titleKey, err) {
+    clear(card);
+    card.appendChild(el("div", { className: "error-state" },
+      el("div", { className: "error-state-title" }, ctx.t(titleKey)),
+      el("div", { className: "muted" }, errMessage(err, ctx))));
+  }
+
+  function exprForId(id) {
+    const f = ui.factors.find((x) => x.factor_id === id);
+    return f ? (f.expr || id) : id;
+  }
+
+  // ---- Mode C: IC heatmap (factor × period RankIC) --------------------------
+  function renderIcHeat(body) {
+    const ids = viewIds(20);
+    if (ids.length < 1) {
+      body.appendChild(emptyTwo()); return;
+    }
+    const bucketSel = el("select", { className: "select",
+      onChange: () => load(), "aria-label": ctx.t("ic.bucket") },
+      ...["month", "quarter", "week"].map((b) => el("option", { value: b, selected: b === "month" }, ctx.t("ic.b_" + b))));
+    const controls = el("div", { className: "lib-matrix-controls" },
+      el("label", { className: "lib-slider" }, ctx.t("ic.bucket"), bucketSel),
+      el("span", { className: "label" }, ctx.t("lib.nFactors", { n: ids.length })));
+    const card = el("div", { className: "card" });
+    card.appendChild(controls);
+    const wrap = el("div", { className: "lib-heatmap-wrap" });
+    card.appendChild(wrap);
+    body.appendChild(card);
+
+    function load() {
+      clear(wrap);
+      wrap.appendChild(el("div", { className: "muted" }, ctx.t("ic.computing")));
+      const universe = ctx.store.get("universe");
+      const period = ctx.store.get("period");
+      ctx.api.icHeatmap(ids, { universe, period, bucket: bucketSel.value })
+        .then((res) => {
+          if (ui.mode !== "icheat") return;
+          clear(wrap);
+          if (!res || !Array.isArray(res.matrix) || !res.matrix.length) {
+            wrap.appendChild(el("div", { className: "muted" }, ctx.t("ic.noData"))); return;
+          }
+          wrap.appendChild(buildIcHeat(res));
+        })
+        .catch((err) => { if (ui.mode === "icheat") viewError(card, "ic.unavailable", err); });
+    }
+    load();
+  }
+
+  function buildIcHeat(res) {
+    const NS = "http://www.w3.org/2000/svg";
+    const fids = res.factor_ids, periods = res.periods, M = res.matrix, summ = res.summary || [];
+    const rows = fids.length, cols = periods.length;
+    const cellW = 34, cellH = 26, labelW = 160, labelH = 70, sumW = 52, pad = 8;
+    const W = labelW + cols * cellW + sumW + pad * 2;
+    const H = labelH + rows * cellH + pad * 2;
+    // colour scale: symmetric around 0 by the largest |RankIC| present
+    let maxAbs = 0;
+    for (const row of M) for (const v of row) if (Number.isFinite(v)) maxAbs = Math.max(maxAbs, Math.abs(v));
+    for (const v of summ) if (Number.isFinite(v)) maxAbs = Math.max(maxAbs, Math.abs(v));
+    maxAbs = maxAbs || 1;
+
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", String(W));
+    svg.setAttribute("height", String(H)); svg.setAttribute("class", "chart lib-heatmap");
+    const txt = (x, y, s, opts = {}) => {
+      const t = document.createElementNS(NS, "text");
+      t.setAttribute("x", String(x)); t.setAttribute("y", String(y));
+      t.setAttribute("font-size", String(opts.size || 10));
+      if (opts.anchor) t.setAttribute("text-anchor", opts.anchor);
+      if (opts.rot) t.setAttribute("transform", `rotate(${opts.rot} ${x} ${y})`);
+      if (opts.fill) t.setAttribute("fill", opts.fill);
+      t.textContent = s;
+      if (opts.title) { const tt = document.createElementNS(NS, "title"); tt.textContent = opts.title; t.appendChild(tt); }
+      return t;
+    };
+    // period column headers (rotated)
+    for (let j = 0; j < cols; j++) {
+      const cx = labelW + j * cellW + cellW / 2;
+      svg.appendChild(txt(cx, labelH - 6, periods[j].slice(2), { anchor: "start", rot: -55, size: 9 }));
+    }
+    svg.appendChild(txt(labelW + cols * cellW + sumW / 2, labelH - 6, ctx.t("ic.mean"), { anchor: "start", rot: -55, size: 9 }));
+    // rows
+    for (let i = 0; i < rows; i++) {
+      const rowExpr = exprForId(fids[i]);
+      const yc = labelH + i * cellH;
+      const rt = txt(labelW - 6, yc + cellH / 2 + 3, truncate(rowExpr, 26), { anchor: "end", size: 10, title: rowExpr });
+      rt.style.cursor = "pointer";
+      rt.addEventListener("click", () => selectFactor(fids[i]));
+      svg.appendChild(rt);
+      for (let j = 0; j < cols; j++) {
+        const v = M[i][j];
+        const rect = document.createElementNS(NS, "rect");
+        rect.setAttribute("x", String(labelW + j * cellW)); rect.setAttribute("y", String(yc));
+        rect.setAttribute("width", String(cellW - 2)); rect.setAttribute("height", String(cellH - 2));
+        rect.setAttribute("rx", "2");
+        rect.setAttribute("fill", Number.isFinite(v) ? ctx.charts.diverging(v, maxAbs) : "#F3F4F6");
+        const tt = document.createElementNS(NS, "title");
+        tt.textContent = `${rowExpr}\n${periods[j]}: ${Number.isFinite(v) ? v.toFixed(4) : "—"}`;
+        rect.appendChild(tt);
+        svg.appendChild(rect);
+      }
+      // summary cell (mean RankIC)
+      const sv = summ[i];
+      const sx = labelW + cols * cellW + 4;
+      const srect = document.createElementNS(NS, "rect");
+      srect.setAttribute("x", String(sx)); srect.setAttribute("y", String(yc));
+      srect.setAttribute("width", String(sumW - 6)); srect.setAttribute("height", String(cellH - 2));
+      srect.setAttribute("rx", "2");
+      srect.setAttribute("fill", Number.isFinite(sv) ? ctx.charts.diverging(sv, maxAbs) : "#F3F4F6");
+      srect.setAttribute("stroke", "#0001");
+      svg.appendChild(srect);
+      svg.appendChild(txt(sx + (sumW - 6) / 2, yc + cellH / 2 + 3, Number.isFinite(sv) ? sv.toFixed(3) : "—",
+        { anchor: "middle", size: 9, fill: Math.abs(sv) > maxAbs * 0.5 ? "#fff" : "#333" }));
+    }
+    return svg;
+  }
+
+  // ---- Mode B: Alpha space map (2-D similarity scatter) ---------------------
+  function renderUmap(body) {
+    const ids = viewIds(60);
+    if (ids.length < 3) { body.appendChild(emptyTwo(ctx.t("umap.needThree"))); return; }
+    const methodSel = el("select", { className: "select", onChange: () => load(), "aria-label": ctx.t("umap.method") },
+      el("option", { value: "mds", selected: true }, "MDS"),
+      el("option", { value: "tsne" }, "t-SNE"),
+      el("option", { value: "umap" }, "UMAP"));
+    const note = el("span", { className: "muted", style: { fontSize: "12px" } });
+    const controls = el("div", { className: "lib-matrix-controls" },
+      el("label", { className: "lib-slider" }, ctx.t("umap.method"), methodSel),
+      el("span", { className: "label" }, ctx.t("lib.nFactors", { n: ids.length })), note);
+    const card = el("div", { className: "card" });
+    card.appendChild(controls);
+    const wrap = el("div", { className: "lib-heatmap-wrap" });
+    card.appendChild(wrap);
+    body.appendChild(card);
+
+    function load() {
+      clear(wrap);
+      wrap.appendChild(el("div", { className: "muted" }, ctx.t("umap.computing")));
+      const universe = ctx.store.get("universe");
+      const period = ctx.store.get("period");
+      ctx.api.factorEmbedding(ids, { universe, period, method: methodSel.value })
+        .then((res) => {
+          if (ui.mode !== "umap") return;
+          clear(wrap);
+          if (!res || !Array.isArray(res.points) || res.points.length < 2) {
+            wrap.appendChild(el("div", { className: "muted" }, ctx.t("umap.noData"))); return;
+          }
+          note.textContent = ctx.t("umap.proj", { m: (res.method || "mds").toUpperCase() });
+          wrap.appendChild(buildScatter(res));
+        })
+        .catch((err) => { if (ui.mode === "umap") viewError(card, "umap.unavailable", err); });
+    }
+    load();
+  }
+
+  const CLUSTER_COLORS = ["#2D5BE3", "#0E8A7E", "#C0392B", "#8E44AD", "#D98C00", "#1E7B4B", "#2C82C9", "#C0398B"];
+
+  function buildScatter(res) {
+    const NS = "http://www.w3.org/2000/svg";
+    const pts = res.points;
+    const W = 720, H = 460, m = 36;
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const xlo = Math.min(...xs), xhi = Math.max(...xs), ylo = Math.min(...ys), yhi = Math.max(...ys);
+    const sx = (x) => m + ((x - xlo) / ((xhi - xlo) || 1)) * (W - 2 * m);
+    const sy = (y) => H - m - ((y - ylo) / ((yhi - ylo) || 1)) * (H - 2 * m);
+    const icirs = pts.map((p) => Math.abs(Number(p.rank_icir) || 0));
+    const maxIcir = Math.max(...icirs, 0.01);
+    const rOf = (p) => 5 + 9 * (Math.abs(Number(p.rank_icir) || 0) / maxIcir);
+
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", "100%");
+    svg.setAttribute("height", String(H)); svg.setAttribute("class", "chart");
+    // subtle frame
+    const frame = document.createElementNS(NS, "rect");
+    frame.setAttribute("x", String(m - 8)); frame.setAttribute("y", String(m - 8));
+    frame.setAttribute("width", String(W - 2 * m + 16)); frame.setAttribute("height", String(H - 2 * m + 16));
+    frame.setAttribute("fill", "none"); frame.setAttribute("stroke", "#0001"); frame.setAttribute("rx", "8");
+    svg.appendChild(frame);
+
+    for (const p of pts) {
+      const g = document.createElementNS(NS, "g");
+      g.style.cursor = "pointer";
+      const c = document.createElementNS(NS, "circle");
+      c.setAttribute("cx", String(sx(p.x))); c.setAttribute("cy", String(sy(p.y)));
+      c.setAttribute("r", String(rOf(p)));
+      c.setAttribute("fill", CLUSTER_COLORS[(p.cluster || 0) % CLUSTER_COLORS.length]);
+      c.setAttribute("fill-opacity", "0.78"); c.setAttribute("stroke", "#fff"); c.setAttribute("stroke-width", "1");
+      const tt = document.createElementNS(NS, "title");
+      tt.textContent = `${p.expr}\nRankIC ${fmtMaybe(p.rank_ic, 3)} · RankICIR ${fmtMaybe(p.rank_icir, 2)}${p.source ? " · " + p.source : ""}`;
+      c.appendChild(tt);
+      g.appendChild(c);
+      g.addEventListener("click", () => selectFactor(p.id));
+      svg.appendChild(g);
+    }
+    return svg;
+  }
+
+  // ---- Mode D: Lineage DAG (expression derivation) --------------------------
+  function renderLineage(body) {
+    const card = el("div", { className: "card" });
+    const wrap = el("div", { className: "lib-heatmap-wrap" });
+    card.appendChild(wrap);
+    body.appendChild(card);
+    wrap.appendChild(el("div", { className: "muted" }, ctx.t("lin.computing")));
+    // Lineage is over the whole (visible) library; use checked subset if any.
+    const ids = ui.checked.size >= 2 ? [...ui.checked] : null;
+    ctx.api.factorLineage(ids, { limit: 200 })
+      .then((res) => {
+        if (ui.mode !== "lineage") return;
+        clear(wrap);
+        if (!res || !Array.isArray(res.nodes) || !res.nodes.length) {
+          wrap.appendChild(el("div", { className: "muted" }, ctx.t("lin.noData"))); return;
+        }
+        wrap.appendChild(buildLineage(res));
+      })
+      .catch((err) => { if (ui.mode === "lineage") viewError(card, "lin.unavailable", err); });
+  }
+
+  function buildLineage(res) {
+    const NS = "http://www.w3.org/2000/svg";
+    const nodes = res.nodes, edges = res.edges || [];
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    // Layer = longest path from a root (no incoming edge), so derivations flow right.
+    const inEdges = new Map(nodes.map((n) => [n.id, []]));
+    const outEdges = new Map(nodes.map((n) => [n.id, []]));
+    for (const e of edges) {
+      if (byId.has(e.from) && byId.has(e.to)) { inEdges.get(e.to).push(e.from); outEdges.get(e.from).push(e.to); }
+    }
+    const layer = new Map();
+    const visiting = new Set();
+    function layerOf(id) {
+      if (layer.has(id)) return layer.get(id);
+      if (visiting.has(id)) return 0; // cycle guard (shouldn't happen on a DAG)
+      visiting.add(id);
+      const parents = inEdges.get(id) || [];
+      const L = parents.length ? Math.max(...parents.map(layerOf)) + 1 : 0;
+      visiting.delete(id);
+      layer.set(id, L); return L;
+    }
+    for (const n of nodes) layerOf(n.id);
+    // bucket nodes by layer
+    const layers = [];
+    for (const n of nodes) { const L = layer.get(n.id); (layers[L] = layers[L] || []).push(n); }
+    const colW = 240, rowH = 56, nodeW = 200, nodeH = 38, padX = 20, padY = 20;
+    const W = padX * 2 + layers.length * colW;
+    const H = padY * 2 + Math.max(1, ...layers.map((l) => (l ? l.length : 0))) * rowH;
+    const pos = new Map();
+    layers.forEach((list, li) => {
+      (list || []).forEach((n, ri) => {
+        pos.set(n.id, { x: padX + li * colW, y: padY + ri * rowH + (rowH - nodeH) / 2 });
+      });
+    });
+
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", String(W));
+    svg.setAttribute("height", String(H)); svg.setAttribute("class", "chart");
+    // arrow marker (built programmatically — innerHTML is unreliable for SVG)
+    const defs = document.createElementNS(NS, "defs");
+    const marker = document.createElementNS(NS, "marker");
+    marker.setAttribute("id", "lin-arrow"); marker.setAttribute("viewBox", "0 0 10 10");
+    marker.setAttribute("refX", "9"); marker.setAttribute("refY", "5");
+    marker.setAttribute("markerWidth", "7"); marker.setAttribute("markerHeight", "7");
+    marker.setAttribute("orient", "auto-start-reverse");
+    const mpath = document.createElementNS(NS, "path");
+    mpath.setAttribute("d", "M0,0 L10,5 L0,10 z"); mpath.setAttribute("fill", "#9aa3b2");
+    marker.appendChild(mpath); defs.appendChild(marker); svg.appendChild(defs);
+    // edges first (under nodes)
+    for (const e of edges) {
+      const a = pos.get(e.from), b = pos.get(e.to);
+      if (!a || !b) continue;
+      const x1 = a.x + nodeW, y1 = a.y + nodeH / 2, x2 = b.x, y2 = b.y + nodeH / 2;
+      const mx = (x1 + x2) / 2;
+      const path = document.createElementNS(NS, "path");
+      path.setAttribute("d", `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
+      path.setAttribute("fill", "none"); path.setAttribute("stroke", "#9aa3b2"); path.setAttribute("stroke-width", "1.4");
+      path.setAttribute("marker-end", "url(#lin-arrow)");
+      svg.appendChild(path);
+    }
+    // nodes
+    const icirs = nodes.map((n) => Math.abs(Number(n.rank_icir) || 0));
+    const maxIcir = Math.max(...icirs, 0.01);
+    for (const n of nodes) {
+      const p = pos.get(n.id); if (!p) continue;
+      const g = document.createElementNS(NS, "g");
+      g.style.cursor = "pointer";
+      g.setAttribute("transform", `translate(${p.x},${p.y})`);
+      const rect = document.createElementNS(NS, "rect");
+      rect.setAttribute("width", String(nodeW)); rect.setAttribute("height", String(nodeH));
+      rect.setAttribute("rx", "7");
+      const intensity = Math.abs(Number(n.rank_icir) || 0) / maxIcir;
+      rect.setAttribute("fill", ctx.charts.seq(0.15 + 0.55 * intensity));
+      rect.setAttribute("stroke", "#0002");
+      g.appendChild(rect);
+      const t = document.createElementNS(NS, "text");
+      t.setAttribute("x", "10"); t.setAttribute("y", String(nodeH / 2 + 4)); t.setAttribute("font-size", "11");
+      t.textContent = truncate(n.expr, 26);
+      const tt = document.createElementNS(NS, "title");
+      tt.textContent = `${n.expr}\nRankICIR ${fmtMaybe(n.rank_icir, 2)} · depth ${n.depth}${n.source ? " · " + n.source : ""}`;
+      t.appendChild(tt);
+      g.appendChild(t);
+      g.addEventListener("click", () => selectFactor(n.id));
+      svg.appendChild(g);
+    }
+    return svg;
+  }
+
+  function emptyTwo(hint) {
+    return el("div", { className: "empty-state" },
+      el("div", { className: "empty-state-title" }, ctx.t("lib.selectTwo")),
+      el("div", { className: "muted" }, hint || ctx.t("lib.selectTwoHint")));
+  }
+  function fmtMaybe(v, dp) { const n = Number(v); return Number.isFinite(n) ? n.toFixed(dp) : "—"; }
 
   // ---- Mode A: Factor Detail ----------------------------------------------
   function renderDetail(body) {

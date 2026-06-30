@@ -173,6 +173,51 @@ def correlation_matrix(
     )
 
 
+@router.get("/ic-heatmap")
+def ic_heatmap(
+    factor_ids: str | None = Query(None, description="Comma-separated factor ids."),
+    universe: str | None = Query(None),
+    period: str | None = Query(None, description="start,end dates."),
+    as_of: str | None = Query(None),
+    adj: str | None = Query(None),
+    horizon: int | None = Query(None, description="Forward horizon (defaults to the smallest)."),
+    bucket: str = Query("month", description="month | quarter | week."),
+    api_key: str | None = Depends(get_api_key),
+) -> dict:
+    """Per-factor RankIC bucketed over time -> ``{factor_ids, periods, matrix, summary, ...}``."""
+    return get_service().ic_heatmap(
+        _split_ids(factor_ids), universe=universe, period=_parse_period(period),
+        as_of=as_of, adj=adj, horizon=horizon, bucket=bucket,
+    )
+
+
+@router.get("/embedding")
+def factor_embedding(
+    factor_ids: str | None = Query(None, description="Comma-separated factor ids."),
+    universe: str | None = Query(None),
+    period: str | None = Query(None, description="start,end dates."),
+    as_of: str | None = Query(None),
+    adj: str | None = Query(None),
+    method: str = Query("mds", description="mds | tsne | umap (falls back to mds)."),
+    api_key: str | None = Depends(get_api_key),
+) -> dict:
+    """2-D similarity map of factors -> ``{points:[{id, expr, x, y, cluster, ...}], method}``."""
+    return get_service().factor_embedding(
+        _split_ids(factor_ids), universe=universe, period=_parse_period(period),
+        as_of=as_of, adj=adj, method=method,
+    )
+
+
+@router.get("/lineage")
+def factor_lineage(
+    factor_ids: str | None = Query(None, description="Comma-separated factor ids (else top-N)."),
+    limit: int = Query(200, description="Max factors when no ids given."),
+    api_key: str | None = Depends(get_api_key),
+) -> dict:
+    """Expression-derivation DAG -> ``{nodes:[{id, expr, depth, ...}], edges:[{from, to}]}``."""
+    return get_service().factor_lineage(_split_ids(factor_ids) or None, limit=limit)
+
+
 @router.post("/prune", response_model=PruneResponse)
 def prune_factors(
     req: PruneRequest,
