@@ -107,3 +107,48 @@ def combine_factors(
         )
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# --------------------------------------------- saved combinations (reloadable) ---
+class SaveCombinationRequest(BaseModel):
+    """Persist an already-computed combination result under an optional ``name``."""
+
+    result: dict[str, Any] = Field(..., description="A successful combination payload (with weights).")
+    name: str | None = None
+
+
+@router.get("/saved")
+def list_saved(
+    include_last: bool = True, api_key: str | None = Depends(get_api_key),
+) -> dict[str, Any]:
+    """Saved combination runs (summaries), newest first; the rolling last run pinned first."""
+    return {"combinations": get_service().list_combinations(include_last=include_last)}
+
+
+@router.get("/saved/{combo_id}")
+def get_saved(combo_id: str, api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
+    """Full saved record ``{id, name, saved_at, result}`` for reload (the fitted model)."""
+    rec = get_service().get_combination(combo_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"combination {combo_id!r} not found")
+    return rec
+
+
+@router.post("/saved")
+def save_combination(
+    req: SaveCombinationRequest, api_key: str | None = Depends(get_api_key),
+) -> dict[str, Any]:
+    """Save a computed combination result as a named, reloadable record; returns its summary."""
+    try:
+        return get_service().save_combination(req.result, name=req.name)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/saved")
+def delete_saved(body: dict, api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
+    """Delete saved combination record(s). Body: ``{ids: [id, ...]}``."""
+    ids = (body or {}).get("ids") or []
+    if isinstance(ids, str):
+        ids = [ids]
+    return {"deleted": get_service().delete_combinations([str(i) for i in ids])}

@@ -61,6 +61,44 @@ def data_status(api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
     return orchestrate.status()
 
 
+@router.get("/v1/admin/data/usage", include_in_schema=False)
+def data_usage(api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
+    """Per-market on-disk footprint of the prepared ASSAY stores (size + breakdown)."""
+    return orchestrate.usage()
+
+
+# ------------------------------------------------------------------ test connection
+@router.post("/v1/admin/data/test", include_in_schema=False)
+def test_connection(body: dict, api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
+    """Test a provider's saved credentials. Body: ``{provider}`` (massive|tushare)."""
+    from assay.data import testconn
+
+    provider = str((body or {}).get("provider", "")).lower()
+    if provider not in ("massive", "tushare"):
+        raise HTTPException(status_code=422, detail="provider must be 'massive' or 'tushare'")
+    return testconn.test(provider)
+
+
+# ------------------------------------------------------------------ auto-update schedule
+@router.get("/v1/admin/schedule", include_in_schema=False)
+def get_schedule(api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
+    """Auto-update schedule state (per market: enabled / time / last / next run)."""
+    from assay.data import scheduler
+
+    return scheduler.status()
+
+
+@router.put("/v1/admin/schedule", include_in_schema=False)
+def put_schedule(patch: dict, api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
+    """Update the schedule. Body: ``{schedule: {us:{enabled,time}, cn:{...}}}`` (or flat)."""
+    from assay.data import scheduler
+
+    sched = (patch or {}).get("schedule", patch or {})
+    config_store.update({"schedule": sched})
+    scheduler.start()  # ensure the daemon is running once a schedule is set
+    return scheduler.status()
+
+
 # ------------------------------------------------------------------ jobs
 def _parse_date(s: str | None) -> dt.date | None:
     if not s:
@@ -73,18 +111,19 @@ def _parse_date(s: str | None) -> dt.date | None:
 
 @router.post("/v1/admin/data/jobs", include_in_schema=False)
 def start_job(body: dict, api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
-    """Queue an init/update pipeline job. Body: ``{market, mode, start?, end?}``.
+    """Queue a data pipeline job. Body: ``{market, mode, start?, end?}``.
 
-    ``market`` ∈ US|CN; ``mode`` ∈ init|update. When ``start``/``end`` are omitted they
-    default to the full history (init) or the incremental range since the last ingest
-    (update). Returns the queued job (no logs).
+    ``market`` ∈ US|CN; ``mode`` ∈ init|update|**ingest**. ``ingest`` skips the download
+    and only re-runs RAW→ASSAY (for when raw is already present). When ``start``/``end``
+    are omitted they default to the full history (init), the incremental range since the
+    last ingest (update), or last-ASSAY→latest-RAW (ingest). Returns the queued job.
     """
     market = str(body.get("market", "")).upper()
     mode = str(body.get("mode", "update")).lower()
     if market not in ("US", "CN"):
         raise HTTPException(status_code=422, detail="market must be US or CN")
-    if mode not in ("init", "update"):
-        raise HTTPException(status_code=422, detail="mode must be init or update")
+    if mode not in ("init", "update", "ingest"):
+        raise HTTPException(status_code=422, detail="mode must be init, update or ingest")
 
     d_start, d_end = orchestrate.default_range(market, mode)
     start = _parse_date(body.get("start")) or d_start

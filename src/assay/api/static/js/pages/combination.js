@@ -68,6 +68,10 @@ function injectStyle() {
 .cb-pos { color: var(--green, #1E7B4B); } .cb-neg { color: var(--red, #C0392B); }
 .cb-chosen { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
   font-size: 13px; background: var(--blue, #2D5BE3); color: #fff; padding: 3px 10px; border-radius: var(--radius-badge); }
+.cb-saved-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+.cb-saved-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  border: 1px solid var(--border); border-radius: var(--radius-badge); padding: var(--sp-2) var(--sp-3); }
+.cb-saved-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 `;
   document.head.appendChild(el("style", { id: STYLE_ID }, css));
 }
@@ -107,6 +111,7 @@ export function render(root, ctx) {
   const { api, store } = ctx;
   const cleanups = [];
   let controller = null;
+  let lastResult = null;   // most recent successful result (for Save + reload)
 
   const snap = store.get();
   const globalPeriod = snap.period;
@@ -216,6 +221,12 @@ export function render(root, ctx) {
       runStatus, runBtn));
 
   const resultsBody = ctx.el("div", {});
+  const savedBody = ctx.el("div", { className: "card-body" }, ctx.el("div", { className: "muted" }, "…"));
+  const savedRefresh = ctx.el("button", { className: "btn btn--sm", type: "button", onClick: () => loadSaved() }, "↻");
+  const savedCard = ctx.el("section", { className: "card" },
+    ctx.el("div", { className: "card-head", style: { justifyContent: "space-between" } },
+      ctx.el("span", { className: "card-title" }, ctx.t("combo.savedTitle")), savedRefresh),
+    savedBody);
 
   const page = ctx.el("div", { className: "page cb-page" },
     ctx.el("div", { className: "page-header" },
@@ -230,9 +241,11 @@ export function render(root, ctx) {
         factorsTa,
         ctx.el("div", { className: "cb-hint", style: { marginTop: "6px" } }, ctx.t("combo.factorsHint")))),
     ctx.el("section", { className: "card" }, ctx.el("div", { className: "card-body" }, form)),
+    savedCard,
     resultsBody);
   root.replaceChildren(page);
   renderIdle();
+  loadSaved();
 
   // ---------------------------------------------------------------- run ----
   function buildBody() {
@@ -305,6 +318,7 @@ export function render(root, ctx) {
 
   function renderResult(out) {
     if (!out) { renderIdle(); return; }
+    if (!out.failure) lastResult = out;   // capture for Save / reload
     if (out.failure) {
       resultsBody.replaceChildren(ctx.el("section", { className: "card" },
         ctx.el("div", { className: "card-body" },
@@ -314,13 +328,16 @@ export function render(root, ctx) {
       return;
     }
 
+    const saveBtn = ctx.el("button", { className: "btn btn--sm btn--primary", type: "button",
+      onClick: () => saveCurrent(saveBtn) }, "💾 " + ctx.t("combo.save"));
     const head = ctx.el("section", { className: "card" },
-      ctx.el("div", { className: "card-head" },
+      ctx.el("div", { className: "card-head", style: { justifyContent: "space-between" } },
         ctx.el("div", { className: "flex items-center", style: { gap: "10px", flexWrap: "wrap" } },
           ctx.el("span", { className: "card-title" }, ctx.t("combo.chosen")),
           ctx.el("span", { className: "cb-chosen" }, ctx.t("combo.m_" + out.method) || out.method),
           ctx.el("span", { className: "cb-hint" },
-            `${out.standardize} · h=${out.horizon} · ${ctx.t("combo.turnover")}: ${fmtNum(out.diagnostics && out.diagnostics.composite_turnover_1d, 3)}`))),
+            `${out.standardize} · h=${out.horizon} · ${ctx.t("combo.turnover")}: ${fmtNum(out.diagnostics && out.diagnostics.composite_turnover_1d, 3)}`)),
+        saveBtn),
       ctx.el("div", { className: "card-body" }, buildScorecard(out)));
 
     const weightsCard = ctx.el("section", { className: "card" },
@@ -343,8 +360,8 @@ export function render(root, ctx) {
       ...["combo.split", "Information Coefficient", "ICIR", "RankIC", "RankICIR", "combo.nDates"]
         .map((k, i) => ctx.el("th", {}, i === 1 ? "IC" : (k.startsWith("combo.") ? ctx.t(k) : k)))));
     const tbody = ctx.el("tbody", {});
-    for (const [label, m] of rows) {
-      m = m || {};
+    for (const [label, mRaw] of rows) {
+      const m = mRaw || {};
       tbody.appendChild(ctx.el("tr", {},
         ctx.el("td", {}, ctx.t(label)),
         cell(m.ic, 4, true), cell(m.icir, 3, true), cell(m.rank_ic, 4, true), cell(m.rank_icir, 3, true),
@@ -422,6 +439,68 @@ export function render(root, ctx) {
     return ctx.el("details", { className: "card" },
       ctx.el("summary", { style: { cursor: "pointer", padding: "var(--sp-3)" }, className: "card-title" }, ctx.t("combo.fullJson")),
       ctx.el("div", { className: "card-body" }, ctx.el("pre", { className: "cb-json" }, safeJson(out))));
+  }
+
+  // ------------------------------------------------------ saved combinations ----
+  function saveCurrent(btn) {
+    if (!lastResult) { toast(ctx, ctx.t("combo.enterFactors"), true); return; }
+    const name = window.prompt(ctx.t("combo.saveName"), suggestName(lastResult));
+    if (name === null) return;  // cancelled
+    if (btn) btn.disabled = true;
+    api.saveCombination(lastResult, name.trim())
+      .then(() => { toast(ctx, ctx.t("combo.saved")); loadSaved(); })
+      .catch((err) => toast(ctx, ctx.t("combo.saveFail") + ": " + ((err && err.message) || err), true))
+      .finally(() => { if (btn) btn.disabled = false; });
+  }
+
+  function suggestName(out) {
+    const m = ctx.t("combo.m_" + out.method) || out.method;
+    return `${m} · ${(out.factor_names || []).length}f · ${out.universe || ""}`.trim();
+  }
+
+  function loadSaved() {
+    api.savedCombinations()
+      .then((res) => renderSaved(res && res.combinations ? res.combinations : []))
+      .catch((err) => { savedBody.replaceChildren(ctx.el("div", { className: "cb-hint" }, (err && err.message) || "—")); });
+  }
+
+  function renderSaved(list) {
+    if (!list.length) {
+      savedBody.replaceChildren(ctx.el("div", { className: "muted" }, ctx.t("combo.noSaved")));
+      return;
+    }
+    const rows = list.map((s) => {
+      const title = s.is_last ? ctx.t("combo.lastRun") : (s.name || s.id);
+      const meta = `${ctx.t("combo.m_" + s.method) || s.method} · ${s.n_factors}f · ${s.universe || "—"}`
+        + ` · testICIR ${fmtNum(s.test_icir, 2)}`;
+      const when = (s.saved_at || "").slice(0, 16).replace("T", " ");
+      const reloadBtn = ctx.el("button", { className: "btn btn--sm", type: "button",
+        onClick: () => reloadSaved(s.id) }, ctx.t("combo.reload"));
+      const delBtn = ctx.el("button", { className: "btn btn--sm", type: "button", title: ctx.t("combo.delete"),
+        onClick: () => deleteSaved(s.id) }, "✕");
+      return ctx.el("div", { className: "cb-saved-row" },
+        ctx.el("div", { style: { minWidth: "0", flex: "1" } },
+          ctx.el("div", { className: "cb-saved-name", title }, s.is_last ? "★ " + title : title),
+          ctx.el("div", { className: "cb-hint", style: { fontFamily: "var(--font-mono)" } }, meta),
+          ctx.el("div", { className: "cb-hint" }, when)),
+        ctx.el("span", { className: "flex items-center gap-1" }, reloadBtn, delBtn));
+    });
+    savedBody.replaceChildren(ctx.el("div", { className: "cb-saved-list" }, ...rows));
+  }
+
+  function reloadSaved(id) {
+    savedRefresh.disabled = true;
+    api.savedCombination(id)
+      .then((rec) => { renderResult(rec && rec.result); if (rec && rec.result) { runStatus.className = "cb-latency muted"; runStatus.textContent = ""; } })
+      .catch((err) => toast(ctx, (err && err.message) || "—", true))
+      .finally(() => { savedRefresh.disabled = false; });
+  }
+
+  function deleteSaved(id) {
+    if (!window.confirm(ctx.t("combo.confirmDelete"))) return;
+    api.deleteCombinations([id])
+      .then(() => { toast(ctx, ctx.t("combo.deleted")); loadSaved(); })
+      .catch((err) => toast(ctx, (err && err.message) || "—", true));
   }
 
   return () => { if (controller) controller.abort(); cleanups.forEach((fn) => { try { fn(); } catch (_) {} }); };

@@ -22,6 +22,7 @@ from assay.library.correlation import (
     prune,
     redundancy_score,
 )
+from assay.library.combination_store import CombinationStore
 from assay.library.report import FactorReport, FactorSummary, Lineage
 from assay.library.store import FactorLibrary
 
@@ -30,6 +31,7 @@ __all__ = [
     "FactorSummary",
     "Lineage",
     "FactorLibrary",
+    "CombinationStore",
     "factor_similarity",
     "correlation_matrix",
     "redundancy_score",

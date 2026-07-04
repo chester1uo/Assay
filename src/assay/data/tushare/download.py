@@ -85,6 +85,11 @@ class TushareDownloadConfig:
     calls_per_min: int = 380
     max_workers: int = 8
     force: bool = False
+    # Incremental update: fetch the date window BY trade_date (all symbols per call)
+    # and append to the per-symbol files, instead of the per-symbol full-history pull.
+    # ~n_dates × n_endpoints calls instead of n_symbols × n_endpoints — and it actually
+    # extends existing files (the per-symbol path skips them by resume-on-existence).
+    incremental: bool = False
     # Cap the per-market symbol universe for a quick smoke test (0 = no cap).
     limit_symbols: int = 0
 
@@ -305,6 +310,7 @@ def _run_symbol_pool(
     symbols: list[str],
     jobs: list[tuple[str, str, dict]],
     label: str,
+    progress=None,
 ) -> dict:
     """Run (api, subdir, extra_params) jobs across ``symbols`` in a thread pool.
 
@@ -355,6 +361,9 @@ def _run_symbol_pool(
                     "%s %d/%d symbols (ok=%d empty=%d skip=%d err=%d)",
                     label, done, total, counts["ok"], counts["empty"], counts["skip"], counts["error"],
                 )
+                if progress:
+                    progress(done / total, f"{label} {jobs[0][1]}…: {done}/{total} symbols "
+                                           f"({counts['ok']} new, {counts['skip']} cached)")
 
     if aborted:
         counts["aborted"] = aborted
@@ -372,6 +381,7 @@ def run_cn_symbols(
     cfg: TushareDownloadConfig,
     symbols: list[str],
     steps: set[str],
+    progress=None,
 ) -> dict:
     """Per-symbol CN price / adj / valuation / dividend, for the selected steps."""
     jobs: list[tuple[str, str, dict]] = []
@@ -390,7 +400,104 @@ def run_cn_symbols(
         jobs.append(("stk_limit", "stk_limit", date))
     if not jobs:
         return {}
-    return _run_symbol_pool(client, cfg, symbols, jobs, "cn")
+    return _run_symbol_pool(client, cfg, symbols, jobs, "cn", progress=progress)
+
+
+# ---------------------------------------------------------------------------
+# incremental CN update — fetch BY trade_date, append to per-symbol files
+# ---------------------------------------------------------------------------
+
+# (step, subdir, api, date_param) for the endpoints that support a bulk by-date pull.
+_CN_BYDATE = (
+    ("cn_prices", "daily", "daily", "trade_date"),
+    ("cn_adj", "adj_factor", "adj_factor", "trade_date"),
+    ("cn_basic", "daily_basic", "daily_basic", "trade_date"),
+    ("cn_limit", "stk_limit", "stk_limit", "trade_date"),
+    ("cn_dividend", "dividend", "dividend", "ex_date"),
+)
+
+
+def _open_trade_dates(client: TushareClient, cfg: TushareDownloadConfig) -> list[str]:
+    """Open SSE trading dates (YYYYMMDD, ascending) in ``[start, end]``."""
+    df = client.call(
+        "trade_cal",
+        {"exchange": "SSE", "start_date": cfg.start_date, "end_date": cfg.end_date},
+        "cal_date,is_open",
+    )
+    if not df.height:
+        return []
+    open_df = df.filter(pl.col("is_open").cast(pl.Utf8).is_in(["1", "1.0"]))
+    return sorted(open_df["cal_date"].cast(pl.Utf8).to_list())
+
+
+def _append_symbol_parquet(path: Path, new_df) -> None:
+    """Merge ``new_df`` into the per-symbol parquet, de-duped and sorted."""
+    if _exists_nonempty(path):
+        try:
+            old = pl.read_parquet(path)
+            merged = pl.concat([old, new_df], how="diagonal_relaxed")
+        except Exception:  # noqa: BLE001 — a corrupt prior file: replace rather than fail
+            merged = new_df
+    else:
+        merged = new_df
+    if "trade_date" in merged.columns:
+        merged = merged.unique(subset=["trade_date"], keep="last").sort("trade_date")
+    else:  # dividend etc. — no trade_date; dedup on the whole row
+        merged = merged.unique(keep="last")
+    write_parquet_atomic(merged, path)
+
+
+def run_cn_by_date(
+    client: TushareClient,
+    cfg: TushareDownloadConfig,
+    symbols: list[str],
+    steps: set[str],
+    progress=None,
+) -> dict:
+    """Incremental CN update: pull each endpoint by trade_date and append per symbol.
+
+    Only the ``symbols`` universe is touched (by-date responses cover the whole
+    market). ``progress(frac, msg)`` is called as ``(endpoint, date)`` advance.
+    """
+    endpoints = [(subdir, api, dparam) for (step, subdir, api, dparam) in _CN_BYDATE if step in steps]
+    if not endpoints:
+        return {}
+    if cfg.limit_symbols:
+        symbols = symbols[: cfg.limit_symbols]
+    sym_set = set(symbols)
+    dates = _open_trade_dates(client, cfg)
+    counts = {"dates": len(dates), "calls": 0, "rows": 0, "symbols_touched": 0, "by_store": {}}
+    if not dates:
+        return counts
+
+    total = max(1, len(endpoints) * len(dates))
+    step_i = 0
+    for subdir, api, dparam in endpoints:
+        buf: dict[str, list] = {}
+        for d in dates:
+            try:
+                df = client.call_paged(api, {dparam: d})
+            except (TusharePermissionError, TushareQuotaError) as exc:
+                log.warning("cn by-date %s unavailable: %s", subdir, exc.msg)
+                break
+            counts["calls"] += 1
+            if df.height and "ts_code" in df.columns:
+                df = df.filter(pl.col("ts_code").cast(pl.Utf8).is_in(list(sym_set)))
+                for (code,), sub in df.group_by(["ts_code"], maintain_order=True):
+                    buf.setdefault(str(code), []).append(sub)
+                counts["rows"] += df.height
+            step_i += 1
+            if progress:
+                progress(step_i / total, f"{subdir}: date {dates.index(d) + 1}/{len(dates)} ({d})")
+        touched = 0
+        for code, frames in buf.items():
+            new_df = pl.concat(frames, how="vertical_relaxed") if len(frames) > 1 else frames[0]
+            _append_symbol_parquet(cfg.p("cn", subdir, f"{code}.parquet"), new_df)
+            touched += 1
+        counts["symbols_touched"] += touched
+        counts["by_store"][subdir] = {"symbols": touched}
+        log.info("cn by-date %s: %d dates → %d symbols appended", subdir, len(dates), touched)
+    return counts
 
 
 # ---------------------------------------------------------------------------
@@ -438,10 +545,18 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def run_download(cfg: TushareDownloadConfig, steps: set[str] | None = None) -> dict:
-    """Execute the selected steps and write the run manifest. Returns the manifest."""
+def run_download(cfg: TushareDownloadConfig, steps: set[str] | None = None, progress=None) -> dict:
+    """Execute the selected steps and write the run manifest. Returns the manifest.
+
+    ``progress(frac, msg)`` (optional) is called with overall download progress in
+    ``[0, 1]`` so a UI can show a moving bar + which step/date is downloading.
+    """
     steps = set(steps) if steps else set(ALL_STEPS)
     client = TushareClient(cfg.token, calls_per_min=cfg.calls_per_min)
+
+    def _say(frac: float, msg: str) -> None:
+        if progress:
+            progress(max(0.0, min(1.0, frac)), msg)
     started = dt.datetime.now()
     manifest: dict = {
         "started": started.isoformat(timespec="seconds"),
@@ -468,6 +583,7 @@ def run_download(cfg: TushareDownloadConfig, steps: set[str] | None = None) -> d
 
     if "meta" in steps:
         log.info("=== step: meta ===")
+        _say(0.02, "meta (stock list, calendar) …")
         res = guard("meta", lambda: run_meta(client, cfg))
         if res is not None:
             manifest["results"]["meta"] = res
@@ -475,24 +591,33 @@ def run_download(cfg: TushareDownloadConfig, steps: set[str] | None = None) -> d
     cn_symbols: list[str] = []
     if "cn_universe" in steps or steps & set(CN_SYMBOL_STEPS):
         log.info("=== step: cn_universe ===")
+        _say(0.06, "cn universe (index membership) …")
         cn_symbols = guard("cn_universe", lambda: run_cn_universe(client, cfg)) or []
         manifest["results"].setdefault("cn_universe", {"union_symbols": len(cn_symbols)})
 
     if steps & set(CN_SYMBOL_STEPS) and cn_symbols:
-        log.info("=== step: cn per-symbol (%s) ===", ",".join(sorted(steps & set(CN_SYMBOL_STEPS))))
-        manifest["results"]["cn_symbols"] = run_cn_symbols(client, cfg, cn_symbols, steps)
+        cn_prog = lambda f, m: _say(0.10 + 0.80 * f, m)  # noqa: E731 — cn step owns 10%..90%
+        if cfg.incremental:
+            log.info("=== step: cn by-date incremental (%s) ===", ",".join(sorted(steps & set(CN_SYMBOL_STEPS))))
+            manifest["results"]["cn_bydate"] = run_cn_by_date(client, cfg, cn_symbols, steps, progress=cn_prog)
+        else:
+            log.info("=== step: cn per-symbol (%s) ===", ",".join(sorted(steps & set(CN_SYMBOL_STEPS))))
+            manifest["results"]["cn_symbols"] = run_cn_symbols(client, cfg, cn_symbols, steps, progress=cn_prog)
 
     if "hk_index" in steps:
         log.info("=== step: hk_index ===")
+        _say(0.92, "hk index …")
         res = guard("hk_index", lambda: run_hk_index(client, cfg))
         if res is not None:
             manifest["results"]["hk_index"] = res
 
     if "hk_prices" in steps:
         log.info("=== step: hk_prices ===")
+        _say(0.95, "hk prices …")
         res = guard("hk_prices", lambda: run_hk_symbols(client, cfg))
         if res is not None:
             manifest["results"]["hk_prices"] = res
+    _say(1.0, "download complete")
 
     finished = dt.datetime.now()
     manifest["finished"] = finished.isoformat(timespec="seconds")
