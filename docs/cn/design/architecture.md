@@ -1,55 +1,55 @@
-# Assay — Full-Stack Architecture Design
+# Assay — 全栈架构设计
 
-**Version:** 0.1 · Draft  
-**Scope:** Functional API · REST API · WebUI · MCP for Agents
+**版本：** 0.1 · 草案  
+**范围：** 函数式 API · REST API · WebUI · 面向 Agent 的 MCP
 
-> **Implementation status (2026-06).** The **entire Python backend is now implemented and
-> tested** (662 offline tests green): data layer, factor engine, the IC/RankIC/decay/groups/
-> turnover **evaluator**, the **factor library** (persistence + correlation + redundancy +
-> prune), the **`AssayService`** singleton (evaluate / batch / sessions / streaming), the
-> **Python SDK** (`assay.backtest/batch_backtest/Session/library/stream`), the **REST API**
-> (FastAPI + SSE), the **MCP server** (8 FastMCP tools, stdio + SSE/HTTP), and the **CLI**
-> (`run`/`batch`/`report`/`library`/`serve-api`/`serve-mcp`). See [`src/assay/`](../../src/assay/).
+> **实现状态（2026-06）。** **整个 Python 后端现已实现并
+> 通过测试**（662 项离线测试全部通过）：数据层、因子引擎、IC/RankIC/衰减/分组/
+> 换手率**评估器**、**因子库**（持久化 + 相关性 + 冗余度 +
+> 剪枝）、**`AssayService`** 单例（evaluate / batch / sessions / streaming）、
+> **Python SDK**（`assay.backtest/batch_backtest/Session/library/stream`）、**REST API**
+> （FastAPI + SSE）、**MCP 服务器**（8 个 FastMCP 工具，stdio + SSE/HTTP），以及 **CLI**
+> （`run`/`batch`/`report`/`library`/`serve-api`/`serve-mcp`）。参见 [`src/assay/`](../../../src/assay/)。
 >
-> Still **planned**: the React **WebUI** (§5, no `assay-ui/` yet); and two performance
-> optimizations the backend works correctly without — the **L1 Arena / incremental O(1)
-> cache** (only a session cache + L2 disk cache exist today) and **DAG/CSE batch merging**
-> (`batch()` evaluates factors independently for now). Sections are tagged accordingly.
+> 仍在**规划中**：React **WebUI**（§5，尚无 `assay-ui/`）；以及两项性能
+> 优化，后端在缺少它们的情况下仍可正确工作——**L1 Arena / 增量 O(1)
+> 缓存**（目前仅有会话缓存 + L2 磁盘缓存）和 **DAG/CSE 批量合并**
+> （`batch()` 目前独立评估各因子）。相关章节均已相应标注。
 >
-> Status legend — ✅ **Implemented** · 🔶 **Implemented, simplified vs spec** · 📋 **Planned**
+> 状态图例——✅ **已实现** · 🔶 **已实现，相较规范有所简化** · 📋 **规划中**
 >
-> The single universe wired up end-to-end today is **NASDAQ-100** (PIT constituent
-> history from MASSIVE); SP500 / Russell 2000 are roadmap. The data source is **MASSIVE**
-> US-equity day aggregates, which provide OHLCV + transaction count but **no `vwap`**.
+> 当前唯一端到端打通的股票池是 **NASDAQ-100**（来自 MASSIVE 的点对点(PIT) 成分股
+> 历史）；SP500 / Russell 2000 在路线图中。数据源为 **MASSIVE**
+> 美股日聚合数据，提供 OHLCV + 成交笔数，但**没有 `vwap`**。
 
 ---
 
-## Table of Contents
+## 目录
 
-1. [Architecture Overview](#1-architecture-overview)
-2. [Core Engine (Shared Backend)](#2-core-engine-shared-backend)
-3. [Functional Python API](#3-functional-python-api)
+1. [架构概览](#1-架构概览)
+2. [核心引擎（共享后端）](#2-核心引擎共享后端)
+3. [函数式 Python API](#3-函数式-python-api)
 4. [REST API](#4-rest-api)
-5. [WebUI Frontend](#5-webui-frontend)
-6. [MCP Server for Agents](#6-mcp-server-for-agents)
-7. [Cross-Cutting Concerns](#7-cross-cutting-concerns)
-8. [Deployment](#8-deployment)
+5. [WebUI 前端](#5-webui-前端)
+6. [面向 Agent 的 MCP 服务器](#6-面向-agent-的-mcp-服务器)
+7. [横切关注点](#7-横切关注点)
+8. [部署](#8-部署)
 
 ---
 
-## 1. Architecture Overview
+## 1. 架构概览
 
-### 1.1  Design philosophy
+### 1.1  设计理念
 
-Assay exposes four consumption surfaces over a single shared engine. Every surface calls the same underlying computation, cache, and data layer — there is no "API version" of a result vs a "SDK version". This means:
+Assay 在单一共享引擎之上暴露四个消费界面。每个界面都调用同一套底层计算、缓存和数据层——不存在结果的"API 版本"与"SDK 版本"之分。这意味着：
 
-- A factor evaluated via Python SDK, REST API, WebUI, or MCP agent call produces an identical `FactorReport`
-- Cache is shared across all surfaces — a REST call that warms the L1 operator cache benefits a subsequent SDK call
-- Auth, rate limiting, and lineage tracking apply uniformly regardless of entry point
+- 通过 Python SDK、REST API、WebUI 或 MCP agent 调用评估的因子会产生完全相同的 `FactorReport`
+- 缓存在所有界面之间共享——一个预热了 L1 算子缓存的 REST 调用会让后续的 SDK 调用受益
+- 无论从哪个入口进入，认证、限流和血缘追踪都统一适用
 
-### 1.2  Layer diagram
+### 1.2  分层图
 
-Boxes are tagged with their build status: ✅ implemented, 🔶 partial, 📋 planned.
+方框标注了其构建状态：✅ 已实现，🔶 部分实现，📋 规划中。
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -84,36 +84,36 @@ Boxes are tagged with their build status: ✅ implemented, 🔶 partial, 📋 pl
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-Built today: the full stack except the React WebUI — `DataStore`, `FactorEngine` +
-dual-syntax parser + operators + diagnostics, the IC/decay/groups/turnover `Evaluator`,
-the `FactorLibrary`, the `AssayService` facade, and the SDK / REST / MCP / CLI surfaces.
-The cache is a session + L2-disk cache (the L1 Arena and incremental O(1) update layer
-remain a perf optimization), and `batch()` runs factors independently (DAG/CSE is future).
+今日已构建：除 React WebUI 外的完整栈——`DataStore`、`FactorEngine` +
+双语法解析器 + 算子 + 诊断、IC/衰减/分组/换手率 `Evaluator`、
+`FactorLibrary`、`AssayService` 外观类，以及 SDK / REST / MCP / CLI 界面。
+缓存是会话 + L2 磁盘缓存（L1 Arena 和增量 O(1) 更新层
+仍是一项性能优化），且 `batch()` 独立运行各因子（DAG/CSE 属于未来工作）。
 
-### 1.3  Surface comparison
+### 1.3  界面对比
 
-Latency targets remain design goals (no L1 cache / DAG-CSE yet), but all four code
-surfaces below except the WebUI are implemented and tested.
+延迟目标仍是设计目标（尚无 L1 缓存 / DAG-CSE），但下面除 WebUI 外的
+四个代码界面均已实现并通过测试。
 
-| Surface | Protocol | Auth | Latency target | Primary user | Status |
+| 界面 | 协议 | 认证 | 延迟目标 | 主要用户 | 状态 |
 |---|---|---|---|---|---|
-| Python SDK | In-process | None (local) | < 400ms warm | Researcher, notebook | ✅ `assay.backtest/batch_backtest/Session/library/stream` |
-| REST API | HTTP/SSE | API key (optional) | < 500ms warm | External apps, CI | ✅ FastAPI + SSE, all `/v1/*` routes |
-| WebUI | HTTP → REST | same-origin | < 600ms warm | Human researcher | 🔶 zero-install vanilla-JS app (`api/static/`, served by FastAPI); React stack is the target rebuild |
-| MCP Server | JSON-RPC (stdio/SSE) | API key | < 600ms warm | LLM agent | ✅ FastMCP, 11 tools, stdio + SSE |
+| Python SDK | 进程内 | 无（本地） | 热态 < 400ms | 研究员、notebook | ✅ `assay.backtest/batch_backtest/Session/library/stream` |
+| REST API | HTTP/SSE | API key（可选） | 热态 < 500ms | 外部应用、CI | ✅ FastAPI + SSE，所有 `/v1/*` 路由 |
+| WebUI | HTTP → REST | 同源 | 热态 < 600ms | 人类研究员 | 🔶 零安装 vanilla-JS 应用（`api/static/`，由 FastAPI 提供服务）；React 栈是目标重建方案 |
+| MCP 服务器 | JSON-RPC (stdio/SSE) | API key | 热态 < 600ms | LLM agent | ✅ FastMCP，11 个工具，stdio + SSE |
 
 ---
 
-## 2. Core Engine (Shared Backend)
+## 2. 核心引擎（共享后端）
 
-> **Status: ✅ Implemented** ([`src/assay/service.py`](../../src/assay/service.py)). The
-> `AssayService` singleton, sessions, streaming, and library wiring all exist. The sketch
-> below matches the shipped API closely; the live constructor wires `DataStore` (lazily),
-> `FactorLibrary`, the `L2FactorCache`, and a `SessionRegistry`. `batch()` is implemented
-> via a thread pool (DAG/CSE merging is still a future optimization). See §2.1 for a minimal
-> direct-engine path that bypasses the service.
+> **状态：✅ 已实现**（[`src/assay/service.py`](../../../src/assay/service.py)）。
+> `AssayService` 单例、会话、流式和库接线均已存在。下方的草图
+> 与已发布的 API 高度吻合；实际构造函数会（惰性地）接入 `DataStore`、
+> `FactorLibrary`、`L2FactorCache` 和 `SessionRegistry`。`batch()` 通过
+> 线程池实现（DAG/CSE 合并仍是未来的优化）。关于绕过 service 的最小化
+> 直连引擎路径，参见 §2.1。
 
-All four surfaces route through `AssayService`, which owns the engine, cache, and data access. It is never instantiated more than once per process.
+所有四个界面都路由经过 `AssayService`，它持有引擎、缓存和数据访问。每个进程中它绝不会被实例化超过一次。
 
 ```python
 # assay/service.py   ✅ IMPLEMENTED (sketch — see source for the exact signature)
@@ -188,13 +188,13 @@ class AssayService:
         ...
 ```
 
-### 2.1  What exists today — the engine entry point ✅
+### 2.1  今日已有——引擎入口点 ✅
 
-Until `AssayService` lands, the engine is driven directly. A `DataStore` reads a
-point-in-time panel; `FactorEngine.from_store` pivots it into aligned `(T, N)` matrices
-and evaluates a parsed expression. This is the real, runnable cold path
-([`src/assay/engine/engine.py`](../../src/assay/engine/engine.py),
-[`src/assay/data/store/datastore.py`](../../src/assay/data/store/datastore.py)):
+在 `AssayService` 落地之前，引擎是被直接驱动的。`DataStore` 读取一个
+点对点面板；`FactorEngine.from_store` 将其透视为对齐的 `(T, N)` 矩阵
+并评估一个已解析的表达式。这是真实、可运行的冷路径
+（[`src/assay/engine/engine.py`](../../../src/assay/engine/engine.py)、
+[`src/assay/data/store/datastore.py`](../../../src/assay/data/store/datastore.py)）：
 
 ```python
 from assay.config import AssayConfig
@@ -224,23 +224,23 @@ fd.to_dict()         # {status, failure_mode, errors[], warnings[], stats}
 lint("ts_mean(close,").to_dict()                  # ASSAY-P00x parse diagnostic
 ```
 
-The IC/RankIC evaluator, forward returns, cache and `FactorReport` assembly are **now
-implemented** — `AssayService.evaluate()` returns a scored `FactorReport` (the §2.1 engine
-path here is just the lowest-level primitive). Batch DAG/CSE merging remains the one
-unbuilt performance item; `service.batch()` works but evaluates factors independently.
+IC/RankIC 评估器、前向收益、缓存和 `FactorReport` 组装**现已
+实现**——`AssayService.evaluate()` 返回一个已评分的 `FactorReport`（这里 §2.1 的引擎
+路径只是最底层的原语）。批量 DAG/CSE 合并仍是唯一
+未构建的性能项；`service.batch()` 可以工作，但独立评估各因子。
 
 ---
 
-## 3. Functional Python API
+## 3. 函数式 Python API
 
-> **Status: ✅ Implemented** ([`src/assay/__init__.py`](../../src/assay/__init__.py)). The full
-> SDK below — `assay.init`, `assay.backtest`, `assay.batch_backtest`, `assay.Session`,
-> `assay.library`, `assay.stream` — is shipped and tested. `assay.init()` reads config from
-> the environment / project `.env`; `backtest()` auto-initializes if you skip it.
+> **状态：✅ 已实现**（[`src/assay/__init__.py`](../../../src/assay/__init__.py)）。下方完整的
+> SDK——`assay.init`、`assay.backtest`、`assay.batch_backtest`、`assay.Session`、
+> `assay.library`、`assay.stream`——均已发布并测试。`assay.init()` 从
+> 环境 / 项目 `.env` 读取配置；`backtest()` 若你跳过它会自动初始化。
 
-The SDK is a thin, ergonomic wrapper over `AssayService`. It is the lowest-latency surface because it runs in-process with no serialization.
+SDK 是 `AssayService` 之上一个轻薄、符合人体工学的封装。它是延迟最低的界面，因为它进程内运行，没有序列化开销。
 
-### 3.1  Installation and initialization 📋
+### 3.1  安装与初始化 📋
 
 ```python
 pip install assay-engine          # 📋 not yet published; install from source (§8.1)
@@ -251,7 +251,7 @@ import assay
 assay.init()                       # 📋 planned; today: AssayConfig.from_env()
 ```
 
-### 3.2  Single factor evaluation
+### 3.2  单因子评估
 
 ```python
 # Minimal
@@ -281,7 +281,7 @@ report.to_json()                      # JSON string
 report.to_dataframe()                 # pd.DataFrame of IC time series
 ```
 
-### 3.3  Batch evaluation
+### 3.3  批量评估
 
 ```python
 factors = [
@@ -304,7 +304,7 @@ for r in reports[:5]:
     print(f"{r.expr:<50}  IC={r.rank_ic:.3f}  ICIR={r.rank_icir:.2f}")
 ```
 
-### 3.4  Session context (amortize setup costs)
+### 3.4  会话上下文（摊薄设置成本）
 
 ```python
 # Session pre-loads the data panel and forward returns once.
@@ -322,7 +322,7 @@ with assay.Session(
     reports = sess.batch_backtest(factors, n_jobs=8)
 ```
 
-### 3.5  Custom Python factor functions
+### 3.5  自定义 Python 因子函数
 
 ```python
 import polars as pl
@@ -339,7 +339,7 @@ def my_factor(df: pl.DataFrame) -> pl.Series:
 report = assay.backtest(my_factor, universe="NASDAQ100")   # 📋 custom-fn path planned
 ```
 
-### 3.6  Factor library access
+### 3.6  因子库访问
 
 ```python
 # Query the library
@@ -361,7 +361,7 @@ assay.library.delete(factor_id="abc123")
 assay.library.prune(redundancy_threshold=0.7, dry_run=True)
 ```
 
-### 3.7  Streaming (async)
+### 3.7  流式（异步）
 
 ```python
 import asyncio
@@ -380,14 +380,14 @@ asyncio.run(watch_evaluation())
 
 ## 4. REST API
 
-> **Status: ✅ Implemented** ([`src/assay/api/`](../../src/assay/api/)). The FastAPI app, all
-> `/v1/*` routes, SSE streaming, optional API-key auth (`ASSAY_API_KEYS`; open if unset),
-> and the diagnostics-based error schema (§4.6) are shipped and tested. Run it with
-> `python -m assay.cli serve-api` (or `uvicorn assay.api.app:app`).
+> **状态：✅ 已实现**（[`src/assay/api/`](../../../src/assay/api/)）。FastAPI 应用、所有
+> `/v1/*` 路由、SSE 流式、可选的 API-key 认证（`ASSAY_API_KEYS`；未设置则开放），
+> 以及基于诊断的错误 schema（§4.6）均已发布并测试。以
+> `python -m assay.cli serve-api`（或 `uvicorn assay.api.app:app`）运行它。
 
-The REST API is a FastAPI application. It exposes the same `AssayService` methods over HTTP. Streaming evaluation uses Server-Sent Events (SSE).
+REST API 是一个 FastAPI 应用。它在 HTTP 之上暴露相同的 `AssayService` 方法。流式评估使用 Server-Sent Events (SSE)。
 
-### 4.1  Base URL and versioning
+### 4.1  基础 URL 与版本控制
 
 ```
 Base URL:  https://api.assay.local/v1
@@ -395,11 +395,11 @@ Auth:      X-API-Key header (or Bearer token for WebUI sessions)
 Format:    application/json (default), text/event-stream (SSE)
 ```
 
-### 4.2  Evaluation endpoints
+### 4.2  评估端点
 
 #### `POST /v1/factor/evaluate`
 
-Evaluate a single factor. Supports both blocking (returns full report) and streaming (SSE events) modes.
+评估单个因子。同时支持阻塞（返回完整报告）和流式（SSE 事件）两种模式。
 
 ```
 Request:
@@ -441,7 +441,7 @@ Response (stream=true):
 
 #### `POST /v1/factor/batch`
 
-Evaluate a list of factors in parallel. Returns when all complete.
+并行评估一列表因子。全部完成时返回。
 
 ```
 Request:
@@ -464,7 +464,7 @@ Response:
 
 #### `POST /v1/session/create`
 
-Create a session that pre-loads the data panel. Subsequent evaluate calls in the session skip the panel load (~265ms saved per factor).
+创建一个预加载数据面板的会话。会话中后续的 evaluate 调用会跳过面板加载（每个因子节省约 265ms）。
 
 ```
 Request:
@@ -478,7 +478,7 @@ Usage:
   → panel load skipped, hot path only (~40ms)
 ```
 
-### 4.3  Library endpoints
+### 4.3  库端点
 
 ```
 GET  /v1/library/factors
@@ -510,7 +510,7 @@ POST /v1/library/prune
   → { "would_delete": ["abc123", ...], "count": 14 }
 ```
 
-### 4.4  System endpoints
+### 4.4  系统端点
 
 ```
 GET  /v1/system/status
@@ -538,7 +538,7 @@ GET  /v1/system/universes
   → [{ "id": "NASDAQ100", "n_symbols": 101, "last_rebalance": "2024-12-20" }, ...]
 ```
 
-### 4.5  FastAPI application structure
+### 4.5  FastAPI 应用结构
 
 ```python
 # assay/api/app.py
@@ -570,12 +570,12 @@ async def evaluate_factor(req: EvaluateRequest, api_key: APIKey = Depends(auth))
     return report.to_dict()
 ```
 
-### 4.6  Error schema
+### 4.6  错误 schema
 
-Errors mirror the implemented diagnostics system ([`assay.engine.diagnostics`](../../src/assay/engine/diagnostics.py)).
-Each problem carries the stable diagnostic `code` (`ASSAY-P###` parse / `ASSAY-E###`
-execute / `ASSAY-O###` output), the coarse `failure_mode`, a character `location`, and an
-actionable `suggestion`:
+错误反映了已实现的诊断系统（[`assay.engine.diagnostics`](../../../src/assay/engine/diagnostics.py)）。
+每个问题都携带稳定的诊断 `code`（`ASSAY-P###` 解析 / `ASSAY-E###`
+执行 / `ASSAY-O###` 输出）、粗粒度的 `failure_mode`、字符 `location`，以及一条
+可操作的 `suggestion`：
 
 ```json
 {
@@ -593,39 +593,39 @@ actionable `suggestion`:
 }
 ```
 
-`failure_mode` (FactorReport-level, from the diagnostics catalog): `SYNTAX_ERROR` ·
-`LOOKAHEAD` · `CONSTANT` · `ALL_NAN` · `RUNTIME_ERROR`. Transport/data errors not produced
-by the engine — `DATA_NOT_FOUND`, `UNIVERSE_NOT_FOUND`, `SESSION_EXPIRED` — are 📋 planned
-service-layer additions on top of these.
+`failure_mode`（FactorReport 级别，来自诊断目录）：`SYNTAX_ERROR` ·
+`LOOKAHEAD` · `CONSTANT` · `ALL_NAN` · `RUNTIME_ERROR`。并非由引擎产生的传输/数据
+错误——`DATA_NOT_FOUND`、`UNIVERSE_NOT_FOUND`、`SESSION_EXPIRED`——是 📋 规划中的
+在这些之上的 service 层补充。
 
 ---
 
-## 5. WebUI Frontend
+## 5. WebUI 前端
 
-> **Status: 🔶 A runnable WebUI exists — but not in this React/Vite stack.** Because the
-> build environment has no npm access, the shipped UI is a **zero-install vanilla-JS app**
-> at [`src/assay/api/static/`](../../src/assay/api/static/), served by FastAPI (`serve-api` →
-> `http://localhost:8000`): the three screens, hand-rolled SVG charts, a lightweight editor
-> (not Monaco), and SSE-streaming evaluate, all on the real `/v1/*` API. The React 18 + Vite
-> + Recharts + Monaco stack below remains the **target rebuild** (📋); see the companion
-> **Assay WebUI — Detailed Design** doc ([webui.md](webui.md)).
+> **状态：🔶 一个可运行的 WebUI 已存在——但不在此 React/Vite 栈中。** 由于
+> 构建环境无 npm 访问权限，已发布的 UI 是一个**零安装 vanilla-JS 应用**，
+> 位于 [`src/assay/api/static/`](../../../src/assay/api/static/)，由 FastAPI 提供服务（`serve-api` →
+> `http://localhost:8000`）：三个屏幕、手写的 SVG 图表、一个轻量编辑器
+> （非 Monaco），以及 SSE 流式 evaluate，全部基于真实的 `/v1/*` API。下方的 React 18 + Vite
+> + Recharts + Monaco 栈仍是**目标重建方案**（📋）；参见配套的
+> **Assay WebUI — 详细设计**文档（[webui.md](webui.md)）。
 
-### 5.1  Tech stack
+### 5.1  技术栈
 
-| Layer | Technology | Reason |
+| 层 | 技术 | 理由 |
 |---|---|---|
-| Framework | React 18 | Concurrent rendering for progressive chart streaming |
-| Build | Vite | Fast HMR, tree-shaking, < 200ms dev reload |
-| Routing | React Router v6 | File-based routing, nested layouts |
-| State | Zustand | Lightweight global state; no boilerplate |
-| Data fetching | React Query + fetch | SSE streaming support, caching, background refetch |
-| Charts | Recharts | React-native, composable, sufficient for all Phase 1 chart types |
-| Editor | Monaco Editor | VS Code engine; custom Assay language extension |
-| Styling | Tailwind CSS | Utility-first, design tokens, dark mode |
-| Icons | Tabler Icons | Consistent outline style, 5800+ icons |
-| Types | TypeScript | End-to-end type safety via OpenAPI codegen |
+| 框架 | React 18 | 用于渐进式图表流式的并发渲染 |
+| 构建 | Vite | 快速 HMR、tree-shaking、< 200ms 开发重载 |
+| 路由 | React Router v6 | 基于文件的路由、嵌套布局 |
+| 状态 | Zustand | 轻量全局状态；无样板代码 |
+| 数据获取 | React Query + fetch | SSE 流式支持、缓存、后台重新获取 |
+| 图表 | Recharts | React 原生、可组合，足以应对所有 Phase 1 图表类型 |
+| 编辑器 | Monaco Editor | VS Code 引擎；自定义 Assay 语言扩展 |
+| 样式 | Tailwind CSS | 实用优先、设计令牌、暗色模式 |
+| 图标 | Tabler Icons | 一致的描边风格，5800+ 图标 |
+| 类型 | TypeScript | 通过 OpenAPI 代码生成实现端到端类型安全 |
 
-### 5.2  Project structure
+### 5.2  项目结构
 
 ```
 assay-ui/
@@ -675,7 +675,7 @@ assay-ui/
 └── vite.config.ts
 ```
 
-### 5.3  SSE streaming hook
+### 5.3  SSE 流式 hook
 
 ```typescript
 // src/api/hooks/useEvaluate.ts
@@ -722,7 +722,7 @@ export function useEvaluate() {
 }
 ```
 
-### 5.4  Monaco Assay language extension
+### 5.4  Monaco Assay 语言扩展
 
 ```typescript
 // src/components/editor/assay-lang.ts
@@ -776,7 +776,7 @@ export function registerAssayLanguage() {
 }
 ```
 
-### 5.5  Global state
+### 5.5  全局状态
 
 ```typescript
 // src/store/global.ts  (Zustand)
@@ -819,19 +819,19 @@ export const useGlobal = create<GlobalState>((set, get) => ({
 
 ---
 
-## 6. MCP Server for Agents
+## 6. 面向 Agent 的 MCP 服务器
 
-> **Status: ✅ Implemented** ([`src/assay/mcp/server.py`](../../src/assay/mcp/server.py)). Built
-> on the high-level **FastMCP** API (`mcp.server.fastmcp.FastMCP`); all eight tools below
-> are registered over `AssayService`, and `assay_evaluate`'s description is enriched with
-> the live `operator_schema()` (§6.6). Run it with `python -m assay.mcp.server` (stdio) or
-> `python -m assay.cli serve-mcp --transport sse --port 8001`. (Note: the SDK-style
-> low-level snippet in §6.4 predates the FastMCP implementation — see the source for the
-> shipped decorator-based form.)
+> **状态：✅ 已实现**（[`src/assay/mcp/server.py`](../../../src/assay/mcp/server.py)）。构建于
+> 高层 **FastMCP** API（`mcp.server.fastmcp.FastMCP`）之上；下方全部八个工具
+> 均注册在 `AssayService` 之上，且 `assay_evaluate` 的描述由
+> 实时的 `operator_schema()`（§6.6）丰富。以 `python -m assay.mcp.server`（stdio）或
+> `python -m assay.cli serve-mcp --transport sse --port 8001` 运行它。（注意：§6.4 中
+> SDK 风格的低层代码片段早于 FastMCP 实现——已发布的基于装饰器的形式请
+> 参见源码。）
 
-The MCP server exposes Assay's evaluation capabilities as tools that LLM agents can call via the Model Context Protocol. This is the primary interface for LLM agent-driven alpha mining.
+MCP 服务器将 Assay 的评估能力暴露为 LLM agent 可通过 Model Context Protocol 调用的工具。这是 LLM agent 驱动的 alpha 挖掘的主要接口。
 
-### 6.1  Protocol
+### 6.1  协议
 
 ```
 Transport:       stdio (default, for Claude Desktop / local agents)
@@ -840,9 +840,9 @@ MCP version:     2024-11-05
 Auth (SSE):      X-API-Key header
 ```
 
-### 6.2  Exposed tools
+### 6.2  暴露的工具
 
-The MCP server exposes eight tools covering the full evaluation-library loop:
+MCP 服务器暴露了八个工具，覆盖完整的评估-库循环：
 
 ```
 assay_evaluate           — evaluate a single factor expression
@@ -855,7 +855,7 @@ assay_library_prune      — identify and optionally remove redundant factors
 assay_system_status      — get data freshness and cache statistics
 ```
 
-### 6.3  Tool definitions
+### 6.3  工具定义
 
 ```json
 {
@@ -939,7 +939,7 @@ assay_system_status      — get data freshness and cache statistics
 }
 ```
 
-### 6.4  MCP server implementation
+### 6.4  MCP 服务器实现
 
 ```python
 # assay/mcp/server.py
@@ -1014,7 +1014,7 @@ if __name__ == "__main__":
     asyncio.run(stdio_server(server))
 ```
 
-### 6.5  MCP server startup
+### 6.5  MCP 服务器启动
 
 ```bash
 # stdio mode (Claude Desktop, local agents)
@@ -1035,9 +1035,9 @@ python -m assay.mcp.server --transport sse --port 8001
 }
 ```
 
-### 6.6  Operator schema injection
+### 6.6  算子 schema 注入
 
-The MCP server injects the full operator schema into the tool descriptions so agents have documentation inline without making separate calls. The schema source is **implemented today**: `assay.engine.operator_schema()` returns a live `{name: schema}` view of every registered operator (built-in *and* user-registered), so this enrichment works as soon as the server exists:
+MCP 服务器将完整的算子 schema 注入工具描述，让 agent 无需单独调用即可获得内联文档。schema 来源**今日已实现**：`assay.engine.operator_schema()` 返回每个已注册算子（内置*和*用户注册的）的实时 `{name: schema}` 视图，因此只要服务器存在，这种丰富机制便可工作：
 
 ```python
 from assay.engine import operator_schema   # ✅ available now
@@ -1052,7 +1052,7 @@ for name, schema in operator_schema().items():
 assay_evaluate.__doc__ += OPERATOR_DOCS
 ```
 
-### 6.7  Typical agent loop
+### 6.7  典型的 agent 循环
 
 ```
 Agent iteration 1:
@@ -1075,13 +1075,13 @@ Agent iteration 4:
 
 ---
 
-## 7. Cross-Cutting Concerns
+## 7. 横切关注点
 
-> **Status:** §7.1 auth is ✅ implemented (optional API-key, `ASSAY_API_KEYS`; open if
-> unset). §7.2 rate limiting and §7.3 observability are 📋 planned (no slowapi/Prometheus/
-> OTel wired yet). §7.4 documents the config mechanism in place today.
+> **状态：** §7.1 认证 ✅ 已实现（可选 API-key，`ASSAY_API_KEYS`；未设置则
+> 开放）。§7.2 限流和 §7.3 可观测性为 📋 规划中（尚未接入 slowapi/Prometheus/
+> OTel）。§7.4 记录了今日已就位的配置机制。
 
-### 7.1  Authentication ✅ (optional API key)
+### 7.1  认证 ✅（可选 API key）
 
 ```python
 # API key for REST + MCP
@@ -1101,7 +1101,7 @@ class APIKeyAuth:
 # api_keys = ["sk-assay-abc123", "sk-assay-def456"]
 ```
 
-### 7.2  Rate limiting 📋
+### 7.2  限流 📋
 
 ```python
 # Per API key, per surface
@@ -1116,7 +1116,7 @@ limiter = Limiter(key_func=get_api_key)
 async def evaluate_factor(...): ...
 ```
 
-### 7.3  Observability 📋
+### 7.3  可观测性 📋
 
 ```
 Metrics (Prometheus):
@@ -1134,13 +1134,13 @@ Logs:
   fields: factor_id, expr_hash, universe, elapsed_ms, cache_hit, rank_icir, surface
 ```
 
-### 7.4  Configuration ✅ (today: env vars + `.env`)
+### 7.4  配置 ✅（今日：环境变量 + `.env`）
 
-**What exists today.** Configuration is environment-variable based, loaded by
-[`AssayConfig.from_env()`](../../src/assay/config.py). At import the package also reads a
-project-root `.env` file with `setdefault` semantics, so the real shell environment always
-wins. There is **no** `~/.assay/config.toml` yet. Required and optional variables (see
-[`.env.example`](../../.env.example)):
+**今日已有。** 配置基于环境变量，由
+[`AssayConfig.from_env()`](../../../src/assay/config.py) 加载。在导入时，包还会以
+`setdefault` 语义读取项目根目录的 `.env` 文件，因此真实的 shell 环境始终
+优先。目前**尚无** `~/.assay/config.toml`。必需和可选变量（参见
+[`.env.example`](../../../.env.example)）：
 
 ```bash
 # Required — MASSIVE credentials
@@ -1160,10 +1160,10 @@ from assay.config import AssayConfig
 config = AssayConfig.from_env()           # -> AssayConfig(massive=..., data_dir=Path, market="US")
 ```
 
-**Planned — unified `~/.assay/config.toml` 📋.** The service and surfaces now exist and
-are configured today via `AssayConfig` fields + env vars; the *single TOML file* that would
-subsume them is still the planned packaging. The `MASSIVE_*` secrets stay in the
-environment; the rest would move into structured sections:
+**规划中——统一的 `~/.assay/config.toml` 📋。** service 和各界面现已存在，
+今日通过 `AssayConfig` 字段 + 环境变量配置；那个将它们纳入一体的
+*单一 TOML 文件*仍是规划中的打包形式。`MASSIVE_*` 密钥保留在
+环境中；其余部分将迁移到结构化的小节中：
 
 ```toml
 # ~/.assay/config.toml   📋 PLANNED packaging (the layers below already exist in code)
@@ -1196,19 +1196,19 @@ default_period   = ["2020-01-01", "2024-12-31"]
 
 ---
 
-## 8. Deployment
+## 8. 部署
 
-> **Status: 🔶 Mostly implemented.** The REST API and MCP server now run via
-> `python -m assay.cli serve-api` and `serve-mcp` (§8.1a). Still not present: the
-> single `assay server` umbrella command, `assay data sync` (use `prepare-nasdaq100`),
-> the WebUI image, and the `pip install assay-engine` PyPI package (install from source).
-> The Docker Compose stack (§8.3) references those not-yet-published images.
+> **状态：🔶 大部分已实现。** REST API 和 MCP 服务器现可通过
+> `python -m assay.cli serve-api` 和 `serve-mcp`（§8.1a）运行。仍未提供：
+> 单一的 `assay server` 总控命令、`assay data sync`（请用 `prepare-nasdaq100`）、
+> WebUI 镜像，以及 `pip install assay-engine` PyPI 包（请从源码安装）。
+> Docker Compose 栈（§8.3）引用了那些尚未发布的镜像。
 
-### 8.1a  Local development today ✅
+### 8.1a  今日的本地开发 ✅
 
-The shipped entry point is the data/engine CLI ([`src/assay/cli.py`](../../src/assay/cli.py)),
-invoked as `python -m assay.cli`. There is no console-script `assay` yet and no
-`pip install assay-engine` package on PyPI — install from source.
+已发布的入口点是数据/引擎 CLI（[`src/assay/cli.py`](../../../src/assay/cli.py)），
+以 `python -m assay.cli` 调用。目前尚无 `assay` 控制台脚本，PyPI 上也无
+`pip install assay-engine` 包——请从源码安装。
 
 ```bash
 # Install from source (editable)
@@ -1237,9 +1237,9 @@ python -m assay.cli serve-api --host 0.0.0.0 --port 8000      # FastAPI (REST + 
 python -m assay.cli serve-mcp --transport sse --port 8001     # MCP server
 ```
 
-### 8.1b  Planned researcher workflow 📋
+### 8.1b  规划中的研究员工作流 📋
 
-Once the SDK/service/surfaces land, the intended one-liner experience is:
+一旦 SDK/service/各界面落地，预期的一行命令体验是：
 
 ```bash
 pip install assay-engine            # 📋 not yet published
@@ -1252,7 +1252,7 @@ python
 >>> assay.backtest("ts_returns(close, 20)", universe="NASDAQ100")
 ```
 
-### 8.2  Service topology 📋
+### 8.2  服务拓扑 📋
 
 ```
 Researcher laptop / server (planned):
@@ -1271,8 +1271,8 @@ Researcher laptop / server (planned):
 
 ### 8.3  Docker Compose 📋
 
-The three images below (`assay-api`, `assay-ui`, `assay-mcp`) reference apps that are not
-built yet (`assay.api.app`, the UI bundle, `assay.mcp.server`). This is the target stack.
+下面的三个镜像（`assay-api`、`assay-ui`、`assay-mcp`）引用了尚未
+构建的应用（`assay.api.app`、UI 包、`assay.mcp.server`）。这是目标栈。
 
 ```yaml
 # docker-compose.yml   📋 PLANNED
@@ -1304,10 +1304,10 @@ services:
       - ./cache:/cache
 ```
 
-### 8.4  Package layout
+### 8.4  包布局
 
-The package lives under `src/assay/` (src-layout, see [`pyproject.toml`](../../pyproject.toml)).
-✅ = on disk today, 📋 = planned module.
+包位于 `src/assay/` 下（src-layout，参见 [`pyproject.toml`](../../../pyproject.toml)）。
+✅ = 今日已在磁盘上，📋 = 规划中的模块。
 
 ```
 src/assay/
@@ -1346,4 +1346,4 @@ assay-ui/                  📋 React/Vite rebuild of the WebUI (documented targ
 
 ---
 
-*— Assay Full-Stack Architecture · AlphaBench Project —*
+*— Assay 全栈架构 · AlphaBench 项目 —*

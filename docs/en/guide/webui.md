@@ -2,7 +2,7 @@
 
 A **zero-install, zero-build** web app served directly by the FastAPI backend — vanilla JS +
 hand-rolled SVG charts, no framework, no bundler, no CDN. Lives at
-[`src/assay/api/static/`](../../src/assay/api/static/).
+[`src/assay/api/static/`](../../../src/assay/api/static/).
 
 > The production React/Vite/Recharts/Monaco stack in [the WebUI design doc](../design/webui.md)
 > is the documented target; this shipped UI is the runnable equivalent (npm isn't available in

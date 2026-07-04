@@ -2,7 +2,7 @@
 
 The MCP server exposes Assay's evaluate→library loop as Model Context Protocol tools that LLM
 agents call to drive autonomous alpha mining. Built on the high-level **FastMCP** API
-([`src/assay/mcp/server.py`](../../src/assay/mcp/server.py)).
+([`src/assay/mcp/server.py`](../../../src/assay/mcp/server.py)).
 
 ## Run
 

@@ -118,7 +118,7 @@ curl -X DELETE localhost:8000/v1/combination/saved -d '{"ids":["<id>"]}'
 
 SDK equivalents on `AssayService`: `save_combination(result, name)`, `list_combinations()`,
 `get_combination(id)`, `delete_combinations(ids)` — backed by
-[`CombinationStore`](../../src/assay/library/combination_store.py) under `<data_dir>/combinations/`.
+[`CombinationStore`](../../../src/assay/library/combination_store.py) under `<data_dir>/combinations/`.
 
 **Factor specs** accept: a bare expression (`"rank(close)"`), a library reference
 (`"lib:<factor_id>"`), an Alpha catalog number (`"alpha101:<n>"` / `"alpha158:<n>"`),

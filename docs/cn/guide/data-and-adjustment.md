@@ -1,6 +1,6 @@
 # 数据与复权
 
-[English](data-and-adjustment.md) · **简体中文**
+[English](../../en/guide/data-and-adjustment.md) · **简体中文**
 
 这是「能否相信一次回测」最重要的文档：**Assay 存了什么数据，以及因子在公司行为（拆股、分红）
 下究竟看到什么价格。** 这里错了，所有 IC 数字都没有意义。Assay 的设计目标是：因子 *永远* 看不到
@@ -17,7 +17,7 @@
 
 **导入** 步骤（`prepare_us` / `prepare_cn`）把 RAW 归一化为固定 schema 并写出 ASSAY 存储。
 下游不再读取 RAW——引擎、IC 评估、组合回测和 WebUI 都通过同一个接口
-[`DataStore`](../../src/assay/data/store/datastore.py) 读取 ASSAY 存储。
+[`DataStore`](../../../src/assay/data/store/datastore.py) 读取 ASSAY 存储。
 
 ### ASSAY 存储
 
@@ -66,7 +66,7 @@ panel = store.get_panel(
 ## 3. 因子在拆股与分红下看到的价格
 
 因子从不直接接触 `adj_events`。它看到的是 `DataStore.get_panel(..., adj=...)` 返回的、已复权的
-`(T, N)` 价格矩阵。计算逻辑在 [`adjust.py`](../../src/assay/data/store/adjust.py)，采用
+`(T, N)` 价格矩阵。计算逻辑在 [`adjust.py`](../../../src/assay/data/store/adjust.py)，采用
 **前复权（即「后复权到今天」）**：历史价格被重标到 **最近一日的基准** 上，因此最新日线永远等于
 原始价格，只有过去被重标。
 

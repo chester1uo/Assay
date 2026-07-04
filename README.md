@@ -10,22 +10,22 @@ full **portfolio backtest** module and a **factor-combination** workspace.
 It serves both **US equities** (NASDAQ-100 / S&P 500, via MASSIVE) and **China A-shares**
 (CSI300/500/1000, via Tushare). Raw vendor data can be downloaded and kept in sync from the
 built-in **Data Manager** (WebUI) or ingested from a local mirror — see the
-[Data Pipeline](docs/guide/data-pipeline.md) guide.
+[Data Pipeline](docs/en/guide/data-pipeline.md) guide.
 
 ## 📚 Documentation
 
-Full design specs and usage guides live in **[docs/](docs/README.md)**:
+Full design specs and usage guides live in **[docs/](docs/en/README.md)**:
 
-- **Start here:** [Getting Started](docs/guide/getting-started.md)
-- **Data & correctness:** [Data & Adjustment](docs/guide/data-and-adjustment.md)
-  ([中文](docs/guide/data-and-adjustment.zh.md)) — the data layer, point-in-time reads, and how
+- **Start here:** [Getting Started](docs/en/guide/getting-started.md)
+- **Data & correctness:** [Data & Adjustment](docs/en/guide/data-and-adjustment.md)
+  ([中文](docs/cn/guide/data-and-adjustment.md)) — the data layer, point-in-time reads, and how
   factors see prices under **splits & dividends**.
-- **Guides:** [Data Pipeline](docs/guide/data-pipeline.md) · [Python SDK](docs/guide/python-sdk.md) ·
-  [CLI](docs/guide/cli.md) · [REST API](docs/guide/rest-api.md) · [MCP](docs/guide/mcp-server.md) ·
-  [WebUI](docs/guide/webui.md) · [Factor Combination](docs/guide/factor-combination.md) ·
-  [Portfolio Backtest](docs/guide/portfolio-backtest.md) · [Performance](docs/guide/performance.md)
-- **Design:** [Engineering](docs/design/engineering.md) · [Architecture](docs/design/architecture.md) ·
-  [Operator table](docs/design/operator-compatibility.md) · [Portfolio](docs/design/portfolio-backtest.md)
+- **Guides:** [Data Pipeline](docs/en/guide/data-pipeline.md) · [Python SDK](docs/en/guide/python-sdk.md) ·
+  [CLI](docs/en/guide/cli.md) · [REST API](docs/en/guide/rest-api.md) · [MCP](docs/en/guide/mcp-server.md) ·
+  [WebUI](docs/en/guide/webui.md) · [Factor Combination](docs/en/guide/factor-combination.md) ·
+  [Portfolio Backtest](docs/en/guide/portfolio-backtest.md) · [Performance](docs/en/guide/performance.md)
+- **Design:** [Engineering](docs/en/design/engineering.md) · [Architecture](docs/en/design/architecture.md) ·
+  [Operator table](docs/en/design/operator-compatibility.md) · [Portfolio](docs/en/design/portfolio-backtest.md)
 
 The rest of this README is a focused tour of the **data layer** and the **factor execution
 engine** (the foundation); everything above the engine is covered in the guides.
@@ -71,7 +71,7 @@ There are two ways to populate RAW:
    configure the MASSIVE S3 credentials (US) and/or the Tushare token (CN), *Test
    connection*, then run **Initialize** / **Update** jobs. Credentials are stored,
    masked, in a git-ignored `.assay.config.json`. See the
-   [Data Pipeline](docs/guide/data-pipeline.md) guide.
+   [Data Pipeline](docs/en/guide/data-pipeline.md) guide.
 2. **Point at an existing local mirror** and only run the RAW→ASSAY transform (no
    credentials needed) — via the CLI, the Python API, or the *Ingest RAW→ASSAY* button.
 
@@ -193,7 +193,7 @@ range, so de-listed / removed names are still fetched.
 The engine ([src/assay/engine/](src/assay/engine/)) parses a factor expression
 into a unified AST and evaluates it over a PIT panel. Two front-end syntaxes
 lower to the *same* AST and operator backend — see
-[docs/design/operator-compatibility.md](docs/design/operator-compatibility.md) for the full operator table:
+[docs/en/design/operator-compatibility.md](docs/en/design/operator-compatibility.md) for the full operator table:
 
 * **qlib** — `$`-fields, CamelCase ops: `Corr($close, $volume, 20)`
 * **function-call** — Assay-native `ts_*`/`cs_*` *and* Alpha-101 / WorldQuant
@@ -305,7 +305,7 @@ subindustry `group_data`. See [tests/factors/test_alpha101.py](tests/factors/tes
 > **Scope.** This is the cold single-factor path: parse → evaluate. The IC /
 > RankIC / decay evaluation, `FactorReport`, factor library, `AssayService` + SDK,
 > REST/MCP/WebUI surfaces, and the portfolio backtest are all built on top of these
-> kernels — see the [docs guides](docs/README.md). (Batch DAG/CSE execution and the
+> kernels — see the [docs guides](docs/en/README.md). (Batch DAG/CSE execution and the
 > L1 incremental cache remain the open performance items.)
 
 ---

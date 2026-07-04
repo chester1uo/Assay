@@ -1049,7 +1049,7 @@ assay data status --market US
 
 | Phase | Scope | Key deliverables | Status |
 |---|---|---|---|
-| **Phase 1 — MVP** | DataStore (Massive US) + FactorEngine (Python syntax) + SingleFactorBT + IC/RankIC | End-to-end runnable on US equities. Cold-path < 700ms. | DataStore + FactorEngine (parser/AST/operators/evaluator) landed — see [`src/assay/engine/`](../../src/assay/engine/); SingleFactorBT + IC/RankIC next |
+| **Phase 1 — MVP** | DataStore (Massive US) + FactorEngine (Python syntax) + SingleFactorBT + IC/RankIC | End-to-end runnable on US equities. Cold-path < 700ms. | DataStore + FactorEngine (parser/AST/operators/evaluator) landed — see [`src/assay/engine/`](../../../src/assay/engine/); SingleFactorBT + IC/RankIC next |
 | **Phase 2 — Performance** | Numba IC kernel + session panel cache + L1 Arena + DAG CSE + BatchFactorBT | Hot-path < 50ms. 100 factors < 10s. | Planned |
 | **Phase 3 — Agent native** | FactorReport JSON + LineageStore + SandboxExecutor + qlib syntax + redundancy | AlphaBench v2 integration complete. | Planned |
 | **Phase 4 — Multi-market** | HK + A-share calendars + cost models + universe snapshots | Cross-market factor research. | Roadmap |
