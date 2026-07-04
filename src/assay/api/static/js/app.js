@@ -322,9 +322,66 @@ function wireLangToggle() {
   // (universe "soon" labels + status), and re-render the active page in the new language.
   onLang(() => {
     localizeChrome();
+    refreshThemeLabel();          // the theme button text is dynamic, not a data-i18n node
     populateUniverseSelect(lastUniverses);
     refreshStatus();
     router.navigate("#" + router.current());
+  });
+}
+
+// ---------------------------------------------------------------- theme (skin) ----
+// Client-side legacy ⇄ modern skin switch — the same retro look as the /legacy
+// easter egg, but toggleable on the main site. Persisted in localStorage, applied
+// on boot. The banner/footer are siblings of <main>, so they survive route changes.
+const THEME_KEY = "assay_theme";
+const LEGACY_BANNER =
+  '<div class="legacy-banner"><marquee scrollamount="6" behavior="scroll" direction="left">' +
+  "★★★ WELCOME TO ASSAY · Factor Research since 2025 · " +
+  "Best viewed in 1024×768 with Netscape Navigator · " +
+  '<span class="legacy-blink">NEW!</span> now with A-share support! · ' +
+  "sign our guestbook! ★★★</marquee></div>";
+const LEGACY_FOOTER =
+  '<div class="legacy-foot"><hr>You are visitor <span class="legacy-counter">00013370</span> ' +
+  '&nbsp;|&nbsp; <span class="legacy-blink">●</span> Made with Notepad &nbsp;|&nbsp; ' +
+  "© 2025 Assay Labs &nbsp;|&nbsp; " +
+  '<span class="uc">This site is under construction</span> 🚧</div>';
+
+function currentTheme() {
+  try { return localStorage.getItem(THEME_KEY) || "modern"; } catch (_) { return "modern"; }
+}
+
+function refreshThemeLabel() {
+  const btn = document.getElementById("theme-toggle");
+  if (btn) btn.textContent = t(currentTheme() === "legacy" ? "ctrl.themeToModern" : "ctrl.themeToRetro");
+}
+
+function applyTheme(theme) {
+  const legacy = theme === "legacy";
+  let link = document.getElementById("legacy-css");
+  if (legacy && !link) {
+    link = document.createElement("link");
+    link.id = "legacy-css"; link.rel = "stylesheet"; link.href = "/legacy.css";
+    document.head.appendChild(link);
+  } else if (!legacy && link) {
+    link.remove();
+  }
+  document.body.classList.toggle("legacy", legacy);
+  // retro chrome — remove any existing copy (incl. one injected by the /legacy route), re-add if legacy
+  document.querySelectorAll(".legacy-banner, .legacy-foot").forEach((n) => n.remove());
+  if (legacy) {
+    document.body.insertAdjacentHTML("afterbegin", LEGACY_BANNER);
+    document.body.insertAdjacentHTML("beforeend", LEGACY_FOOTER);
+  }
+  refreshThemeLabel();
+}
+
+function wireThemeToggle() {
+  applyTheme(currentTheme());
+  const btn = document.getElementById("theme-toggle");
+  if (btn) btn.addEventListener("click", () => {
+    const next = currentTheme() === "legacy" ? "modern" : "legacy";
+    try { localStorage.setItem(THEME_KEY, next); } catch (_) {}
+    applyTheme(next);
   });
 }
 
@@ -334,6 +391,7 @@ function boot() {
   localizeChrome();
   wireTopNav();
   wireLangToggle();
+  wireThemeToggle();
   registerRoutes();
   syncPeriodControls();
   // Fire-and-forget async chrome; never blocks first paint.
