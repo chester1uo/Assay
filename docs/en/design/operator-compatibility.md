@@ -202,12 +202,12 @@ Assay: cs_rank(ts_decay_linear(ts_corr(vwap, ts_sum(ts_mean(volume,5),26), 4), 7
 
 | 组件 | 文件 | 说明 |
 |---|---|---|
-| 统一 AST | [src/assay/engine/ast.py](../../src/assay/engine/ast.py) | `FieldNode` / `LitNode` / `OpNode`，含 `struct_hash` |
-| 算子注册表 + numpy kernel | [src/assay/engine/operators/](../../src/assay/engine/operators/) | 按类别分文件（`time_series` / `cross_sectional` / `math_ops` / `arithmetic`）+ 共享 [`registry`](../../src/assay/engine/operators/registry.py)；上表全部算子 + 机读 `OPERATOR_SCHEMA` |
-| **两种前端 Parser** | [src/assay/engine/parsing.py](../../src/assay/engine/parsing.py) | qlib 语法 与 函数式（Assay 原生 + Alpha 101/WQ 别名）共享一套文法 |
-| 执行引擎 | [src/assay/engine/engine.py](../../src/assay/engine/engine.py) | 面板 → `(T×N)` 矩阵 → 求值 |
-| **Alpha 101 因子库** | [src/assay/factors/alpha101.py](../../src/assay/factors/alpha101.py) | 论文（arXiv:1601.00991）全部 101 个因子，逐字录入为 Assay 表达式 |
-| 测试 | [tests/engine/](../../tests/engine/) · [tests/factors/test_alpha101.py](../../tests/factors/test_alpha101.py) | 方言等价、算子数值、诊断、**101 因子全部解析+求值**、端到端 |
+| 统一 AST | [src/assay/engine/ast.py](../../../src/assay/engine/ast.py) | `FieldNode` / `LitNode` / `OpNode`，含 `struct_hash` |
+| 算子注册表 + numpy kernel | [src/assay/engine/operators/](../../../src/assay/engine/operators/) | 按类别分文件（`time_series` / `cross_sectional` / `math_ops` / `arithmetic`）+ 共享 [`registry`](../../../src/assay/engine/operators/registry.py)；上表全部算子 + 机读 `OPERATOR_SCHEMA` |
+| **两种前端 Parser** | [src/assay/engine/parsing.py](../../../src/assay/engine/parsing.py) | qlib 语法 与 函数式（Assay 原生 + Alpha 101/WQ 别名）共享一套文法 |
+| 执行引擎 | [src/assay/engine/engine.py](../../../src/assay/engine/engine.py) | 面板 → `(T×N)` 矩阵 → 求值 |
+| **Alpha 101 因子库** | [src/assay/factors/alpha101.py](../../../src/assay/factors/alpha101.py) | 论文（arXiv:1601.00991）全部 101 个因子，逐字录入为 Assay 表达式 |
+| 测试 | [tests/engine/](../../../tests/engine/) · [tests/factors/test_alpha101.py](../../../tests/factors/test_alpha101.py) | 方言等价、算子数值、诊断、**101 因子全部解析+求值**、端到端 |
 
 **两种语法（two types）** 经各自 Parser 转换为**同一个** AST 与算子后端，因此三列写法
 （Alpha 101 · qlib · Assay 原生）只是前端语法糖：
@@ -225,7 +225,7 @@ assert parse("Corr($close, $volume, 20)").struct_hash() \
 `FactorEngine(panel, group_data=...)` 提供分类标签，Phase-1 数据层暂未内置 sector 数据，
 缺失时会显式报错。
 
-用 [src/assay/factors/alpha101.py](../../src/assay/factors/alpha101.py) 评估论文因子：
+用 [src/assay/factors/alpha101.py](../../../src/assay/factors/alpha101.py) 评估论文因子：
 
 ```python
 from assay.factors.alpha101 import ALPHA_101

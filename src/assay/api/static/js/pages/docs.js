@@ -138,7 +138,7 @@ const CONTENT = {
             "split (default) — continuous across splits; no dividend drift. Best for most alpha research.",
             "total — splits + dividends reinvested; for total-return studies.",
           ]],
-          ["p", "The full mechanics (forward adjustment, the split/dividend math, CN 送转 & price limits, point-in-time reads) are in the Data & Adjustment guide: docs/guide/data-and-adjustment.md (中文: data-and-adjustment.zh.md)."],
+          ["p", "The full mechanics (forward adjustment, the split/dividend math, CN 送转 & price limits, point-in-time reads) are in the Data & Adjustment guide: docs/en/guide/data-and-adjustment.md (中文: docs/cn/guide/data-and-adjustment.md)."],
         ],
       },
       {
@@ -273,7 +273,7 @@ const CONTENT = {
             "split(默认)—— 跨拆股连续;无分红漂移。适合大多数 alpha 研究。",
             "total —— 拆股 + 分红再投资;用于全收益研究。",
           ]],
-          ["p", "完整机制(前复权、拆股/分红计算、A 股送转与涨跌停、点对点读取)见《数据与复权》指南:docs/guide/data-and-adjustment.zh.md(English: data-and-adjustment.md)。"],
+          ["p", "完整机制(前复权、拆股/分红计算、A 股送转与涨跌停、点对点读取)见《数据与复权》指南:docs/cn/guide/data-and-adjustment.md(English: docs/en/guide/data-and-adjustment.md)。"],
         ],
       },
       {

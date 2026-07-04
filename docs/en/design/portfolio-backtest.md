@@ -4,7 +4,7 @@
 **Scope:** Factor-driven portfolio simulation with full A-share constraint support
 **Depends on:** Assay FactorEngine, DataStore PIT layer, evaluator
 
-> **Implementation status (2026-06): ✅ implemented** at [`src/assay/portfolio/`](../../src/assay/portfolio/)
+> **Implementation status (2026-06): ✅ implemented** at [`src/assay/portfolio/`](../../../src/assay/portfolio/)
 > (config, report, signal, rebalance, weights, constraints, costs, execution, accounting,
 > metrics, backtester) and wired into `AssayService.backtest_portfolio`, the SDK
 > (`assay.backtest_portfolio`), REST `POST /v1/portfolio/backtest`, and CLI `assay portfolio`.

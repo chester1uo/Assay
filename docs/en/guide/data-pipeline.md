@@ -71,7 +71,7 @@ The WebUI **Data** tab (and the `/v1/admin/*` API) drives the whole data layer w
 
 Jobs run one-at-a-time in the background with a live progress bar and log. For adjustment
 semantics (splits/dividends, point-in-time), see [Data & Adjustment](data-and-adjustment.md)
-([中文](data-and-adjustment.zh.md)).
+([中文](../../cn/guide/data-and-adjustment.md)).
 
 ## Individual stages
 

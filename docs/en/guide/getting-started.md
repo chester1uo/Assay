@@ -20,7 +20,7 @@ Everything runs with `PYTHONPATH=src` if you haven't `pip install -e .`'d.
 
 Configuration is environment-variable based, loaded by `AssayConfig.from_env()`. A project
 `.env` is read at import (shell env always wins). The pipeline reads a **local** MASSIVE
-mirror — no credentials needed. See [.env.example](../../.env.example):
+mirror — no credentials needed. See [.env.example](../../../.env.example):
 
 ```bash
 MASSIVE_DATA_DIR=/data/massive_data    # root of the local MASSIVE mirror (source)

@@ -1,6 +1,6 @@
 # Data & Adjustment
 
-**English** · [简体中文](data-and-adjustment.zh.md)
+**English** · [简体中文](../../cn/guide/data-and-adjustment.md)
 
 This is the most important document for trusting a backtest: **what data Assay stores,
 and exactly what prices a factor sees under corporate actions (splits, dividends).**
@@ -20,7 +20,7 @@ prices are reproducible from first principles.
 The **ingest** step (`prepare_us` / `prepare_cn`) normalizes RAW into a fixed schema and
 writes the ASSAY stores. Nothing downstream ever reads RAW again — the engine, IC
 evaluation, portfolio backtest and WebUI all read the ASSAY stores through one interface,
-[`DataStore`](../../src/assay/data/store/datastore.py).
+[`DataStore`](../../../src/assay/data/store/datastore.py).
 
 ### The ASSAY stores
 
@@ -72,7 +72,7 @@ panel = store.get_panel(
 
 A factor never touches `adj_events` directly. It sees the `(T, N)` price matrices that
 `DataStore.get_panel(..., adj=...)` returns, already adjusted. The math lives in
-[`adjust.py`](../../src/assay/data/store/adjust.py) and is **forward (a.k.a. "backward-
+[`adjust.py`](../../../src/assay/data/store/adjust.py) and is **forward (a.k.a. "backward-
 adjusted to today")**: history is rescaled onto the **most recent date's basis**, so the
 latest bar always equals the raw price and only the past is rescaled.
 

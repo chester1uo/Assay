@@ -1,52 +1,52 @@
-# Assay WebUI — Detailed Design
+# Assay WebUI — 详细设计
 
-**Version:** 0.1 · Draft  
-**Scope:** Dashboard · Factor Library Analysis · Single Factor Test  
-**Stack:** React 18 · Recharts · Monaco Editor · Tailwind CSS
+**版本：** 0.1 · 草稿  
+**范围：** 仪表盘 · 因子库分析 · 单因子测试  
+**技术栈：** React 18 · Recharts · Monaco Editor · Tailwind CSS
 
-> **Implementation status (2026-06): 🔶 A runnable WebUI now exists — but as a zero-install
-> vanilla-JS app, not the React/Vite stack this doc specifies.** Because the build
-> environment has no npm registry access (proxy 407), the shipped UI lives at
-> [`src/assay/api/static/`](../../src/assay/api/static/) and is served directly by FastAPI
-> (`python -m assay.cli serve-api` → `http://localhost:8000`). It implements the three
-> screens below — **Dashboard, Factor Library, Single Factor Test** — with hand-rolled SVG
-> charts, a lightweight expression editor (not Monaco), the qlib↔python syntax bridge, and
-> **SSE-streaming evaluate**, all bound to the real `/v1/*` API. It backs the editor with a
-> new data-free **`POST /v1/factor/lint`** endpoint (AST + diagnostics).
+> **实现状态（2026-06）：🔶 现已存在一个可运行的 WebUI——但它是一个零安装的
+> 纯 vanilla-JS 应用，而非本文所规定的 React/Vite 技术栈。** 由于构建
+> 环境无法访问 npm registry（代理 407），已交付的 UI 位于
+> [`src/assay/api/static/`](../../../src/assay/api/static/)，由 FastAPI 直接提供服务
+> （`python -m assay.cli serve-api` → `http://localhost:8000`）。它实现了下述三个
+> 界面——**仪表盘、因子库、单因子测试**——采用手写的 SVG
+> 图表、一个轻量级表达式编辑器（而非 Monaco）、qlib↔python 语法桥，以及
+> **SSE 流式 evaluate**，全部绑定到真实的 `/v1/*` API。它以一个
+> 全新的、无需数据的 **`POST /v1/factor/lint`** 端点（AST + 诊断）为编辑器提供支撑。
 >
-> This document remains the spec for the **production React 18 + Vite + TS + Recharts +
-> Monaco + Tailwind** rebuild (📋, the documented target). Features with no backend endpoint
-> are **omitted/gated** in the shipped UI, not faked: the live agent feed
-> (`/v1/events/session-stream`), the Alpha Space Map (UMAP), the Lineage DAG, and the IC
-> Heatmap mode. The shipped UI stays consistent with backend reality:
+> 本文档仍是**生产级 React 18 + Vite + TS + Recharts +
+> Monaco + Tailwind** 重构版本的规范（📋，即文档记录的目标）。没有后端端点的功能
+> 在已交付的 UI 中被**省略/关闭**，而非伪造：实时 agent 信息流
+> （`/v1/events/session-stream`）、Alpha 空间图（UMAP）、血缘 DAG，以及 IC
+> 热力图模式。已交付的 UI 与后端现实保持一致：
 >
-> - **Primary universe is NASDAQ-100** (~101 symbols), the only one wired up end-to-end.
->   SP500 / Russell 2000 are roadmap selector options.
-> - The MASSIVE day-aggregate source provides **OHLCV + transaction count, no `vwap`** — so
->   `vwap` is not a selectable field or execution price today.
-> - Error/diagnostic codes and `failure_mode` values come from the implemented
->   `assay.engine.diagnostics` catalog (`SYNTAX_ERROR` · `LOOKAHEAD` · `CONSTANT` ·
->   `ALL_NAN` · `RUNTIME_ERROR`; codes `ASSAY-P###/E###/O###`).
+> - **主股票池为 NASDAQ-100**（约 101 只标的），是唯一端到端打通的股票池。
+>   SP500 / Russell 2000 是路线图中的选择器选项。
+> - MASSIVE 日聚合数据源提供 **OHLCV + 成交笔数，没有 `vwap`**——因此
+>   `vwap` 目前既不是可选字段，也不是执行价格。
+> - 错误/诊断码和 `failure_mode` 取值来自已实现的
+>   `assay.engine.diagnostics` 目录（`SYNTAX_ERROR` · `LOOKAHEAD` · `CONSTANT` ·
+>   `ALL_NAN` · `RUNTIME_ERROR`；码为 `ASSAY-P###/E###/O###`）。
 
 ---
 
-## Table of Contents
+## 目录
 
-1. [Information Architecture](#1-information-architecture)
-2. [Global Shell](#2-global-shell)
-3. [Dashboard](#3-dashboard)
-4. [Factor Library Analysis](#4-factor-library-analysis)
-5. [Single Factor Test](#5-single-factor-test)
-6. [Shared Components](#6-shared-components)
-7. [State Management](#7-state-management)
-8. [Data Fetching & Streaming](#8-data-fetching--streaming)
-9. [Monaco Editor Extension](#9-monaco-editor-extension)
-10. [Routing](#10-routing)
-11. [Design Tokens](#11-design-tokens)
+1. [信息架构](#1-information-architecture)
+2. [全局外壳](#2-global-shell)
+3. [仪表盘](#3-dashboard)
+4. [因子库分析](#4-factor-library-analysis)
+5. [单因子测试](#5-single-factor-test)
+6. [共享组件](#6-shared-components)
+7. [状态管理](#7-state-management)
+8. [数据获取与流式传输](#8-data-fetching--streaming)
+9. [Monaco 编辑器扩展](#9-monaco-editor-extension)
+10. [路由](#10-routing)
+11. [设计令牌](#11-design-tokens)
 
 ---
 
-## 1. Information Architecture
+## 1. 信息架构
 
 ```
 assay-ui/
@@ -61,7 +61,7 @@ assay-ui/
 └── /factor/:factor_id          → Single Factor Test (pre-loaded)
 ```
 
-URL params shared across all routes (global state, synced to URL):
+所有路由共享的 URL 参数（全局状态，同步到 URL）：
 
 ```
 ?universe=NASDAQ100
@@ -71,9 +71,9 @@ URL params shared across all routes (global state, synced to URL):
 
 ---
 
-## 2. Global Shell
+## 2. 全局外壳
 
-### 2.1  Layout
+### 2.1  布局
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -85,9 +85,9 @@ URL params shared across all routes (global state, synced to URL):
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-No sidebar. All navigation lives in the top bar. Pages are full-width with internal padding.
+没有侧边栏。所有导航都位于顶栏中。页面为全宽并带有内部边距。
 
-### 2.2  TopNav component
+### 2.2  TopNav 组件
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -97,32 +97,32 @@ No sidebar. All navigation lives in the top bar. Pages are full-width with inter
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-Elements from left to right:
+从左到右的元素：
 
-| Element | Type | Behaviour |
+| 元素 | 类型 | 行为 |
 |---|---|---|
-| `◆ ASSAY` | Logo + text | Navigates to `/dashboard` |
-| `Dashboard` | Tab | Active state when on `/dashboard` |
-| `Factor Library` | Tab | Active state when on `/library` |
-| `Single Factor Test` | Tab | Active state when on `/factor` |
-| Search box | Input | Full-text search across factor expressions in library; results shown in dropdown; selecting navigates to `/factor/:factor_id` |
-| Universe selector | Dropdown | Options: NASDAQ100 (default, only one wired up today), SP500, Russell2000 (roadmap — shown disabled until ingested); updates global state |
-| Period selector | Dropdown | Presets: 1Y, 3Y, 5Y + custom date range picker; updates global state |
-| Status indicator | Dot icon | Green = data fresh, amber = stale (> 24h), red = sync error; tooltip shows last sync time; click navigates to data calendar on Dashboard |
+| `◆ ASSAY` | Logo + 文字 | 导航到 `/dashboard` |
+| `Dashboard` | 标签页 | 位于 `/dashboard` 时为激活状态 |
+| `Factor Library` | 标签页 | 位于 `/library` 时为激活状态 |
+| `Single Factor Test` | 标签页 | 位于 `/factor` 时为激活状态 |
+| 搜索框 | 输入框 | 对库中因子表达式的全文搜索；结果显示在下拉框中；选择后导航到 `/factor/:factor_id` |
+| 股票池选择器 | 下拉框 | 选项：NASDAQ100（默认，目前唯一打通的一个）、SP500、Russell2000（路线图——在导入前显示为禁用）；更新全局状态 |
+| 周期选择器 | 下拉框 | 预设：1Y、3Y、5Y + 自定义日期区间选择器；更新全局状态 |
+| 状态指示器 | 圆点图标 | 绿色 = 数据新鲜，琥珀色 = 陈旧（> 24h），红色 = 同步错误；工具提示显示上次同步时间；点击导航到仪表盘上的数据日历 |
 
-### 2.3  TopNav props and behaviour
+### 2.3  TopNav 属性与行为
 
-Changing universe or period:
-1. Updates Zustand global state
-2. Invalidates current session ID (calls `POST /v1/session/create` with new params)
-3. Triggers React Query cache invalidation for library queries
-4. Does **not** re-run any in-progress evaluation — user must re-run manually
+更改股票池或周期时：
+1. 更新 Zustand 全局状态
+2. 使当前 session ID 失效（以新参数调用 `POST /v1/session/create`）
+3. 触发 React Query 对库查询的缓存失效
+4. **不会**重新运行任何进行中的评估——用户必须手动重新运行
 
 ---
 
-## 3. Dashboard
+## 3. 仪表盘
 
-### 3.1  Page layout
+### 3.1  页面布局
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -142,19 +142,19 @@ Changing universe or period:
 
 ### 3.2  StatusBar
 
-A slim 48px strip at the top of the Dashboard page (below TopNav). Shows three items:
+仪表盘页面顶部（TopNav 下方）的一条 48px 细条。显示三项内容：
 
 ```
   ● Data current as of Dec 31 2024  ·  Last sync: 2 hours ago  ·  101 symbols  ·  ⚠ 2 warnings
 ```
 
-- Green dot = fully synced, amber = stale, red = error
-- Click "2 warnings" expands an inline alert panel listing specific data quality issues
-- The bar is sticky within the Dashboard page scroll container
+- 绿点 = 完全同步，琥珀色 = 陈旧，红色 = 错误
+- 点击 "2 warnings" 会展开一个内联告警面板，列出具体的数据质量问题
+- 该条在仪表盘页面的滚动容器内保持固定（sticky）
 
-### 3.3  KPI Row
+### 3.3  KPI 行
 
-Four metric cards in a horizontal row with equal widths.
+四个等宽的指标卡片横向排列。
 
 ```
 ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
@@ -166,53 +166,53 @@ Four metric cards in a horizontal row with equal widths.
 └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
 ```
 
-Each card:
-- Label in 13px muted text above the number
-- Primary metric in 28px / medium weight
-- Secondary line: delta vs previous session (cards 1, 2) or contextual detail (cards 3, 4)
-- Background: `--color-background-secondary`, no border, 8px radius
-- Cards 1, 3 are clickable: card 1 navigates to `/library`, card 4 navigates to `/factor/:best_factor_id`
+每张卡片：
+- 数字上方为 13px 弱化文字的标签
+- 主指标为 28px / 中等字重
+- 副行：相对上一 session 的变化量（卡片 1、2）或上下文细节（卡片 3、4）
+- 背景：`--color-background-secondary`，无边框，8px 圆角
+- 卡片 1、3 可点击：卡片 1 导航到 `/library`，卡片 4 导航到 `/factor/:best_factor_id`
 
-Polling: KPI row refetches every 30 seconds via React Query.
+轮询：KPI 行通过 React Query 每 30 秒重新获取一次。
 
-### 3.4  Factor Leaderboard
+### 3.4  因子排行榜
 
-Left column (60%), shows the top 100 factors sorted by RankICIR.
+左列（60%），显示按 RankICIR 排序的前 100 个因子。
 
-#### Controls (above table)
+#### 控件（表格上方）
 
 ```
 [Sort: RankICIR ▾]  [Min ICIR: 0.0 ▾]  [Source: All ▾]  [Hide redundant: ○]
 ```
 
-- Sort dropdown: RankICIR (default), IC, Decay half-life, Evaluated date
-- Min ICIR filter: slider + numeric input, 0.0–2.0
-- Source filter: All, AGENT, HUMAN, WQ101, IMPORTED
-- Hide redundant toggle: filters out factors with `redundancy_score > 0.7`
+- 排序下拉框：RankICIR（默认）、IC、衰减半衰期、评估日期
+- 最小 ICIR 过滤器：滑块 + 数字输入框，0.0–2.0
+- 来源过滤器：All、AGENT、HUMAN、WQ101、IMPORTED
+- 隐藏冗余开关：过滤掉 `redundancy_score > 0.7` 的因子
 
-#### Table columns
+#### 表格列
 
-| Column | Source field | Width | Behaviour |
+| 列 | 来源字段 | 宽度 | 行为 |
 |---|---|---|---|
-| Expression | `expr` (truncated to 40 chars) | flex | Tooltip shows full expression on hover |
-| RankIC | `rank_ic` | 72px | Right-aligned, 3 decimal places |
-| RankICIR | `rank_icir` | 80px | Right-aligned, inline bar overlay |
-| Decay | `decay_halflife_days` | 64px | `Xd` format, color: green < 10d, amber 10–30d, red > 30d |
-| Redundancy | `redundancy_score` | 72px | Colored badge: green < 0.4, amber 0.4–0.7, red > 0.7 |
-| Source | `lineage.source` | 80px | Small tag badge |
-| Status | `failure_mode` | 64px | Green check or red `!` badge |
+| Expression | `expr`（截断至 40 字符） | flex | 悬停时工具提示显示完整表达式 |
+| RankIC | `rank_ic` | 72px | 右对齐，保留 3 位小数 |
+| RankICIR | `rank_icir` | 80px | 右对齐，内联条形叠加 |
+| Decay | `decay_halflife_days` | 64px | `Xd` 格式，颜色：绿色 < 10d，琥珀色 10–30d，红色 > 30d |
+| Redundancy | `redundancy_score` | 72px | 彩色徽章：绿色 < 0.4，琥珀色 0.4–0.7，红色 > 0.7 |
+| Source | `lineage.source` | 80px | 小标签徽章 |
+| Status | `failure_mode` | 64px | 绿色对勾或红色 `!` 徽章 |
 
-Table behaviours:
-- Click any row → navigates to `/factor/:factor_id` with factor pre-loaded
-- Hover any row → shows a mini preview popover with IC sparkline (last 60 days)
-- Table is virtualised (react-virtual) for performance with 1000+ rows
-- Sticky header
+表格行为：
+- 点击任意行 → 导航到 `/factor/:factor_id` 并预加载该因子
+- 悬停任意行 → 显示一个带 IC 迷你走势图（最近 60 天）的小预览弹出框
+- 表格采用虚拟化（react-virtual）以保证 1000+ 行时的性能
+- 表头固定
 
-### 3.5  Agent Activity Feed
+### 3.5  Agent 活动信息流
 
-Right column (40%). Live feed of factor evaluations triggered in the current or most recent agent session.
+右列（40%）。在当前或最近的 agent session 中触发的因子评估的实时信息流。
 
-#### Session summary panel (top of feed)
+#### Session 摘要面板（信息流顶部）
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -223,9 +223,9 @@ Right column (40%). Live feed of factor evaluations triggered in the current or 
 └──────────────────────────────────────────────────┘
 ```
 
-#### Feed entries
+#### 信息流条目
 
-Each entry is a card with:
+每个条目是一张卡片，包含：
 
 ```
 ┌────────────────────────────────────────────────────┐
@@ -235,17 +235,17 @@ Each entry is a card with:
 └────────────────────────────────────────────────────┘
 ```
 
-- New entries animate in from the top (CSS slide-down transition)
-- Maximum 50 visible entries; older ones fade out at the bottom
-- Failed evaluations shown with red left border and the `failure_mode` code
-- Click any entry → navigates to `/factor/:factor_id`
-- A "Pause feed" toggle freezes auto-scroll so the user can read
+- 新条目从顶部动画进入（CSS 下滑过渡）
+- 最多可见 50 个条目；较旧的条目在底部淡出
+- 失败的评估以红色左边框和 `failure_mode` 代码显示
+- 点击任意条目 → 导航到 `/factor/:factor_id`
+- "Pause feed" 开关冻结自动滚动，以便用户阅读
 
-Polling: new entries via SSE subscription to `GET /v1/events/session-stream`.
+轮询：新条目通过对 `GET /v1/events/session-stream` 的 SSE 订阅获取。
 
-### 3.6  Data Calendar
+### 3.6  数据日历
 
-Full-width strip below the leaderboard + feed row. A GitHub contribution heatmap showing data availability by trading day.
+排行榜 + 信息流行下方的全宽条带。一个类 GitHub 贡献热力图，按交易日显示数据可用性。
 
 ```
        Jan  Feb  Mar  Apr  May  Jun  Jul  Aug  Sep  Oct  Nov  Dec
@@ -254,23 +254,23 @@ Full-width strip below the leaderboard + feed row. A GitHub contribution heatmap
 2024   ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████
 ```
 
-Cell colors:
-- Dark green: 100% coverage (all symbols have data)
-- Medium green: > 95% coverage
-- Amber: 80–95% coverage
-- Red: < 80% coverage
-- Light gray: non-trading day (weekend / holiday)
+单元格颜色：
+- 深绿：100% 覆盖率（所有标的都有数据）
+- 中绿：> 95% 覆盖率
+- 琥珀色：80–95% 覆盖率
+- 红色：< 80% 覆盖率
+- 浅灰：非交易日（周末 / 假日）
 
-Interactions:
-- Hover cell → tooltip: `Dec 15 2024  101/101 symbols  Last sync: 21:05 UTC`
-- Click red/amber cell → expands an inline data quality panel below the calendar listing missing symbols
-- Year labels on left are clickable to scroll to that year
+交互：
+- 悬停单元格 → 工具提示：`Dec 15 2024  101/101 symbols  Last sync: 21:05 UTC`
+- 点击红色/琥珀色单元格 → 在日历下方展开一个内联数据质量面板，列出缺失的标的
+- 左侧的年份标签可点击以滚动到该年份
 
 ---
 
-## 4. Factor Library Analysis
+## 4. 因子库分析
 
-### 4.1  Page layout
+### 4.1  页面布局
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -285,30 +285,30 @@ Interactions:
 └──────────────────────┴─────────────────────────────────────────────┘
 ```
 
-The left/right split is resizable — user can drag the divider between 25%–50%.
+左右分栏可调整大小——用户可在 25%–50% 之间拖动分隔条。
 
-### 4.2  Mode tabs
+### 4.2  模式标签页
 
 ```
 [Factor Detail]  [Correlation Matrix]  [Alpha Space Map]  [IC Heatmap]  [Lineage]
 ```
 
-Mode state is persisted in the URL as `?mode=matrix`.
+模式状态以 `?mode=matrix` 的形式持久化到 URL 中。
 
-### 4.3  Factor List (left panel)
+### 4.3  因子列表（左面板）
 
-#### Filter bar
+#### 过滤栏
 
 ```
 [🔍 Search expressions...        ] [Source: All ▾] [Sort: RankICIR ▾]
 [Min ICIR ──●──────] [Max redundancy ──────●──] [× Clear filters]
 ```
 
-- Full-text search runs against the expression string (client-side for small libraries, server-side for > 500 factors)
-- Sliders update results on release (not on drag, to avoid excessive API calls)
-- Active filter count badge on "Clear filters" button
+- 全文搜索针对表达式字符串运行（小型库时在客户端，> 500 个因子时在服务端）
+- 滑块在释放时（而非拖动时）更新结果，以避免过多的 API 调用
+- "Clear filters" 按钮上带有激活过滤器数量徽章
 
-#### List item
+#### 列表项
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -317,33 +317,33 @@ Mode state is persisted in the URL as `?mode=matrix`.
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-- Checkbox for multi-select
-- Expression in monospace, truncated, full text in tooltip
-- ICIR as a horizontal bar (filled proportion = ICIR / 2.0, max scale)
-- Decay half-life
-- Redundancy badge: `● unique` (green), `◐ similar` (amber), `● redundant` (red)
-- Source tag: `AGENT`, `HUMAN`, `WQ101`, `IMPORTED`
-- Clicking the item body: selects it and updates the right panel
-- Clicking the checkbox: adds to multi-select without changing right panel
+- 用于多选的复选框
+- 等宽字体的表达式，截断显示，完整文本在工具提示中
+- ICIR 显示为水平条（填充比例 = ICIR / 2.0，为最大刻度）
+- 衰减半衰期
+- 冗余度徽章：`● unique`（绿色）、`◐ similar`（琥珀色）、`● redundant`（红色）
+- 来源标签：`AGENT`、`HUMAN`、`WQ101`、`IMPORTED`
+- 点击项主体：选中它并更新右面板
+- 点击复选框：加入多选而不改变右面板
 
-Selected item has a blue left border. Active item (last clicked) has a slightly darker background.
+选中项带有蓝色左边框。激活项（最后点击的）带有略深的背景。
 
-#### Bulk action bar (appears when ≥ 1 item checked)
+#### 批量操作栏（当勾选 ≥ 1 项时出现）
 
 ```
   3 selected   [Export ↓]  [Tag ▾]  [Compare]  [Delete]  [× Clear]
 ```
 
-- Export: downloads FactorReport JSON or CSV for selected factors
-- Tag: dropdown to add a label (create new or choose existing)
-- Compare: switches to Correlation Matrix mode pre-seeded with selected factors
-- Delete: shows confirmation modal listing expressions; confirmed deletion calls `DELETE /v1/library/factors`
+- Export：为所选因子下载 FactorReport JSON 或 CSV
+- Tag：下拉框以添加标签（新建或选择已有）
+- Compare：切换到相关性矩阵模式，预填入所选因子
+- Delete：显示列出表达式的确认弹窗；确认删除后调用 `DELETE /v1/library/factors`
 
-### 4.4  Mode A — Factor Detail
+### 4.4  模式 A — 因子详情
 
-Default mode. Shows when a factor is selected from the list.
+默认模式。当从列表中选中一个因子时显示。
 
-Right panel layout:
+右面板布局：
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -367,104 +367,104 @@ Right panel layout:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-The "Open in tester →" button navigates to `/factor/abc123`.
+"Open in tester →" 按钮导航到 `/factor/abc123`。
 
-### 4.5  Mode B — Correlation Matrix
+### 4.5  模式 B — 相关性矩阵
 
-Full right panel is a heatmap.
+整个右面板是一张热力图。
 
 ```
 Controls:
   [Redundancy threshold: 0.70 ──●──────]  [Cluster: ○ On]  [Export matrix ↓]
 ```
 
-Heatmap:
-- Rows and columns are factor expressions (truncated)
-- Cell color: diverging scale, red = high positive correlation, white = 0, blue = high negative
-- Threshold overlay: cells above the slider value get a red diagonal strikethrough
-- Factors are reordered by hierarchical clustering when "Cluster" is on (computed client-side with hclust from `ml-hclust` library)
-- Hover any cell: tooltip shows `ts_corr... × cs_rank...  correlation: 0.83`
-- Click any cell: opens a scatter plot modal of the two factors' daily values
+热力图：
+- 行和列为因子表达式（截断显示）
+- 单元格颜色：发散色阶，红色 = 高正相关，白色 = 0，蓝色 = 高负相关
+- 阈值叠加：高于滑块值的单元格获得红色对角划线
+- 当 "Cluster" 打开时，因子按层次聚类重新排序（在客户端使用 `ml-hclust` 库的 hclust 计算）
+- 悬停任意单元格：工具提示显示 `ts_corr... × cs_rank...  correlation: 0.83`
+- 点击任意单元格：打开两个因子每日值的散点图弹窗
 
-Summary below heatmap:
+热力图下方的摘要：
 ```
   14 pairs above 0.70 threshold.  Pruning would remove 8 dominated factors.
   [Preview pruning →]
 ```
 
-"Preview pruning" opens a side drawer listing the 8 factors that would be removed, keeping the one with higher RankICIR in each pair.
+"Preview pruning" 打开一个侧抽屉，列出将被移除的 8 个因子，在每一对中保留 RankICIR 较高的那个。
 
-### 4.6  Mode C — Alpha Space Map
+### 4.6  模式 C — Alpha 空间图
 
-Full right panel is a 2D scatter plot.
+整个右面板是一张 2D 散点图。
 
-The position of each point is computed by running UMAP on the pairwise rank-correlation distance matrix (1 - |corr|). Factors that behave similarly cluster together; orthogonal factors are far apart.
+每个点的位置通过对成对秩相关距离矩阵（1 - |corr|）运行 UMAP 计算得出。行为相似的因子聚集在一起；正交的因子相距较远。
 
 ```
 Controls:
   [Color by: RankICIR ▾]  [Size by: IC ▾]  [Show gaps: ○]  [Reset zoom]
 ```
 
-Plot:
-- Each point is a factor
-- Default: color = RankICIR (green → yellow → red scale), size = fixed
-- "Color by" options: RankICIR, source (AGENT/HUMAN/WQ101), decay half-life, redundancy
-- Hover: tooltip with expression, RankICIR, decay
-- Click: selects factor, switches left panel to that factor, shows detail in Mode A panel simultaneously if split view is active
-- "Show gaps" overlay: draws the convex hull of existing points and highlights the empty interior regions — these are unexplored alpha regions the agent should target
-- Pan and zoom supported (d3-zoom)
+图形：
+- 每个点是一个因子
+- 默认：颜色 = RankICIR（绿 → 黄 → 红色阶），大小 = 固定
+- "Color by" 选项：RankICIR、来源（AGENT/HUMAN/WQ101）、衰减半衰期、冗余度
+- 悬停：带表达式、RankICIR、衰减的工具提示
+- 点击：选中因子，将左面板切换到该因子，如果分栏视图处于激活状态则同时在模式 A 面板中显示详情
+- "Show gaps" 叠加层：绘制现有点的凸包并高亮空白的内部区域——这些是 agent 应当瞄准的未探索 alpha 区域
+- 支持平移和缩放（d3-zoom）
 
-UMAP is computed client-side using `umap-js` on page load or when the factor set changes. For > 300 factors a loading spinner appears (typically 1–3 seconds).
+UMAP 在页面加载时或因子集变化时使用 `umap-js` 在客户端计算。对于 > 300 个因子会出现加载旋转指示器（通常 1–3 秒）。
 
-### 4.7  Mode D — IC Heatmap
+### 4.7  模式 D — IC 热力图
 
-Full right panel. A matrix where rows = factors, columns = trading dates, cells = IC value that day.
+整个右面板。一个矩阵，其中行 = 因子，列 = 交易日期，单元格 = 当天的 IC 值。
 
 ```
 Controls:
   [Date range: 2024 ▾]  [Color scale: ±0.15 ────●────]  [Sort rows: RankICIR ▾]
 ```
 
-- Rows are factors in the same order as the left panel list (honors current filters)
-- Columns are trading days, grouped by month
-- Color: green for positive IC, red for negative, white for ~0
-- Color scale slider sets the saturation anchor (default ±0.15 = full red/green)
-- Hover cell: `Factor: ts_corr(close,volume,20)  Date: Nov 15 2024  IC: 0.061`
-- Click row label: selects factor in left panel, shows detail in Mode A
+- 行是与左面板列表相同顺序的因子（遵循当前过滤器）
+- 列是交易日，按月分组
+- 颜色：正 IC 为绿色，负 IC 为红色，~0 为白色
+- 色阶滑块设置饱和度锚点（默认 ±0.15 = 满红/满绿）
+- 悬停单元格：`Factor: ts_corr(close,volume,20)  Date: Nov 15 2024  IC: 0.061`
+- 点击行标签：在左面板中选中因子，在模式 A 中显示详情
 
-This view makes regime effects immediately visible — a vertical band of red means all factors failed on those dates (market event). A horizontal band of red means one factor consistently fails.
+此视图让市场状态（regime）效应一目了然——一条竖直的红色带意味着所有因子在那些日期都失效了（市场事件）。一条水平的红色带意味着某一个因子持续失效。
 
-### 4.8  Mode E — Factor Lineage
+### 4.8  模式 E — 因子血缘
 
-A directed graph showing the provenance of factors.
+一张展示因子来源的有向图。
 
-Nodes:
-- `[PROMPT]` — LLM prompt (shows model, timestamp, prompt hash)
-- `[FACTOR]` — factor expression (shows expression, RankICIR)
-- `[SNAPSHOT]` — data snapshot used for evaluation
+节点：
+- `[PROMPT]` — LLM prompt（显示模型、时间戳、prompt 哈希）
+- `[FACTOR]` — 因子表达式（显示表达式、RankICIR）
+- `[SNAPSHOT]` — 用于评估的数据快照
 
-Edges:
+边：
 - `[PROMPT] → [FACTOR]` — "generated"
 - `[FACTOR] + [SNAPSHOT] → [FACTOR]` — "evaluated on"
 
-Layout: top-to-bottom DAG using dagre layout algorithm.
+布局：使用 dagre 布局算法的自上而下 DAG。
 
 ```
 Controls:
   [Show: All factors / High quality only (ICIR > 0.5)]  [Zoom to fit]
 ```
 
-Interactions:
-- Hover node: tooltip with full details
-- Click `[FACTOR]` node: selects in left panel, shows detail in Mode A
-- Click `[PROMPT]` node: opens modal with full prompt text
-- Double-click `[SNAPSHOT]` node: opens data calendar filtered to that snapshot date
+交互：
+- 悬停节点：带完整细节的工具提示
+- 点击 `[FACTOR]` 节点：在左面板中选中，在模式 A 中显示详情
+- 点击 `[PROMPT]` 节点：打开带完整 prompt 文本的弹窗
+- 双击 `[SNAPSHOT]` 节点：打开过滤到该快照日期的数据日历
 
 ---
 
-## 5. Single Factor Test
+## 5. 单因子测试
 
-### 5.1  Page layout
+### 5.1  页面布局
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -482,33 +482,33 @@ Interactions:
 └───────────────────────────────────────┴─────────────────────────────┘
 ```
 
-On narrow screens (< 1200px) the summary panel moves below the results grid and the results grid becomes 1 column.
+在窄屏（< 1200px）上，摘要面板移动到结果网格下方，且结果网格变为 1 列。
 
-### 5.2  Expression Editor
+### 5.2  表达式编辑器
 
-A Monaco Editor instance occupying approximately 180px height (4–6 lines). Resizable by dragging the bottom edge.
+一个占据约 180px 高度（4–6 行）的 Monaco 编辑器实例。可通过拖动底边调整大小。
 
-#### Toolbar above the editor
+#### 编辑器上方的工具栏
 
 ```
 [● qlib] [● Python]   [⇄ Convert syntax]   [⌘↵ Evaluate]   [↺ History]   [? Operator docs]
 ```
 
-- Syntax toggle: shows which syntax is currently active; clicking switches highlighting mode
-- Convert syntax: rewrites the current expression between qlib and Python syntax (calls the `syntax-bridge` utility in-process, no API call)
-- Evaluate button: triggers evaluation; shows loading spinner after click, replaced by latency badge on completion (e.g. `342ms`)
-- History: dropdown of last 20 evaluated expressions, click to restore
-- Operator docs: opens a drawer with the full `OPERATOR_SCHEMA` as a searchable reference
+- 语法切换：显示当前激活的语法；点击可切换高亮模式
+- 转换语法：在 qlib 与 Python 语法之间重写当前表达式（在进程内调用 `syntax-bridge` 工具，无 API 调用）
+- 评估按钮：触发评估；点击后显示加载旋转指示器，完成时替换为延迟徽章（例如 `342ms`）
+- 历史：最近 20 个已评估表达式的下拉框，点击可恢复
+- 算子文档：打开一个抽屉，以可搜索的参考形式展示完整的 `OPERATOR_SCHEMA`
 
-#### Editor behaviours
+#### 编辑器行为
 
-- Default height: 4 lines (expands to content up to 8 lines before scrolling)
-- Keyboard shortcut: `Cmd+Enter` (Mac) / `Ctrl+Enter` (Windows) triggers evaluation
-- On load with `factor_id` route param: editor is pre-populated with the factor's expression
-- Syntax error underlines appear as the user types, sourced from the parser running in a Web Worker
-- The AST tree is rendered in a collapsible panel directly below the editor, hidden by default; the "AST" disclosure link toggles it
+- 默认高度：4 行（随内容展开至最多 8 行后开始滚动）
+- 键盘快捷键：`Cmd+Enter`（Mac）/ `Ctrl+Enter`（Windows）触发评估
+- 带有 `factor_id` 路由参数加载时：编辑器预填充该因子的表达式
+- 语法错误下划线随用户输入出现，来源为在 Web Worker 中运行的解析器
+- AST 树渲染在编辑器正下方的可折叠面板中，默认隐藏；"AST" 展开链接可切换其显示
 
-#### AST disclosure panel
+#### AST 展开面板
 
 ```
 ▼ AST  (click to expand)
@@ -522,30 +522,30 @@ BinOp(-)
     └── FieldNode(close)
 ```
 
-Rendered as an indented tree. Node types use different colors: FieldNode (teal), LitNode (amber), OpNode (blue), BinOp (gray).
+渲染为缩进树。节点类型使用不同颜色：FieldNode（青绿色）、LitNode（琥珀色）、OpNode（蓝色）、BinOp（灰色）。
 
-### 5.3  Config Row
+### 5.3  配置行
 
-A horizontal strip below the editor with six controls. Controls are compact (height 36px).
+编辑器下方的一条水平条带，带有六个控件。控件紧凑（高度 36px）。
 
 ```
 [NASDAQ100 ▾]  [2020–2024 ▾]  [next_open ▾]  [1d ✓  5d ✓  10d ✓  20d ✓]  [Neutralize: None ▾]  [Evaluate ▶]
 ```
 
-| Control | Options | Notes |
+| 控件 | 选项 | 备注 |
 |---|---|---|
-| Universe | Inherited from global state; shows current value; overridable per-evaluation | Changing here does not update global state |
-| Period | Inherited from global state; overridable | Same as above |
-| Execution | `next_open` (default), `next_close` | Tooltip explains each. `vwap` is disabled — the MASSIVE day-aggregate source has no intraday/VWAP data |
-| Horizons | Multi-checkbox: 1d, 5d, 10d, 20d (all default) | Affects decay curve range |
-| Neutralize | None (default), Sector, Industry, Market cap | Applies `cs_neutralize` before IC |
-| Evaluate button | Primary CTA, also triggered by `Cmd+Enter` | Latency badge replaces spinner on complete |
+| 股票池 | 继承自全局状态；显示当前值；可按每次评估覆盖 | 在此更改不会更新全局状态 |
+| 周期 | 继承自全局状态；可覆盖 | 同上 |
+| 执行 | `next_open`（默认）、`next_close` | 工具提示解释每一项。`vwap` 被禁用——MASSIVE 日聚合数据源没有日内/VWAP 数据 |
+| 时间跨度 | 多选复选框：1d、5d、10d、20d（全部默认选中） | 影响衰减曲线范围 |
+| 中性化 | None（默认）、Sector、Industry、Market cap | 在计算 IC 前应用 `cs_neutralize` |
+| 评估按钮 | 主要行动号召，也可由 `Cmd+Enter` 触发 | 完成时延迟徽章替换旋转指示器 |
 
-When universe or period differ from global state, the control shows a small `*` indicator and a tooltip: "This evaluation uses a different universe/period than your global setting."
+当股票池或周期与全局状态不同时，控件会显示一个小的 `*` 指示器和一个工具提示："此评估使用了与你的全局设置不同的股票池/周期。"
 
-### 5.4  Results Grid
+### 5.4  结果网格
 
-Six chart cards in a 2×3 grid. Chart cards share a common card shell:
+以 2×3 网格排列的六张图表卡片。图表卡片共享一个通用的卡片外壳：
 
 ```
 ┌────────────────────────────────────────────────┐
@@ -557,120 +557,120 @@ Six chart cards in a 2×3 grid. Chart cards share a common card shell:
 └────────────────────────────────────────────────┘
 ```
 
-- Title: 14px, medium weight
-- Interpretation hint: 12px muted text, one line, updates based on results
-- `↓` download icon: exports chart data as CSV
-- Chart area fills remaining space; minimum height 220px
+- 标题：14px，中等字重
+- 解读提示：12px 弱化文字，单行，根据结果更新
+- `↓` 下载图标：将图表数据导出为 CSV
+- 图表区域填充剩余空间；最小高度 220px
 
-Charts render progressively — each card shows a loading skeleton until its data arrives via SSE.
+图表渐进式渲染——每张卡片在其数据通过 SSE 到达前显示加载骨架屏。
 
-#### Card 1 — IC & RankIC Time Series
+#### 卡片 1 — IC 与 RankIC 时间序列
 
-**Chart type:** Line chart (Recharts `LineChart`)
+**图表类型：** 折线图（Recharts `LineChart`）
 
-**Data:** `ic[]`, `rank_ic[]`, `dates[]` from `eval.ic_series` SSE event
+**数据：** 来自 `eval.ic_series` SSE 事件的 `ic[]`、`rank_ic[]`、`dates[]`
 
-**Series:**
-- IC: blue line, thin (1.5px)
-- RankIC: teal line, thin (1.5px)
-- Rolling 63-day mean IC: blue thick line (3px)
-- ±0.02 significance band: light gray filled area
+**系列：**
+- IC：蓝色细线（1.5px）
+- RankIC：青绿色细线（1.5px）
+- 滚动 63 日均值 IC：蓝色粗线（3px）
+- ±0.02 显著性带：浅灰色填充区域
 
-**Axes:**
-- X: trading date, monthly ticks, abbreviated month labels
-- Y: [-0.15, 0.15] default range; auto-scales if values exceed
+**坐标轴：**
+- X：交易日期，月度刻度，缩写的月份标签
+- Y：默认范围 [-0.15, 0.15]；若值超出则自动缩放
 
-**Annotations:**
-- Vertical dashed lines at major market events (COVID crash Mar 2020, Fed rate hikes 2022); toggled via a "Show events" checkbox
-- Summary stats in card header: `IC: 0.032  ICIR: 0.43  RankIC: 0.047  RankICIR: 0.61`
+**注释：**
+- 在主要市场事件处的垂直虚线（2020 年 3 月 COVID 崩盘、2022 年美联储加息）；通过 "Show events" 复选框切换
+- 卡片头部的摘要统计：`IC: 0.032  ICIR: 0.43  RankIC: 0.047  RankICIR: 0.61`
 
-**Interpretation hint:** `"Consistent positive signal. IC is stable across the period."`  / `"Unstable IC — signal reverses in bear markets."`
+**解读提示：** `"Consistent positive signal. IC is stable across the period."` / `"Unstable IC — signal reverses in bear markets."`
 
-#### Card 2 — Decay Curve
+#### 卡片 2 — 衰减曲线
 
-**Chart type:** Bar chart (Recharts `BarChart`)
+**图表类型：** 柱状图（Recharts `BarChart`）
 
-**Data:** `ic_by_horizon`, `halflife` from `eval.decay` SSE event
+**数据：** 来自 `eval.decay` SSE 事件的 `ic_by_horizon`、`halflife`
 
-**Bars:**
-- One bar per horizon (1d, 5d, 10d, 20d)
-- Bar height = RankIC at that horizon
-- Error bars (thin lines) show ±1 std of daily IC at each horizon
+**柱：**
+- 每个时间跨度一根柱（1d、5d、10d、20d）
+- 柱高 = 该时间跨度下的 RankIC
+- 误差线（细线）显示每个时间跨度下每日 IC 的 ±1 标准差
 
-**Overlaid line:**
-- Exponential decay fit: dashed line through bar tops
-- Half-life annotation: callout label pointing to the 50% IC level
+**叠加线：**
+- 指数衰减拟合：穿过柱顶的虚线
+- 半衰期注释：指向 50% IC 水平的标注标签
 
-**Interpretation hint:** `"Signal half-life: 12 days. Suitable for weekly rebalancing."`
+**解读提示：** `"Signal half-life: 12 days. Suitable for weekly rebalancing."`
 
-#### Card 3 — Group Return Analysis
+#### 卡片 3 — 分组收益分析
 
-**Chart type:** Bar chart with optional line overlay
+**图表类型：** 带可选叠加线的柱状图
 
-**Data:** `quintile_returns` from `eval.groups` SSE event
+**数据：** 来自 `eval.groups` SSE 事件的 `quintile_returns`
 
-**Bars:**
-- 5 bars, one per quintile (Q1 = short, Q5 = long)
-- Color: Q1 red, Q2–Q4 gray, Q5 green
-- Value labels above each bar (e.g. `-0.12%`, `+0.15%`)
+**柱：**
+- 5 根柱，每个五分位一根（Q1 = 做空，Q5 = 做多）
+- 颜色：Q1 红色，Q2–Q4 灰色，Q5 绿色
+- 每根柱上方的数值标签（例如 `-0.12%`、`+0.15%`）
 
-**Controls above chart:**
-- Return type toggle: `Raw` / `Market-adjusted` / `Sector-adjusted`
-- Horizon selector (1d, 5d, 10d, 20d) — updates chart on change
+**图表上方的控件：**
+- 收益类型切换：`Raw` / `Market-adjusted` / `Sector-adjusted`
+- 时间跨度选择器（1d、5d、10d、20d）——更改时更新图表
 
-**Overlaid line:** Long-short spread (Q5 − Q1), shown on secondary Y axis
+**叠加线：** 多空价差（Q5 − Q1），显示在次 Y 轴上
 
-**Interpretation hint:** `"Monotonic spread of 0.27%/day long-short. Strong signal."` / `"Non-monotonic — Q3 outperforms Q5. Factor may be non-linear."`
+**解读提示：** `"Monotonic spread of 0.27%/day long-short. Strong signal."` / `"Non-monotonic — Q3 outperforms Q5. Factor may be non-linear."`
 
-#### Card 4 — Factor Heatmap
+#### 卡片 4 — 因子热力图
 
-**Chart type:** Custom SVG calendar heatmap
+**图表类型：** 自定义 SVG 日历热力图
 
-**Data:** `ic[]`, `dates[]` from `eval.ic_series` SSE event (same data as Card 1)
+**数据：** 来自 `eval.ic_series` SSE 事件的 `ic[]`、`dates[]`（与卡片 1 相同的数据）
 
-**Layout:**
-- Columns: trading days, one cell per day, 4px wide
-- Rows: one row per year
-- Month labels at top; year labels at left
-- Cell color: green (positive IC) → white (zero) → red (negative IC), symmetric diverging scale
+**布局：**
+- 列：交易日，每天一个单元格，4px 宽
+- 行：每年一行
+- 月份标签在顶部；年份标签在左侧
+- 单元格颜色：绿色（正 IC）→ 白色（零）→ 红色（负 IC），对称的发散色阶
 
-**Interactions:**
-- Hover cell: tooltip `Dec 15 2024  IC: 0.061`
-- Color scale adjustable via a small slider below the chart (default ±0.10)
+**交互：**
+- 悬停单元格：工具提示 `Dec 15 2024  IC: 0.061`
+- 通过图表下方的小滑块调整色阶（默认 ±0.10）
 
-**Interpretation hint:** `"Strong in 2021–2022. Signal weakens post-2023 rate hikes."`
+**解读提示：** `"Strong in 2021–2022. Signal weakens post-2023 rate hikes."`
 
-#### Card 5 — Turnover Analysis
+#### 卡片 5 — 换手率分析
 
-**Chart type:** Dual-axis line chart
+**图表类型：** 双轴折线图
 
-**Data:** Computed from `factor_vals` (rank autocorrelation) and cost model
+**数据：** 由 `factor_vals`（秩自相关）和成本模型计算得出
 
-**Series:**
-- Primary Y axis: 63-day rolling rank autocorrelation (blue line)
-- Secondary Y axis: estimated net IC after transaction costs (orange dashed line)
+**系列：**
+- 主 Y 轴：63 日滚动秩自相关（蓝色线）
+- 次 Y 轴：扣除交易成本后的估计净 IC（橙色虚线）
 
-**Reference line:** Horizontal line at `autocorr = 0.8` (typical "low turnover" threshold)
+**参考线：** 在 `autocorr = 0.8`（典型的"低换手率"阈值）处的水平线
 
-**Summary below chart:**
+**图表下方的摘要：**
 ```
 Avg autocorrelation: 0.83  ·  Estimated cost drag: 0.008 IC  ·  Net IC: 0.039
 ```
 
-**Interpretation hint:** `"Low turnover factor. Transaction costs consume ~17% of gross IC."`
+**解读提示：** `"Low turnover factor. Transaction costs consume ~17% of gross IC."`
 
-#### Card 6 — Return Distribution
+#### 卡片 6 — 收益分布
 
-**Chart type:** Overlaid histogram (Recharts `BarChart` with two data series)
+**图表类型：** 叠加直方图（带两个数据系列的 Recharts `BarChart`）
 
-**Data:** Forward return distributions for Q1 (short) and Q5 (long) quintiles
+**数据：** Q1（做空）和 Q5（做多）五分位的远期收益分布
 
-**Series:**
-- Q5 (long) returns: green bars, 40% opacity
-- Q1 (short) returns: red bars, 40% opacity
-- KDE smooth lines overlaid on each histogram (computed via `kernel-density-estimator` utility)
+**系列：**
+- Q5（做多）收益：绿色柱，40% 不透明度
+- Q1（做空）收益：红色柱，40% 不透明度
+- 叠加在每个直方图上的 KDE 平滑线（通过 `kernel-density-estimator` 工具计算）
 
-**Stats panel below chart:**
+**图表下方的统计面板：**
 ```
                  Q5 (Long)    Q1 (Short)
 Mean return:     +0.0015      -0.0012
@@ -678,17 +678,17 @@ Std dev:          0.0089       0.0091
 t-statistic:     2.34  (p < 0.02)
 ```
 
-**Interpretation hint:** `"Distributions well-separated. Long-short return is statistically significant."`
+**解读提示：** `"Distributions well-separated. Long-short return is statistically significant."`
 
-### 5.5  Summary Panel
+### 5.5  摘要面板
 
-Fixed 300px right column. Shows the structured FactorReport.
+固定 300px 的右列。显示结构化的 FactorReport。
 
-#### Loading state
+#### 加载状态
 
-While evaluation is in progress: shows a loading skeleton for each section.
+评估进行中时：为每个部分显示加载骨架屏。
 
-#### Populated state
+#### 已填充状态
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -725,16 +725,13 @@ While evaluation is in progress: shows a loading skeleton for each section.
 └──────────────────────────────────────────────────┘
 ```
 
-- "Save to library" button: calls `POST /v1/library/factors`, shows success toast
-- "Compare with library →" button: navigates to `/library?mode=matrix` with this factor pre-seeded in the correlation matrix against the top 20 library factors by RankICIR
-- "Full JSON" disclosure: expands a `<pre>` block with the complete `FactorReport` JSON, syntax-highlighted, with a copy button
+- "Save to library" 按钮：调用 `POST /v1/library/factors`，显示成功 toast
+- "Compare with library →" 按钮：导航到 `/library?mode=matrix`，将此因子预填入相关性矩阵，与库中 RankICIR 排名前 20 的因子对比
+- "Full JSON" 展开项：展开一个 `<pre>` 块，包含完整的 `FactorReport` JSON，带语法高亮和复制按钮
 
-#### Error state (when `failure_mode` is set)
+#### 错误状态（当设置了 `failure_mode` 时）
 
-Rendered from the engine's `FactorDiagnostics` (the `errors[]` / `warnings[]` arrays of
-`diagnose().to_dict()`). The header is the diagnostic `title`, the code badge is the stable
-`ASSAY-*` id, the body is the `message` + caret `snippet`, and the fix line is the
-`suggestion`. Example — a real `LOOKAHEAD_SHIFT` (`failure_mode: LOOKAHEAD`):
+从引擎的 `FactorDiagnostics`（`diagnose().to_dict()` 的 `errors[]` / `warnings[]` 数组）渲染。头部是诊断 `title`，代码徽章是稳定的 `ASSAY-*` id，主体是 `message` + 插入符号 `snippet`，修复行是 `suggestion`。示例——一个真实的 `LOOKAHEAD_SHIFT`（`failure_mode: LOOKAHEAD`）：
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -750,18 +747,17 @@ Rendered from the engine's `FactorDiagnostics` (the `errors[]` / `warnings[]` ar
 └──────────────────────────────────────────────────┘
 ```
 
-`failure_mode` is one of `SYNTAX_ERROR` · `LOOKAHEAD` · `CONSTANT` · `ALL_NAN` ·
-`RUNTIME_ERROR`; parse errors (`ASSAY-P###`) surface inline in the editor (§9) as well.
-The error state replaces the entire summary panel content. The charts still render with
-whatever partial data is available before the error was detected.
+`failure_mode` 是 `SYNTAX_ERROR` · `LOOKAHEAD` · `CONSTANT` · `ALL_NAN` ·
+`RUNTIME_ERROR` 之一；解析错误（`ASSAY-P###`）也会内联显示在编辑器中（§9）。
+错误状态会替换整个摘要面板的内容。在错误被检测到之前，图表仍会用任何可用的部分数据进行渲染。
 
 ---
 
-## 6. Shared Components
+## 6. 共享组件
 
 ### 6.1  `<FactorReportCard />`
 
-Compact card used in the leaderboard and agent feed. Accepts a `FactorSummary` or `FactorReport` prop.
+在排行榜和 agent 信息流中使用的紧凑卡片。接受一个 `FactorSummary` 或 `FactorReport` 属性。
 
 ```typescript
 interface FactorReportCardProps {
@@ -774,7 +770,7 @@ interface FactorReportCardProps {
 
 ### 6.2  `<ICSparkline />`
 
-A minimal 60-day IC sparkline. Used in the leaderboard hover preview and factor detail card.
+一个极简的 60 天 IC 走势图。用于排行榜悬停预览和因子详情卡片。
 
 ```typescript
 interface ICSparklineProps {
@@ -797,7 +793,7 @@ interface RedundancyBadgeProps {
 
 ### 6.4  `<ExpressionTag />`
 
-A monospace pill displaying a truncated factor expression. Full expression shown in tooltip on hover.
+一个显示截断因子表达式的等宽字体药丸标签。悬停时工具提示显示完整表达式。
 
 ```typescript
 interface ExpressionTagProps {
@@ -809,7 +805,7 @@ interface ExpressionTagProps {
 
 ### 6.5  `<FactorReportJSON />`
 
-Syntax-highlighted JSON display with copy button and line count badge.
+带复制按钮和行数徽章的语法高亮 JSON 显示。
 
 ```typescript
 interface FactorReportJSONProps {
@@ -820,7 +816,7 @@ interface FactorReportJSONProps {
 
 ### 6.6  `<SkeletonChart />`
 
-Animated loading skeleton sized to match a chart card. Used while SSE events are pending.
+大小与图表卡片匹配的动画加载骨架屏。在 SSE 事件待处理时使用。
 
 ```typescript
 interface SkeletonChartProps {
@@ -831,11 +827,11 @@ interface SkeletonChartProps {
 
 ---
 
-## 7. State Management
+## 7. 状态管理
 
-All state is in Zustand stores. No Redux. No Context API for state (only for DI/config).
+所有状态都在 Zustand store 中。不使用 Redux。不使用 Context API 管理状态（仅用于 DI/配置）。
 
-### 7.1  Global store
+### 7.1  全局 store
 
 ```typescript
 // src/store/global.ts
@@ -855,7 +851,7 @@ interface GlobalState {
 }
 ```
 
-### 7.2  Library store
+### 7.2  库 store
 
 ```typescript
 // src/store/library.ts
@@ -878,7 +874,7 @@ interface LibraryState {
 }
 ```
 
-### 7.3  Evaluation store
+### 7.3  评估 store
 
 ```typescript
 // src/store/evaluation.ts
@@ -908,11 +904,11 @@ interface EvalState {
 
 ---
 
-## 8. Data Fetching & Streaming
+## 8. 数据获取与流式传输
 
-React Query manages all server state. Custom hooks encapsulate the fetch + SSE logic.
+React Query 管理所有服务端状态。自定义 hook 封装了 fetch + SSE 逻辑。
 
-### 8.1  Query keys
+### 8.1  查询键
 
 ```typescript
 // Consistent key structure for cache invalidation
@@ -926,7 +922,7 @@ const queryKeys = {
 }
 ```
 
-### 8.2  Evaluation streaming hook
+### 8.2  评估流式 hook
 
 ```typescript
 // src/api/hooks/useEvaluate.ts
@@ -993,7 +989,7 @@ export function useEvaluate() {
 }
 ```
 
-### 8.3  Library queries
+### 8.3  库查询
 
 ```typescript
 // src/api/hooks/useLibrary.ts
@@ -1019,9 +1015,9 @@ export function useCorrelationMatrix(factorIds: string[], universe: string) {
 
 ---
 
-## 9. Monaco Editor Extension
+## 9. Monaco 编辑器扩展
 
-### 9.1  Language registration
+### 9.1  语言注册
 
 ```typescript
 // src/components/editor/assay-lang.ts
@@ -1140,7 +1136,7 @@ export function setupAssayLanguage(schema: OperatorSchema) {
 }
 ```
 
-### 9.2  Syntax bridge (qlib ↔ Python conversion)
+### 9.2  语法桥（qlib ↔ Python 转换）
 
 ```typescript
 // src/components/editor/syntax-bridge.ts
@@ -1181,7 +1177,7 @@ export function toQlib(assayExpr: string): string {
 
 ---
 
-## 10. Routing
+## 10. 路由
 
 ```typescript
 // src/main.tsx
@@ -1209,54 +1205,54 @@ export default function App() {
 }
 ```
 
-URL state synchronisation — the universe, period, and library mode are persisted to the URL as query params via a custom `useUrlSync` hook. Navigating back restores the exact state the user left.
+URL 状态同步——股票池、周期和库模式通过一个自定义 `useUrlSync` hook 以查询参数的形式持久化到 URL。回退导航会恢复用户离开时的确切状态。
 
 ---
 
-## 11. Design Tokens
+## 11. 设计令牌
 
-All visual design values are Tailwind CSS custom properties, extended in `tailwind.config.ts`.
+所有视觉设计值都是 Tailwind CSS 自定义属性，在 `tailwind.config.ts` 中扩展。
 
-### 11.1  Colors
+### 11.1  颜色
 
-| Token | Value | Usage |
+| 令牌 | 值 | 用途 |
 |---|---|---|
-| `--color-navy` | `#1B2A4A` | Headings, logo |
-| `--color-blue` | `#2D5BE3` | Primary actions, active tabs, links |
-| `--color-teal` | `#0E8A7E` | RankIC lines, positive signals |
-| `--color-amber` | `#B87C1A` | Warnings, callouts |
-| `--color-red` | `#C0392B` | Errors, negative IC, redundant badges |
-| `--color-green` | `#1E7B4B` | Success, positive IC, unique badges |
-| `--color-gray-1` | `#F4F6FA` | Alternating table row background |
-| `--color-gray-4` | `#8892AA` | Muted text, labels |
+| `--color-navy` | `#1B2A4A` | 标题、logo |
+| `--color-blue` | `#2D5BE3` | 主要操作、激活标签页、链接 |
+| `--color-teal` | `#0E8A7E` | RankIC 线、正向信号 |
+| `--color-amber` | `#B87C1A` | 警告、标注 |
+| `--color-red` | `#C0392B` | 错误、负 IC、冗余徽章 |
+| `--color-green` | `#1E7B4B` | 成功、正 IC、唯一徽章 |
+| `--color-gray-1` | `#F4F6FA` | 交替表格行背景 |
+| `--color-gray-4` | `#8892AA` | 弱化文字、标签 |
 
-### 11.2  Typography scale
+### 11.2  字号刻度
 
-| Use | Size | Weight |
+| 用途 | 尺寸 | 字重 |
 |---|---|---|
-| Page title (h1) | 24px | 500 |
-| Section heading (h2) | 18px | 500 |
-| Card title | 14px | 500 |
-| Body text | 14px | 400 |
-| Table text | 13px | 400 |
-| Label / hint | 12px | 400 |
-| Monospace (expressions) | 13px | 400 (JetBrains Mono) |
+| 页面标题（h1） | 24px | 500 |
+| 章节标题（h2） | 18px | 500 |
+| 卡片标题 | 14px | 500 |
+| 正文文字 | 14px | 400 |
+| 表格文字 | 13px | 400 |
+| 标签 / 提示 | 12px | 400 |
+| 等宽字体（表达式） | 13px | 400（JetBrains Mono） |
 
-### 11.3  Spacing
+### 11.3  间距
 
-Base unit: 4px. Common spacings: 4, 8, 12, 16, 24, 32, 48px.
+基础单位：4px。常用间距：4、8、12、16、24、32、48px。
 
-### 11.4  Border radius
+### 11.4  边框圆角
 
-- Cards, panels: 8px (`--border-radius-md`)
-- Badges, tags: 4px
-- Buttons: 6px
-- Tooltips: 4px
+- 卡片、面板：8px（`--border-radius-md`）
+- 徽章、标签：4px
+- 按钮：6px
+- 工具提示：4px
 
-### 11.5  Shadows
+### 11.5  阴影
 
-No decorative shadows. Focus rings only: `box-shadow: 0 0 0 2px var(--color-blue)` on focused form elements.
+无装饰性阴影。仅焦点环：聚焦的表单元素上使用 `box-shadow: 0 0 0 2px var(--color-blue)`。
 
 ---
 
-*— Assay WebUI Detailed Design · AlphaBench Project —*
+*— Assay WebUI 详细设计 · AlphaBench 项目 —*

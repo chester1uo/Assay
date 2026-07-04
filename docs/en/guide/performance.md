@@ -2,8 +2,8 @@
 
 The factor-evaluation hot path is benchmarked over the WorldQuant **Alpha-101** catalog,
 comparing **cache vs no-cache** regimes. The benchmark is
-[`scripts/bench_alpha101.py`](../../scripts/bench_alpha101.py); a guard test lives at
-[`tests/performance/test_performance.py`](../../tests/performance/test_performance.py).
+[`scripts/bench_alpha101.py`](../../../scripts/bench_alpha101.py); a guard test lives at
+[`tests/performance/test_performance.py`](../../../tests/performance/test_performance.py).
 
 ## Caches
 
