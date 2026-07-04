@@ -116,15 +116,77 @@ def status() -> dict[str, Any]:
     return {"today": today.isoformat(), "markets": out}
 
 
+def _dir_size(root: Path) -> tuple[int, int]:
+    """(total bytes, file count) under ``root`` — best-effort, skips unreadable files."""
+    total = files = 0
+    if not root.exists():
+        return 0, 0
+    for p in root.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+                files += 1
+        except OSError:
+            continue
+    return total, files
+
+
+def usage() -> dict[str, Any]:
+    """Per-market on-disk footprint of the prepared ASSAY stores (for Data Status).
+
+    Reports the ASSAY output dir size (the prepared parquet the engine serves) plus a
+    per-store breakdown. The RAW mirror is intentionally not walked — it is shared and
+    can be huge; the sync status already surfaces its latest date.
+    """
+    # RAW subdirs the pipeline actually reads (avoid walking huge unused vendor data
+    # like options/minute aggregates that Assay never ingests).
+    _RAW_SUBDIRS = {
+        "US": ("us_stocks_sip/day_aggs_v1", "corporate_actions"),
+        "CN": ("cn", "meta"),
+    }
+    out = []
+    for mk in _MARKETS:
+        assay_d = config_store.assay_dir(mk)
+        root = Path(assay_d)
+        total, files = _dir_size(root)
+        stores = {}
+        for sub in ("price_raw", "adj_events", "universe_snapshots", "trade_status",
+                    "security_groups", "library", "cache", "precompute"):
+            b, n = _dir_size(root / sub)
+            if n:
+                stores[sub] = {"bytes": b, "files": n}
+        # RAW footprint (scoped subdirs)
+        raw_d = config_store.raw_dir(mk)
+        raw_root = Path(raw_d)
+        raw_bytes = raw_files = 0
+        for sub in _RAW_SUBDIRS.get(mk, ()):
+            b, n = _dir_size(raw_root / sub)
+            raw_bytes += b
+            raw_files += n
+        out.append({
+            "market": mk, "assay_dir": assay_d, "bytes": total, "files": files, "stores": stores,
+            "raw_dir": raw_d, "raw_bytes": raw_bytes, "raw_files": raw_files,
+        })
+    return {"markets": out}
+
+
 def default_range(market: str, mode: str) -> tuple[dt.date, dt.date]:
-    """Sensible (start, end) for a wizard run: init = full history, update = incremental."""
+    """Sensible (start, end) for a run: init = full history, update/ingest = incremental.
+
+    ``ingest`` (RAW→ASSAY only, no download) resumes after the last ASSAY date and
+    ends at the latest date already present in the RAW mirror (what we can ingest now).
+    """
     market = market.upper()
     end = dt.date.today()
     if mode == "init":
         return _INIT_START.get(market, dt.date(2015, 1, 1)), end
-    # update: resume the day after the last ingested ASSAY date
     assay_latest, _ = _assay_latest(config_store.assay_dir(market), market)
     start = (assay_latest + dt.timedelta(days=1)) if assay_latest else _INIT_START.get(market, dt.date(2015, 1, 1))
+    if mode == "ingest":
+        raw_dir = config_store.raw_dir(market)
+        raw_latest = _us_raw_latest(raw_dir) if market == "US" else _cn_raw_latest(raw_dir)
+        if raw_latest:
+            end = raw_latest
     if start > end:
         start = end
     return start, end
@@ -135,28 +197,33 @@ def run(market: str, mode: str, start: dt.date, end: dt.date, job) -> dict[str, 
     """Run one market's full pipeline (download -> ingest), reporting via ``job``."""
     market = market.upper()
     job.log(f"{market} {mode}: {start.isoformat()} .. {end.isoformat()}")
+    ingest_only = mode == "ingest"   # RAW already present → skip download, just RAW→ASSAY
     if market == "CN":
-        return _run_cn(start, end, job)
+        return _run_cn(mode, start, end, job, ingest_only=ingest_only)
     if market == "US":
-        return _run_us(start, end, job)
+        return _run_us(start, end, job, ingest_only=ingest_only)
     raise ValueError(f"unsupported market {market!r}")
 
 
-def _run_us(start: dt.date, end: dt.date, job) -> dict[str, Any]:
+def _run_us(start: dt.date, end: dt.date, job, ingest_only: bool = False) -> dict[str, Any]:
     raw = config_store.raw_dir("US")
     assay = config_store.assay_dir("US")
-    s3 = config_store.massive_s3()
-    if not (s3.get("access_key_id") and s3.get("secret_access_key")):
-        raise RuntimeError("MASSIVE S3 credentials not configured (set them in the data manager)")
 
-    from assay.data.massive import s3 as s3dl
+    dl = None
+    if ingest_only:
+        job.progress_to(0.05, "ingest-only: using existing RAW (no download) …")
+    else:
+        s3 = config_store.massive_s3()
+        if not (s3.get("access_key_id") and s3.get("secret_access_key")):
+            raise RuntimeError("MASSIVE S3 credentials not configured (set them in the data manager)")
+        from assay.data.massive import s3 as s3dl
 
-    job.progress_to(0.03, "downloading MASSIVE day-aggregates from S3 …")
-    dl = s3dl.download_index(
-        raw, start=start, end=end, s3=s3,
-        progress=lambda f, m: job.progress_to(0.03 + 0.50 * f, m),
-    )
-    job.log(f"download: {dl}")
+        job.progress_to(0.03, "downloading MASSIVE day-aggregates from S3 …")
+        dl = s3dl.download_index(
+            raw, start=start, end=end, s3=s3,
+            progress=lambda f, m: job.progress_to(0.03 + 0.50 * f, m),
+        )
+        job.log(f"download: {dl}")
 
     job.progress_to(0.55, "ingesting US → ASSAY (NASDAQ100 + SP500: universe, corp-actions, prices) …")
     from assay.config import AssayConfig, MassiveConfig
@@ -164,31 +231,38 @@ def _run_us(start: dt.date, end: dt.date, job) -> dict[str, Any]:
 
     cfg = AssayConfig(massive=MassiveConfig(source_dir=Path(raw)), data_dir=Path(assay), market="US")
     rep = prepare_us(cfg, start, end, index_ids=("NASDAQ100", "SP500"))
-    job.progress_to(1.0, "US update complete")
+    job.progress_to(1.0, "US " + ("ingest" if ingest_only else "update") + " complete")
     return {"download": dl, "ingest": rep}
 
 
-def _run_cn(start: dt.date, end: dt.date, job) -> dict[str, Any]:
+def _run_cn(mode: str, start: dt.date, end: dt.date, job, ingest_only: bool = False) -> dict[str, Any]:
     raw = config_store.raw_dir("CN")
     assay = config_store.assay_dir("CN")
-    token = config_store.tushare_token()
-    if not token:
-        raise RuntimeError("Tushare token not configured (set it in the data manager)")
 
-    from assay.data.tushare.download import TushareDownloadConfig, run_download
+    steps: list[str] = []
+    if ingest_only:
+        job.progress_to(0.05, "ingest-only: using existing Tushare RAW (no download) …")
+    else:
+        token = config_store.tushare_token()
+        if not token:
+            raise RuntimeError("Tushare token not configured (set it in the data manager)")
+        from assay.data.tushare.download import TushareDownloadConfig, run_download
 
-    job.progress_to(0.03, "downloading Tushare raw data …")
-    dlcfg = TushareDownloadConfig(
-        token=token, data_dir=Path(raw),
-        start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d"),
-    )
-    manifest = run_download(dlcfg)
-    steps = sorted((manifest.get("results") or {}).keys())
-    job.log(f"download steps: {steps}")
+        incremental = mode == "update"
+        job.progress_to(0.03, "downloading Tushare raw data " + ("(incremental, by trade-date) …" if incremental else "…"))
+        dlcfg = TushareDownloadConfig(
+            token=token, data_dir=Path(raw),
+            start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d"),
+            incremental=incremental,
+        )
+        # Download owns 0.03..0.50 of the bar; stream its fine-grained progress there.
+        manifest = run_download(dlcfg, progress=lambda f, m: job.progress_to(0.03 + 0.47 * f, m))
+        steps = sorted((manifest.get("results") or {}).keys())
+        job.log(f"download steps: {steps}")
 
     job.progress_to(0.55, "ingesting CN → ASSAY (universe, prices, adj, limits) …")
     from assay.data.tushare.ingest import prepare_cn
 
     rep = prepare_cn(assay, start=start, end=end, tushare_data_dir=raw)
-    job.progress_to(1.0, "CN update complete")
+    job.progress_to(1.0, "CN " + ("ingest" if ingest_only else "update") + " complete")
     return {"download_steps": steps, "ingest": rep}

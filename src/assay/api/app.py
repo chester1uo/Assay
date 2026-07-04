@@ -199,6 +199,15 @@ def create_app() -> FastAPI:
     except Exception:  # pragma: no cover - config is best-effort
         pass
 
+    # Start the in-process auto-update scheduler (a no-op unless a market is enabled
+    # in the schedule config). Best-effort — never block app construction.
+    try:
+        from assay.data import scheduler
+
+        scheduler.start()
+    except Exception:  # pragma: no cover
+        pass
+
     app = FastAPI(title="Assay API", version=assay.__version__)
 
     app.add_middleware(

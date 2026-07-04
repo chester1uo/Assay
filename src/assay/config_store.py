@@ -80,6 +80,13 @@ def _defaults() -> dict[str, Any]:
             "annualization_basis": "daily",
             "risk_free_rate": 0.015,
         },
+        # Auto-update schedule — per market, a daily incremental-update time (local).
+        # The in-process scheduler (assay.data.scheduler) enqueues an update job when
+        # a market is enabled and its ``time`` arrives. Off by default.
+        "schedule": {
+            "us": {"enabled": False, "time": "18:30"},
+            "cn": {"enabled": False, "time": "18:30"},
+        },
     }
 
 
@@ -185,6 +192,11 @@ def tushare_token() -> str:
 
 def massive_s3() -> dict[str, str]:
     return dict(load().get("massive_s3", {}) or {})
+
+
+def schedule() -> dict[str, Any]:
+    """The effective auto-update schedule section (defaults merged in)."""
+    return dict(load().get("schedule", {}) or {})
 
 
 def system() -> dict[str, Any]:

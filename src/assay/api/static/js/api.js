@@ -224,6 +224,22 @@ export class ApiClient {
   combinationMethods() {
     return request("GET", this._p("/v1/combination/methods"));
   }
+  /** Saved combination runs (summaries) -> {combinations:[...]}. */
+  savedCombinations() {
+    return request("GET", this._p("/v1/combination/saved"));
+  }
+  /** One saved combination record {id, name, saved_at, result} for reload. */
+  savedCombination(id) {
+    return request("GET", this._p(`/v1/combination/saved/${encodeURIComponent(id)}`));
+  }
+  /** Persist a computed result under a name -> saved summary. */
+  saveCombination(result, name) {
+    return request("POST", this._p("/v1/combination/saved"), { body: { result, name } });
+  }
+  /** Delete saved combination record(s) -> {deleted}. */
+  deleteCombinations(ids) {
+    return request("DELETE", this._p("/v1/combination/saved"), { body: { ids } });
+  }
 
   // ---- market data ---------------------------------------------------------
   /** OHLCV bars for one symbol. params: {symbol, freq, adj, start, end, as_of}. */
@@ -253,6 +269,10 @@ export class ApiClient {
   adminCacheStatus() { return request("GET", this._p("/v1/admin/cache/status")); }
   adminCacheEntries(scope) { return request("GET", this._p("/v1/admin/cache/entries"), { query: { scope } }); }
   adminCacheRebuild(market) { return request("POST", this._p("/v1/admin/cache/rebuild"), { body: { market } }); }
+  adminDataUsage() { return request("GET", this._p("/v1/admin/data/usage")); }
+  adminTestConnection(provider) { return request("POST", this._p("/v1/admin/data/test"), { body: { provider } }); }
+  adminScheduleGet() { return request("GET", this._p("/v1/admin/schedule")); }
+  adminSchedulePut(schedule) { return request("PUT", this._p("/v1/admin/schedule"), { body: { schedule } }); }
 
   // ---- session -------------------------------------------------------------
   createSession({ universe, period } = {}) {

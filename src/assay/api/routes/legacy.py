@@ -26,7 +26,7 @@ _STATIC = Path(__file__).resolve().parent.parent / "static"
 _BANNER = (
     '<div class="legacy-banner">'
     '<marquee scrollamount="6" behavior="scroll" direction="left">'
-    "&#9733;&#9733;&#9733; WELCOME TO ASSAY &middot; Factor Research since 2003 &middot; "
+    "&#9733;&#9733;&#9733; WELCOME TO ASSAY &middot; Factor Research since 2025 &middot; "
     "Best viewed in 1024&times;768 with Netscape Navigator &middot; "
     '<span class="legacy-blink">NEW!</span> now with A-share support! &middot; '
     "sign our guestbook! &#9733;&#9733;&#9733;"
@@ -38,7 +38,7 @@ _FOOTER = (
     "<hr>"
     'You are visitor <span class="legacy-counter">00013370</span> &nbsp;|&nbsp; '
     '<span class="legacy-blink">&#9679;</span> Made with Notepad &nbsp;|&nbsp; '
-    "&copy; 2003 Assay Labs &nbsp;|&nbsp; "
+    "&copy; 2025 Assay Labs &nbsp;|&nbsp; "
     '<a href="/">&laquo; back to the modern site</a>'
     "<div style=\"margin-top:6px\">[ "
     '<a href="#/dashboard">Home</a> | <a href="#/library">Factors</a> | '

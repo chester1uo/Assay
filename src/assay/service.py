@@ -36,9 +36,36 @@ from assay import evaluator
 from assay.cache import L2FactorCache, SessionCache, SessionRegistry
 from assay.config import AssayConfig
 from assay.engine import FactorEngine, parse
-from assay.library import FactorLibrary, FactorReport, FactorSummary, Lineage
+from assay.library import CombinationStore, FactorLibrary, FactorReport, FactorSummary, Lineage
 
 __all__ = ["AssayService"]
+
+
+# Group dimensions the ``security_groups`` store can satisfy. The store exposes a
+# single industry/sector labelling per market, so any of these names neutralizes
+# the factor against that one grouping (residual of a per-date group-mean regression).
+_GROUP_NEUTRALIZE_KEYS = frozenset({"sector", "industry", "subindustry", "group"})
+
+
+def _group_residual(values: np.ndarray, labels: np.ndarray) -> np.ndarray:
+    """Per-date group-neutral residual of ``(T, N)`` ``values`` (NaN-aware).
+
+    For each date and each group label, subtract that group's NaN-aware
+    cross-sectional mean, leaving the within-group residual — the same operation as
+    :func:`assay.portfolio.signal.neutralize` and the ``cs_neutralize`` operator,
+    duplicated here so the service hot path stays free of a portfolio import.
+    """
+    import warnings
+
+    x = np.asarray(values, dtype=np.float64)
+    out = np.full_like(x, np.nan)
+    with warnings.catch_warnings(), np.errstate(invalid="ignore"):
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for label in np.unique(labels):
+            cols = np.flatnonzero(labels == label)
+            sub = x[:, cols]
+            out[:, cols] = sub - np.nanmean(sub, axis=1, keepdims=True)
+    return out
 
 
 def _f(v) -> float | None:
@@ -120,6 +147,7 @@ class AssayService:
         self._store = None
         self._stores: dict[str, object] = {}  # market -> DataStore (multi-market serving)
         self.library = FactorLibrary(config.library_path)
+        self.combinations = CombinationStore(config.data_dir / "combinations")
         self.cache = L2FactorCache(config.cache_path)
         self.sessions = SessionRegistry()
         # Apply admin-editable system settings (parallelism / cache / eval defaults)
@@ -396,11 +424,24 @@ class AssayService:
         if fwd_by_h is None:
             fwd_by_h = self._cold_forward_returns(engine, horizons, execution)
 
+        # --- optional sector/group neutralization (applied BEFORE scoring) ------
+        # The factor is residualised against the requested grouping so the reported
+        # IC/decay/groups/turnover all describe the *neutralized* signal — matching
+        # the portfolio path. ``applied_neutralize`` is the subset actually honored
+        # (empty when the universe has no group data, e.g. US), so the report never
+        # claims a neutralization that did not happen.
+        factor_values = factor.values
+        applied_neutralize: list[str] | None = neutralize
+        if neutralize:
+            factor_values, applied_neutralize = self._apply_neutralization(
+                factor_values, neutralize, universe, engine.symbols.tolist(), as_of
+            )
+
         # --- predictive quality (factor ranked once, reused across horizons) ---
-        metrics = evaluator.evaluate_ic(factor.values, fwd_by_h)
+        metrics = evaluator.evaluate_ic(factor_values, fwd_by_h)
         decay = evaluator.decay_halflife(metrics["ic_by_horizon"])
-        groups = evaluator.group_returns(factor.values, fwd_by_h[min(horizons)])
-        turn = evaluator.turnover(factor.values)
+        groups = evaluator.group_returns(factor_values, fwd_by_h[min(horizons)])
+        turn = evaluator.turnover(factor_values)
 
         # --- redundancy: cheap best-effort, never re-scores the whole library ---
         # TODO(redundancy): wire library.correlation_matrix on a shared engine when a
@@ -420,11 +461,19 @@ class AssayService:
             universe=universe,
             period=period,
             execution=execution,
-            neutralize=neutralize,
+            neutralize=applied_neutralize,
             adj=adj,
             diagnostics=fd,
             duration_ms=(time.perf_counter() - t0) * 1000.0,
         )
+        # Honesty: if neutralization was asked for but no group data was available,
+        # the IC above is on the raw factor — say so rather than silently claiming it.
+        if neutralize and not applied_neutralize:
+            note = (
+                f"neutralize={list(neutralize)} requested but no group/sector data is "
+                f"available for universe {universe!r}; IC is reported on the raw factor."
+            )
+            report.suggestion = note if not report.suggestion else f"{report.suggestion} {note}"
         if save:
             self.library.save(report)
         return report
@@ -436,6 +485,55 @@ class AssayService:
         close = engine.field_matrix("close")
         open_ = engine.field_matrix("open") if "open" in engine._field_cols else None
         return evaluator.forward_returns(close, open_, horizons, execution)
+
+    # -- sector/group neutralization (evaluate path) --------------------------
+    def _apply_neutralization(
+        self,
+        values: np.ndarray,
+        neutralize: list[str],
+        universe: str,
+        symbols: list[str],
+        as_of: str | None,
+    ) -> tuple[np.ndarray, list[str]]:
+        """Residualise ``values`` against the universe's group labels.
+
+        Returns ``(neutralized_values, applied_keys)``. ``applied_keys`` is the
+        subset of ``neutralize`` actually honored — empty (and ``values`` returned
+        unchanged) when no requested key names a known grouping or the universe has
+        no ``security_groups`` data (e.g. US). All requested industry/sector keys
+        map to the store's single industry labelling, so they neutralise together.
+        """
+        wanted = [k for k in neutralize if k in _GROUP_NEUTRALIZE_KEYS]
+        if not wanted:
+            return values, []
+        labels = self._group_labels(universe, symbols, as_of)
+        if labels is None or len(labels) != values.shape[1]:
+            return values, []
+        return _group_residual(values, labels), wanted
+
+    def _group_labels(
+        self, universe: str, symbols: list[str], as_of: str | None
+    ) -> np.ndarray | None:
+        """``(N,)`` industry/sector labels aligned to ``symbols``, or ``None``.
+
+        Reads the universe's store ``security_groups`` (no-op when the market lacks
+        it). Symbols with no label fall into ``'UNKNOWN'`` so they form a residual
+        group rather than being dropped. Mirrors the portfolio backtester's loader.
+        """
+        try:
+            store = self.store_for_universe(universe)
+        except Exception:  # noqa: BLE001 — no store (offline / no data dir) -> no groups
+            return None
+        getter = getattr(store, "get_groups", None)
+        if getter is None:
+            return None
+        try:
+            mapping = getter(symbols, as_of)
+        except Exception:  # noqa: BLE001 — a store hiccup must not break evaluation
+            return None
+        if not mapping:
+            return None
+        return np.array([str(mapping.get(str(s), "UNKNOWN")) for s in symbols], dtype=object)
 
     # -- report assembly ------------------------------------------------------
     def _lineage(self, adj: str) -> Lineage:
@@ -1574,7 +1672,35 @@ class AssayService:
             "resolved_factors": [{"name": n, "expr": e} for n, e in resolved],
             "dropped": dropped,
         })
+        # Auto-save the most recent successful run so it survives a page reload even
+        # if never explicitly saved (best-effort — a store hiccup must not fail the run).
+        try:
+            from assay.library.combination_store import LAST_RUN_ID
+
+            self.combinations.save(out, name="(last run)", record_id=LAST_RUN_ID)
+            out["combo_id"] = LAST_RUN_ID
+        except Exception:  # noqa: BLE001
+            pass
         return out
+
+    # --------------------------------------------- saved combinations (jobs) ---
+    def save_combination(self, result: dict, name: str | None = None) -> dict:
+        """Persist a combination ``result`` as a named, reloadable record; return its summary."""
+        if not isinstance(result, dict) or result.get("failure") or "weights" not in result:
+            raise ValueError("result must be a successful combination payload (with weights)")
+        return self.combinations.save(result, name=name)
+
+    def list_combinations(self, include_last: bool = True) -> list[dict]:
+        """Saved-combination summaries, newest first (rolling last run pinned first)."""
+        return self.combinations.list(include_last=include_last)
+
+    def get_combination(self, combo_id: str) -> dict | None:
+        """Full saved record ``{id, name, saved_at, result}`` for reload, or ``None``."""
+        return self.combinations.get(combo_id)
+
+    def delete_combinations(self, ids: list[str] | str) -> int:
+        """Delete saved combination record(s); return the count removed."""
+        return self.combinations.delete(ids)
 
     # --------------------------------------------------------------- session ---
     def create_session(
