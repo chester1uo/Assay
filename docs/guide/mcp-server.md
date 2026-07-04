@@ -14,12 +14,15 @@ python -m assay.cli serve-mcp --transport sse --port 8001   # SSE/HTTP (remote a
 The module imports with no credentials; the data store under the service is built lazily, so
 only tools that touch price data need MASSIVE creds.
 
-## Tools (8)
+## Tools (11)
 
 | Tool | Purpose |
 |---|---|
 | `assay_evaluate` | Evaluate one factor → `FactorReport` (qlib or Python syntax) |
 | `assay_batch` | Evaluate many factors in parallel, sorted by `rank_icir` (prefer over a loop) |
+| `assay_lint` | Data-free syntax check of an expression (dialect, fields, operators, diagnostics) |
+| `assay_universes` | List available universes with symbol counts and default |
+| `assay_portfolio_backtest` | Full portfolio backtest of a factor → compact `PortfolioReport` |
 | `assay_library_list` | List library factors with filters (check redundancy before generating) |
 | `assay_library_get` | Full `FactorReport` for one factor |
 | `assay_library_save` | Save a report to the library |

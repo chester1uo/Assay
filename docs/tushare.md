@@ -34,6 +34,13 @@ The job is **resumable**: each per-symbol / per-index parquet is skipped if it
 already exists, so re-running the same command continues an interrupted backfill.
 Pass `--force` to overwrite. Useful flags:
 
+> **Incremental daily refresh.** Because resume skips existing per-symbol files, this
+> standalone script only *backfills* — it will not extend a symbol's file with new dates.
+> For an incremental update, use the WebUI **Data → Update** job (or `orchestrate.run(...,
+> mode="update")`): it fetches the new window **by trade-date** (all symbols per API call)
+> via `run_cn_by_date` and **appends** to the raw files — a few calls instead of one per
+> symbol. See [Data Pipeline → Data Manager](guide/data-pipeline.md).
+
 - `--markets cn,hk` — pick markets (or use `--steps` for fine control)
 - `--steps cn_universe,cn_prices,...` — explicit step list (see `ALL_STEPS`)
 - `--start 20100101 --end 20260627` — date window

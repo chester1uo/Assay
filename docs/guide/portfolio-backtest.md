@@ -14,7 +14,7 @@ cfg = PortfolioBacktestConfig(
     universe="NASDAQ100", period_start="2025-01-02", period_end="2026-06-09",
     market="US",
     rebalance_type="monthly",        # daily|weekly|monthly|quarterly|threshold|signal
-    weight_method="signal_prop",     # equal|signal_prop|quantile|decile|mv|risk_parity
+    weight_method="signal_prop",     # equal|signal_prop|quintile|decile|mv|bl|risk_parity
     long_short=False,
     max_single_weight=0.05,
     execution_price="next_open",     # next_open|next_close

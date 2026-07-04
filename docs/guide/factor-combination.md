@@ -103,6 +103,23 @@ curl -X POST localhost:8000/v1/combination \
 curl localhost:8000/v1/combination/methods
 ```
 
+## Saving & reloading runs
+
+Every run auto-saves as the rolling "last run"; save a named, reloadable record — with the
+fitted model (weights/importances, orientation, selection scores, scorecard) — and list or
+reload them later without recomputing.
+
+```bash
+curl -X POST   localhost:8000/v1/combination/saved -d '{"name":"my blend","result":<result-json>}'
+curl           localhost:8000/v1/combination/saved            # list summaries
+curl           localhost:8000/v1/combination/saved/<id>       # full record (the model)
+curl -X DELETE localhost:8000/v1/combination/saved -d '{"ids":["<id>"]}'
+```
+
+SDK equivalents on `AssayService`: `save_combination(result, name)`, `list_combinations()`,
+`get_combination(id)`, `delete_combinations(ids)` — backed by
+[`CombinationStore`](../../src/assay/library/combination_store.py) under `<data_dir>/combinations/`.
+
 **Factor specs** accept: a bare expression (`"rank(close)"`), a library reference
 (`"lib:<factor_id>"`), an Alpha catalog number (`"alpha101:<n>"` / `"alpha158:<n>"`),
 or a dict `{"name": ..., "expr": ...}` / `{"name": ..., "id": ...}`.

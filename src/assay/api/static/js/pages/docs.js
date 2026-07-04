@@ -47,13 +47,19 @@ const CONTENT = {
         ],
       },
       {
-        id: "workspaces", title: "The three workspaces",
+        id: "workspaces", title: "The workspaces",
         blocks: [
           ["ul", [
             "Dashboard — system status, KPI cards, the factor leaderboard, top factors and a data-coverage calendar.",
-            "Factor Library — browse, search, sort, compare and prune every saved factor; inspect a factor's full report and correlation matrix.",
             "Single Factor Test — write/lint a factor, evaluate it live, and read its IC time series, decay, quintile returns and diagnostics; save good ones to the library.",
+            "Factor Library — browse, search, sort, compare and prune every saved factor; inspect a factor's full report and correlation matrix.",
+            "Factor Combination — blend several factors into one composite and score it out-of-sample; save/reload runs (see below).",
+            "Portfolio Backtest — turn a factor into a long/short book and get achievable net return after costs, turnover and limits.",
+            "Chart — a TradingView-style price chart with adjustment modes and an alpha-overlay for one symbol.",
+            "Data Manager — configure sources, run init/update/ingest jobs, watch data status, manage cache & auto-update (see below).",
+            "Docs — this page.",
           ]],
+          ["p", "The top bar sets the global Universe and Period (US NASDAQ100/SP500, CN CSI300/500/1000), and the 中文/EN button switches language. Both persist across reloads."],
         ],
       },
       {
@@ -91,8 +97,48 @@ const CONTENT = {
             "Neural: a small MLP regressor.",
           ]],
           ["p", "Learned models predict the forward return from the oriented factors, so the per-factor numbers shown are feature importances rather than linear weights. Models appear in the dropdown only when their library (scikit-learn / lightgbm / xgboost) is installed; otherwise install it: pip install scikit-learn lightgbm xgboost."],
+          ["h3", "Saving & reloading runs"],
+          ["p", "Every run is auto-kept as the \"last run\", and the 💾 Save button stores a named, reloadable record — including the fitted model (weights / importances, orientation, selection scores, scorecard). The Saved combinations list reloads any of them without recomputing, so you can compare models later."],
           ["p", "REST / SDK equivalent:"],
-          ["code", "curl -X POST localhost:8000/v1/combination -H 'content-type: application/json' -d '{\n  \"factors\": [\"rank(close)\", \"alpha101:1\", \"lib:<id>\"],\n  \"train\": [\"2025-01-02\",\"2025-10-31\"],\n  \"val\":   [\"2025-11-01\",\"2026-01-31\"],\n  \"test\":  [\"2026-02-01\",\"2026-06-09\"],\n  \"universe\": \"NASDAQ100\", \"method\": \"auto\"\n}'\n# methods list: GET /v1/combination/methods"],
+          ["code", "curl -X POST localhost:8000/v1/combination -H 'content-type: application/json' -d '{\n  \"factors\": [\"rank(close)\", \"alpha101:1\", \"lib:<id>\"],\n  \"train\": [\"2025-01-02\",\"2025-10-31\"],\n  \"val\":   [\"2025-11-01\",\"2026-01-31\"],\n  \"test\":  [\"2026-02-01\",\"2026-06-09\"],\n  \"universe\": \"NASDAQ100\", \"method\": \"auto\"\n}'\n# methods:  GET    /v1/combination/methods\n# saved:    POST/GET/DELETE /v1/combination/saved  ·  GET /v1/combination/saved/{id}"],
+        ],
+      },
+      {
+        id: "portfolio", title: "Portfolio Backtest",
+        blocks: [
+          ["p", "Turns a factor into an actually-tradable long/short portfolio and reports the net result after costs — the honest number, not raw IC. Enter a factor, pick a market preset (US / A-share / HK — which sets sensible cost & limit defaults), and set rebalance, weighting and constraints."],
+          ["ul", [
+            "Weighting: equal, signal-proportional, quintile/decile long-short, mean-variance, Black-Litterman, risk-parity.",
+            "Costs & frictions: commission + slippage, turnover, and (A-share) limit-up/down execution constraints.",
+            "Outputs: Sharpe / Sortino / Calmar, annualized return, max drawdown, turnover, cost drag, beta/alpha, monthly returns.",
+          ]],
+          ["code", "curl -X POST localhost:8000/v1/portfolio/backtest -H 'content-type: application/json' -d '{\n  \"expr\": \"cs_rank(ts_corr(close, volume, 20))\",\n  \"universe\": \"NASDAQ100\", \"period_start\": \"2020-01-01\", \"period_end\": \"2024-12-31\"\n}'"],
+        ],
+      },
+      {
+        id: "datamanager", title: "Data Manager (operator)",
+        blocks: [
+          ["p", "The Data tab is the operator console for the data layer, organized as left tabs:"],
+          ["ul", [
+            "Data Status — per-market cards showing both RAW (source) and ASSAY (store): latest date, size and directory, plus how many days behind and whether they are in sync.",
+            "Keys & Dirs — the shared data directories and provider credentials (MASSIVE S3 + REST, Tushare token). Secrets are masked; Test connection lists the datasets your S3 key can read / validates the Tushare token.",
+            "Cache — hot-cache (precompute) status and per-scope contents; rebuild per market.",
+            "Data Setup — Initialize (full history), Update (download + ingest), or Ingest RAW→ASSAY (re-run the transform only, when raw is already downloaded); an auto-update schedule (daily time per market); and the live job list with progress and logs.",
+            "System — parallelism, cache budgets and the evaluation defaults every request inherits.",
+          ]],
+          ["p", "US downloads pull MASSIVE flat-files from S3; CN pulls Tushare. CN updates fetch incrementally by trade-date (all symbols per call), so a daily refresh is fast. Jobs run one-at-a-time in the background; the bar and log stream live."],
+        ],
+      },
+      {
+        id: "data", title: "Data & adjustment (must-read)",
+        blocks: [
+          ["p", "Prices are stored raw; splits and dividends are applied at read time, and every read is point-in-time (a factor can never see data that was not knowable on the query date). The adj mode controls what a factor sees:"],
+          ["ul", [
+            "none — the literal traded price (use for limit-up/down logic).",
+            "split (default) — continuous across splits; no dividend drift. Best for most alpha research.",
+            "total — splits + dividends reinvested; for total-return studies.",
+          ]],
+          ["p", "The full mechanics (forward adjustment, the split/dividend math, CN 送转 & price limits, point-in-time reads) are in the Data & Adjustment guide: docs/guide/data-and-adjustment.md (中文: data-and-adjustment.zh.md)."],
         ],
       },
       {
@@ -136,13 +182,19 @@ const CONTENT = {
         ],
       },
       {
-        id: "workspaces", title: "三个工作区",
+        id: "workspaces", title: "各工作区",
         blocks: [
           ["ul", [
             "仪表盘 —— 系统状态、KPI 卡片、因子排行榜、顶尖因子与数据覆盖日历。",
-            "因子库 —— 浏览、搜索、排序、对比并剪枝所有已保存的因子；查看单个因子的完整报告与相关性矩阵。",
             "单因子测试 —— 编写/检查因子并实时评估，查看其 IC 时间序列、衰减、分位收益与诊断；将优质因子保存到库。",
+            "因子库 —— 浏览、搜索、排序、对比并剪枝所有已保存的因子；查看单个因子的完整报告与相关性矩阵。",
+            "因子合成 —— 把多个因子合成为一个复合因子并做样本外评分；可保存/重载运行（见下）。",
+            "组合回测 —— 把因子变成多空组合，得到扣除成本、换手与涨跌停后可实现的净收益。",
+            "行情 —— TradingView 风格的价格图，支持复权模式与单只标的的 alpha 叠加。",
+            "数据管理 —— 配置数据源，运行初始化/更新/导入任务，查看数据状态，管理缓存与自动更新（见下）。",
+            "文档 —— 本页。",
           ]],
+          ["p", "顶部栏设置全局「股票池」和「区间」（美股 NASDAQ100/SP500，A 股 沪深 300/500/1000），中文/EN 按钮切换语言。两者都在刷新后保留。"],
         ],
       },
       {
@@ -180,8 +232,48 @@ const CONTENT = {
             "神经网络:小型 MLP 回归。",
           ]],
           ["p", "学习类模型用定向后的因子预测未来收益,因此每个因子显示的是「特征重要度」而非线性权重。模型只有在其依赖库(scikit-learn / lightgbm / xgboost)已安装时才出现在下拉框中;否则请安装:pip install scikit-learn lightgbm xgboost。"],
+          ["h3", "保存与重载运行"],
+          ["p", "每次运行都会自动保留为「最近一次」;点 💾 保存 可存为一条命名、可重载的记录——包含拟合出的模型(权重/重要度、方向、验证选择分数、评分表)。「已保存的组合」列表可无需重算地重载任意一条,方便日后比较模型。"],
           ["p", "REST / SDK 等价调用:"],
-          ["code", "curl -X POST localhost:8000/v1/combination -H 'content-type: application/json' -d '{\n  \"factors\": [\"rank(close)\", \"alpha101:1\", \"lib:<id>\"],\n  \"train\": [\"2025-01-02\",\"2025-10-31\"],\n  \"val\":   [\"2025-11-01\",\"2026-01-31\"],\n  \"test\":  [\"2026-02-01\",\"2026-06-09\"],\n  \"universe\": \"NASDAQ100\", \"method\": \"auto\"\n}'\n# 方法列表: GET /v1/combination/methods"],
+          ["code", "curl -X POST localhost:8000/v1/combination -H 'content-type: application/json' -d '{\n  \"factors\": [\"rank(close)\", \"alpha101:1\", \"lib:<id>\"],\n  \"train\": [\"2025-01-02\",\"2025-10-31\"],\n  \"val\":   [\"2025-11-01\",\"2026-01-31\"],\n  \"test\":  [\"2026-02-01\",\"2026-06-09\"],\n  \"universe\": \"NASDAQ100\", \"method\": \"auto\"\n}'\n# 方法: GET /v1/combination/methods\n# 保存: POST/GET/DELETE /v1/combination/saved  ·  GET /v1/combination/saved/{id}"],
+        ],
+      },
+      {
+        id: "portfolio", title: "组合回测",
+        blocks: [
+          ["p", "把因子变成真正可交易的多空组合,报告扣除成本后的净结果——诚实的数字,而非原始 IC。输入因子,选择市场预设(美股 / A 股 / 港股——会设定合理的成本与涨跌停默认),再设定再平衡、加权与约束。"],
+          ["ul", [
+            "加权:等权、信号比例、分位(五/十分位)多空、均值方差、Black-Litterman、风险平价。",
+            "成本与摩擦:佣金 + 滑点、换手,以及(A 股)涨跌停执行约束。",
+            "输出:Sharpe / Sortino / Calmar、年化收益、最大回撤、换手、成本拖累、beta/alpha、月度收益。",
+          ]],
+          ["code", "curl -X POST localhost:8000/v1/portfolio/backtest -H 'content-type: application/json' -d '{\n  \"expr\": \"cs_rank(ts_corr(close, volume, 20))\",\n  \"universe\": \"NASDAQ100\", \"period_start\": \"2020-01-01\", \"period_end\": \"2024-12-31\"\n}'"],
+        ],
+      },
+      {
+        id: "datamanager", title: "数据管理(运维)",
+        blocks: [
+          ["p", "「数据」标签是数据层的运维控制台,以左侧标签组织:"],
+          ["ul", [
+            "数据状态 —— 每个市场的卡片同时展示 RAW(源)与 ASSAY(存储):最新日期、大小与目录,以及落后多少天、是否同步。",
+            "密钥与目录 —— 共享数据目录与数据源凭证(MASSIVE S3 + REST、Tushare token)。密钥以掩码显示;「测试连接」会列出你的 S3 key 可读取的数据集 / 校验 Tushare token。",
+            "缓存管理 —— 热缓存(预计算)状态与各范围内容;可按市场重建。",
+            "数据初始化 —— 初始化(全历史)、更新(下载 + 导入),或 仅导入 RAW→ASSAY(仅重跑转换,当 raw 已下载时);每市场的自动更新时刻;以及带进度与日志的实时任务列表。",
+            "系统设置 —— 并行度、缓存预算,以及每次请求继承的评估默认值。",
+          ]],
+          ["p", "美股下载从 S3 拉取 MASSIVE 平面文件;A 股从 Tushare 拉取。A 股更新按交易日增量抓取(每次调用返回全市场),因此日更很快。任务在后台逐个运行;进度条与日志实时流式更新。"],
+        ],
+      },
+      {
+        id: "data", title: "数据与复权(必读)",
+        blocks: [
+          ["p", "价格以原始存储;拆股与分红在读取时施加,且每次读取都是点对点的(因子永远看不到查询时点不可知的数据)。adj 模式决定因子看到什么:"],
+          ["ul", [
+            "none —— 真实成交价(用于涨跌停逻辑)。",
+            "split(默认)—— 跨拆股连续;无分红漂移。适合大多数 alpha 研究。",
+            "total —— 拆股 + 分红再投资;用于全收益研究。",
+          ]],
+          ["p", "完整机制(前复权、拆股/分红计算、A 股送转与涨跌停、点对点读取)见《数据与复权》指南:docs/guide/data-and-adjustment.zh.md(English: data-and-adjustment.md)。"],
         ],
       },
       {
