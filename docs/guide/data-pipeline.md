@@ -53,6 +53,26 @@ Runs three stages in order, into the configured data dir:
 
 Flags: `--skip-universe`, `--skip-corp-actions`, `--skip-prices`.
 
+## Data Manager (WebUI / API)
+
+The WebUI **Data** tab (and the `/v1/admin/*` API) drives the whole data layer without the CLI:
+
+- **Keys & Dirs** — configure the MASSIVE S3 credentials (US), the Tushare token (CN), and the
+  data dirs; **Test connection** lists the datasets your S3 key can read / validates the token.
+  Secrets are stored masked in a git-ignored `.assay.config.json`.
+- **Data Setup** — run jobs per market with `mode`:
+  - `init` — full history (download + ingest);
+  - `update` — incremental download + ingest (CN fetches **by trade-date**, all symbols per
+    call, so a daily refresh is a handful of API calls, then appends to the raw files);
+  - `ingest` — **RAW→ASSAY only**, no download (when the raw mirror is already populated).
+  - An **auto-update schedule** (per market, a daily time) queues `update` jobs automatically.
+- **Data Status** — per-market cards showing both **RAW** (source: latest date, size, dir) and
+  **ASSAY** (store: latest date, trading days, size, dir), plus days-behind and in-sync.
+
+Jobs run one-at-a-time in the background with a live progress bar and log. For adjustment
+semantics (splits/dividends, point-in-time), see [Data & Adjustment](data-and-adjustment.md)
+([中文](data-and-adjustment.zh.md)).
+
 ## Individual stages
 
 ```bash

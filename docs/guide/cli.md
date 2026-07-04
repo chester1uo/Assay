@@ -38,7 +38,7 @@ config from the environment / `.env`; only data-touching commands need MASSIVE c
 | Command | Purpose |
 |---|---|
 | `serve-api [--host 0.0.0.0] [--port 8000]` | Run the FastAPI REST API + WebUI (uvicorn) |
-| `serve-mcp [--transport stdio|sse|http] [--port 8001]` | Run the MCP server for LLM agents |
+| `serve-mcp [--transport stdio|sse] [--port 8001]` | Run the MCP server for LLM agents |
 
 ## Examples
 

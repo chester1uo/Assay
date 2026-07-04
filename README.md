@@ -1,19 +1,29 @@
 # Assay
 
+**English** · [简体中文](README.zh.md)
+
 Assay is a high-performance, point-in-time-correct factor backtesting engine built for LLM
 agent-driven alpha mining. On top of a shared engine it exposes four surfaces — a Python SDK,
 a REST API (with SSE streaming), an MCP server for agents, and a zero-install WebUI — plus a
-full **portfolio backtest** module.
+full **portfolio backtest** module and a **factor-combination** workspace.
+
+It serves both **US equities** (NASDAQ-100 / S&P 500, via MASSIVE) and **China A-shares**
+(CSI300/500/1000, via Tushare). Raw vendor data can be downloaded and kept in sync from the
+built-in **Data Manager** (WebUI) or ingested from a local mirror — see the
+[Data Pipeline](docs/guide/data-pipeline.md) guide.
 
 ## 📚 Documentation
 
 Full design specs and usage guides live in **[docs/](docs/README.md)**:
 
 - **Start here:** [Getting Started](docs/guide/getting-started.md)
+- **Data & correctness:** [Data & Adjustment](docs/guide/data-and-adjustment.md)
+  ([中文](docs/guide/data-and-adjustment.zh.md)) — the data layer, point-in-time reads, and how
+  factors see prices under **splits & dividends**.
 - **Guides:** [Data Pipeline](docs/guide/data-pipeline.md) · [Python SDK](docs/guide/python-sdk.md) ·
   [CLI](docs/guide/cli.md) · [REST API](docs/guide/rest-api.md) · [MCP](docs/guide/mcp-server.md) ·
-  [WebUI](docs/guide/webui.md) · [Portfolio Backtest](docs/guide/portfolio-backtest.md) ·
-  [Performance](docs/guide/performance.md)
+  [WebUI](docs/guide/webui.md) · [Factor Combination](docs/guide/factor-combination.md) ·
+  [Portfolio Backtest](docs/guide/portfolio-backtest.md) · [Performance](docs/guide/performance.md)
 - **Design:** [Engineering](docs/design/engineering.md) · [Architecture](docs/design/architecture.md) ·
   [Operator table](docs/design/operator-compatibility.md) · [Portfolio](docs/design/portfolio-backtest.md)
 
@@ -52,16 +62,25 @@ stay raw and any point-in-time slice can be reproduced exactly.
 pip install -r requirements.txt          # or: pip install -e .
 ```
 
-### Local data source
+### Data source
 
-The pipeline reads a **local mirror** of the MASSIVE dataset (downloaded
-out-of-band by the `downloader_*` scripts) and transforms it into the parquet
-stores — it does **not** download anything, so no credentials are needed.
+Assay separates a **RAW** vendor mirror from the prepared **ASSAY** parquet stores.
+There are two ways to populate RAW:
+
+1. **Download from the Data Manager** (WebUI → *Data* tab, or the `/v1/admin/*` API):
+   configure the MASSIVE S3 credentials (US) and/or the Tushare token (CN), *Test
+   connection*, then run **Initialize** / **Update** jobs. Credentials are stored,
+   masked, in a git-ignored `.assay.config.json`. See the
+   [Data Pipeline](docs/guide/data-pipeline.md) guide.
+2. **Point at an existing local mirror** and only run the RAW→ASSAY transform (no
+   credentials needed) — via the CLI, the Python API, or the *Ingest RAW→ASSAY* button.
 
 | Variable | Purpose |
 |---|---|
-| `MASSIVE_DATA_DIR` | root of the local MASSIVE mirror (default `/data/massive_data`) |
-| `ASSAY_DATA_DIR` | output root for the prepared stores (default `./data`) |
+| `MASSIVE_DATA_DIR` | root of the local MASSIVE (US) mirror (default `/data/massive_data`) |
+| `TUSHARE_DATA_DIR` | root of the local Tushare (CN) mirror (default `/data/tushare_data`) |
+| `TUSHARE_TOKEN` | Tushare API token (CN download) |
+| `ASSAY_DATA_DIR` / `ASSAY_DATA_DIR_CN` | output root(s) for the prepared stores |
 
 Expected source layout under `MASSIVE_DATA_DIR`:
 

@@ -14,7 +14,7 @@ New here? Start with **[Getting Started](guide/getting-started.md)**.
 | [Python SDK](guide/python-sdk.md) | `backtest`, `Session`, `batch_backtest`, `library`, `stream`, `backtest_portfolio` |
 | [CLI](guide/cli.md) | Every `python -m assay.cli` subcommand |
 | [REST API](guide/rest-api.md) | `/v1/*` endpoints, SSE streaming, lint, auth |
-| [MCP Server](guide/mcp-server.md) | The 8 agent tools and client setup |
+| [MCP Server](guide/mcp-server.md) | The 11 agent tools and client setup |
 | [WebUI](guide/webui.md) | The zero-install web app served by FastAPI |
 | [Factor Combination](guide/factor-combination.md) | Blend factors into a composite; train/val/test; analytic, optimization & ML methods |
 | [Portfolio Backtest](guide/portfolio-backtest.md) | Config, running, metrics, A-share notes |
@@ -43,4 +43,5 @@ The design docs are **forward-looking specs kept grounded to reality** with stat
 ✅ implemented · 🔶 implemented-but-simplified / activates only with the right inputs · 📋 planned.
 What's built today: the data layer, factor engine, IC/decay evaluator, factor library,
 `AssayService` + Python SDK, REST API (+ SSE), MCP server, the zero-install WebUI, and the
-portfolio backtest. The only universe wired up is **NASDAQ-100** (US, OHLCV — no `vwap`).
+portfolio backtest. Universes wired up: **NASDAQ-100 / S&P 500** (US, OHLCV — no `vwap`) and
+**CSI300 / CSI500 / CSI1000** (China A-shares, via Tushare).

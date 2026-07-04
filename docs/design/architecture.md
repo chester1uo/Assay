@@ -100,7 +100,7 @@ surfaces below except the WebUI are implemented and tested.
 | Python SDK | In-process | None (local) | < 400ms warm | Researcher, notebook | ✅ `assay.backtest/batch_backtest/Session/library/stream` |
 | REST API | HTTP/SSE | API key (optional) | < 500ms warm | External apps, CI | ✅ FastAPI + SSE, all `/v1/*` routes |
 | WebUI | HTTP → REST | same-origin | < 600ms warm | Human researcher | 🔶 zero-install vanilla-JS app (`api/static/`, served by FastAPI); React stack is the target rebuild |
-| MCP Server | JSON-RPC (stdio/SSE) | API key | < 600ms warm | LLM agent | ✅ FastMCP, 8 tools, stdio + SSE/HTTP |
+| MCP Server | JSON-RPC (stdio/SSE) | API key | < 600ms warm | LLM agent | ✅ FastMCP, 11 tools, stdio + SSE |
 
 ---
 
@@ -501,7 +501,7 @@ GET  /v1/library/correlation-matrix
      ?factor_ids=abc123,def456,...&universe=NASDAQ100&period=2020-01-01,2024-12-31
   → { "matrix": [[1.0, 0.82, ...], ...], "factor_ids": ["abc123", ...] }
 
-GET  /v1/library/alpha-space
+GET  /v1/library/embedding
      ?factor_ids=...&universe=NASDAQ100&period=...
   → { "coords": [{"id": "abc123", "x": 0.43, "y": -0.21, "rank_icir": 0.61}, ...] }
 
@@ -1335,7 +1335,7 @@ src/assay/
 ├── service.py             ✅ AssayService singleton (facade over engine + evaluator + library + cache)
 ├── api/                   ✅ FastAPI app + auth + models + routers (factor/library/session/system)
 │   └── static/            🔶 zero-install vanilla-JS WebUI (index.html, styles.css, js/ + js/pages/) served at /
-└── mcp/                   ✅ MCP server (FastMCP; 8 tools; stdio + SSE/HTTP)
+└── mcp/                   ✅ MCP server (FastMCP; 11 tools; stdio + SSE)
 
 # __init__.py now also exports the SDK facade: init, backtest, batch_backtest, Session, library, stream
 # cli.py now also has: run, batch, report, library, serve-api, serve-mcp

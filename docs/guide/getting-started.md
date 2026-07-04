@@ -27,8 +27,8 @@ MASSIVE_DATA_DIR=/data/massive_data    # root of the local MASSIVE mirror (sourc
 ASSAY_DATA_DIR=data                    # parquet store root (point at any folder)
 ```
 
-> Only MASSIVE / US equities (NASDAQ-100) are wired up today. The data source provides
-> **OHLCV + transaction count — no `vwap`**.
+> US equities (MASSIVE — NASDAQ-100 / S&P 500) and China A-shares (Tushare — CSI300/500/1000)
+> are both wired up. The bundled US data is **OHLCV + transaction count — no `vwap`**.
 
 ## 3. Transfer data
 
@@ -88,7 +88,7 @@ python -m assay.cli serve-mcp                 # MCP server (stdio) for LLM agent
 
 - **WebUI** — open `http://localhost:8000` (see the [WebUI guide](webui.md)).
 - **REST API** — interactive docs at `/docs`; see the [REST guide](rest-api.md).
-- **MCP** — 8 agent tools; see the [MCP guide](mcp-server.md).
+- **MCP** — 11 agent tools; see the [MCP guide](mcp-server.md).
 
 ## Where to go next
 
