@@ -89,6 +89,9 @@ INVALID_WINDOW = _c("ASSAY-P009", "INVALID_WINDOW", Stage.PARSE, Severity.ERROR,
     "Invalid look-back window", "The window must be a numeric literal, e.g. ts_mean(close, 20).")
 EXPRESSION_TOO_DEEP = _c("ASSAY-P010", "EXPRESSION_TOO_DEEP", Stage.PARSE, Severity.ERROR,
     "Expression nested too deeply", "Reduce the nesting depth of the expression (split it into sub-factors).")
+CONSTANT_EXPRESSION = _c("ASSAY-P011", "CONSTANT_EXPRESSION", Stage.PARSE, Severity.ERROR,
+    "Constant expression (no data field)",
+    "A factor must reference at least one data field (e.g. close, volume). A pure constant like '1' or '0' is not a valid factor.")
 
 # --- execute stage ------------------------------------------------------------
 UNKNOWN_FIELD = _c("ASSAY-E001", "UNKNOWN_FIELD", Stage.EXECUTE, Severity.ERROR,
@@ -449,7 +452,10 @@ def lint(expr) -> FactorDiagnostics:
     if not isinstance(expr, str):
         return fd  # already an AST node — nothing to lint syntactically
     try:
-        parse(expr)
+        node = parse(expr)
+        if not iter_fields(node):  # references no data field -> a constant, not a factor
+            fd.add(diag(CONSTANT_EXPRESSION,
+                        "the expression references no data field — a constant is not a valid factor"))
     except ParseError as e:
         fd.add(from_parse_error(e, text))
     except Exception as e:  # pragma: no cover - defensive: lint must never raise

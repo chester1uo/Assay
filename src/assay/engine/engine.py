@@ -162,6 +162,11 @@ class FactorEngine:
         node = parse(expr) if isinstance(expr, str) else expr
         expr_str = expr if isinstance(expr, str) else str(node)
 
+        if not iter_fields(node):  # constant expression -> not a factor
+            raise ParseError(
+                "the expression references no data field — a constant is not a valid factor",
+                code="CONSTANT_EXPRESSION")
+
         unknown_ops = {op for op in iter_ops(node) if not operators.is_registered(op)}
         if unknown_ops:
             raise ValueError(f"expression uses unregistered operators: {sorted(unknown_ops)}")
@@ -351,6 +356,12 @@ class FactorEngine:
         except Exception as exc:  # defensive: diagnose() must never raise
             fd.add(dg.diag(dg.INTERNAL_ERROR, f"unexpected parser error: {exc}",
                            error_type=type(exc).__name__))
+            return fd
+
+        # constant expression: references no data field -> not a factor (data-free reject)
+        if not iter_fields(node):
+            fd.add(dg.diag(dg.CONSTANT_EXPRESSION,
+                           "the expression references no data field — a constant is not a valid factor"))
             return fd
 
         # 2. static validation against this panel (operators + fields)
