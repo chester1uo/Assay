@@ -358,10 +358,14 @@ class FactorEngine:
                            error_type=type(exc).__name__))
             return fd
 
-        # constant expression: references no data field -> not a factor (data-free reject)
+        # degenerate expressions (data-free reject): a constant, or a bare data field
         if not iter_fields(node):
             fd.add(dg.diag(dg.CONSTANT_EXPRESSION,
                            "the expression references no data field — a constant is not a valid factor"))
+            return fd
+        if isinstance(node, FieldNode):
+            fd.add(dg.diag(dg.BARE_FIELD,
+                           f"{node.name!r} is a bare data field, not a factor — apply a transformation"))
             return fd
 
         # 2. static validation against this panel (operators + fields)

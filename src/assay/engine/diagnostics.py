@@ -30,7 +30,7 @@ from typing import Any
 import numpy as np
 
 from assay.engine import operators
-from assay.engine.ast import iter_fields, iter_ops
+from assay.engine.ast import FieldNode, iter_fields, iter_ops
 from assay.engine.parsing import ParseError, parse
 
 
@@ -92,6 +92,9 @@ EXPRESSION_TOO_DEEP = _c("ASSAY-P010", "EXPRESSION_TOO_DEEP", Stage.PARSE, Sever
 CONSTANT_EXPRESSION = _c("ASSAY-P011", "CONSTANT_EXPRESSION", Stage.PARSE, Severity.ERROR,
     "Constant expression (no data field)",
     "A factor must reference at least one data field (e.g. close, volume). A pure constant like '1' or '0' is not a valid factor.")
+BARE_FIELD = _c("ASSAY-P012", "BARE_FIELD", Stage.PARSE, Severity.ERROR,
+    "Bare data field is not a factor",
+    "A raw field on its own carries no signal. Apply a transformation, e.g. cs_rank(close), ts_returns(close, 5) or ts_corr(close, volume, 20).")
 
 # --- execute stage ------------------------------------------------------------
 UNKNOWN_FIELD = _c("ASSAY-E001", "UNKNOWN_FIELD", Stage.EXECUTE, Severity.ERROR,
@@ -456,6 +459,9 @@ def lint(expr) -> FactorDiagnostics:
         if not iter_fields(node):  # references no data field -> a constant, not a factor
             fd.add(diag(CONSTANT_EXPRESSION,
                         "the expression references no data field — a constant is not a valid factor"))
+        elif isinstance(node, FieldNode):  # a bare field is raw data, not a factor
+            fd.add(diag(BARE_FIELD,
+                        f"{node.name!r} is a bare data field, not a factor — apply a transformation"))
     except ParseError as e:
         fd.add(from_parse_error(e, text))
     except Exception as e:  # pragma: no cover - defensive: lint must never raise
