@@ -68,6 +68,7 @@ const DICT = {
     "common.dAgo": "{n} d ago",
     "common.symbols": "symbols",
     "common.tradingDays": "trading days",
+    "common.dShort": "d",
     "common.viewLarge": "View larger",
     // dashboard
     "dash.title": "Dashboard",
@@ -163,6 +164,7 @@ const DICT = {
     "common.dAgo": "{n} 天前",
     "common.symbols": "只股票",
     "common.tradingDays": "个交易日",
+    "common.dShort": "天",
     "common.viewLarge": "查看大图",
     "dash.title": "仪表盘",
     "dash.subtitle": "股票池 {u} · {start} – {end}",

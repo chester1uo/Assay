@@ -150,6 +150,10 @@ function buildStatusBar(status, ctx) {
   const lastSync = data.last_sync || null;
   const symbols = num(data.symbols_available);
   const tradingDays = num(data.trading_days_available);
+  // Every configured market (US + A-share), not just the primary one.
+  const markets = (status && Array.isArray(status.markets)) ? status.markets : [];
+  // "Has data" spans all markets: a store is live if ANY market is ingested.
+  const hasData = markets.length ? markets.some((m) => m && m.ingested) : !!symbols;
 
   // Freshness heuristic identical in spirit to app.js refreshStatus().
   let dotCls = "fresh";
@@ -157,7 +161,7 @@ function buildStatusBar(status, ctx) {
   if (status && (status.degraded || status.status === "degraded")) {
     dotCls = "stale";
     freshLabel = t("dash.degraded");
-  } else if (!symbols) {
+  } else if (!hasData) {
     // No ingested symbols -> nothing to evaluate against.
     dotCls = "error";
     freshLabel = t("dash.noData");
@@ -182,11 +186,31 @@ function buildStatusBar(status, ctx) {
       el("span", { className: "sb-strong" }, lastSync ? relTime(lastSync) : t("common.never"))
     )
   );
-  items.push(sep());
-  items.push(el("span", {}, symbols !== null ? `${ctx.fmtInt(symbols)} ${t("common.symbols")}` : `— ${t("common.symbols")}`));
-  if (tradingDays) {
+  // Every configured market, not just the primary — a US+CN deployment shows both.
+  // Falls back to the primary-only fields when the API has no `markets` block.
+  if (markets.length) {
+    for (const m of markets) {
+      items.push(sep());
+      const days = num(m.trading_days) || 0;
+      const syms = num(m.symbols_in_store) || 0;
+      const detail = m.ingested
+        ? `${m.market}: ${m.first_date} → ${m.last_date} · ${ctx.fmtInt(days)} ${t("common.tradingDays")} · ${ctx.fmtInt(syms)} ${t("common.symbols")}`
+        : `${m.market}: ${t("dash.noData")}${m.error ? " — " + m.error : ""}`;
+      items.push(el("span", { className: "sb-mkt", title: detail },
+        el("span", { className: "sb-strong" }, m.market), " ",
+        m.ingested
+          ? el("span", {}, `${m.last_date} `, el("span", { className: "muted" },
+              `(${ctx.fmtInt(days)}${t("common.dShort")} · ${ctx.fmtInt(syms)})`))
+          : el("span", { className: "muted" }, t("common.never"))
+      ));
+    }
+  } else {
     items.push(sep());
-    items.push(el("span", {}, `${ctx.fmtInt(tradingDays)} ${t("common.tradingDays")}`));
+    items.push(el("span", {}, symbols !== null ? `${ctx.fmtInt(symbols)} ${t("common.symbols")}` : `— ${t("common.symbols")}`));
+    if (tradingDays) {
+      items.push(sep());
+      items.push(el("span", {}, `${ctx.fmtInt(tradingDays)} ${t("common.tradingDays")}`));
+    }
   }
   if (status && status.engine_version) {
     items.push(sep());
@@ -195,7 +219,7 @@ function buildStatusBar(status, ctx) {
 
   // Warnings: surface data unavailability as an actionable warning.
   const warnings = [];
-  if (!symbols) warnings.push(t("dash.warnNoData"));
+  if (!hasData) warnings.push(t("dash.warnNoData"));
   if (status && (status.degraded || status.status === "degraded")) warnings.push(t("dash.warnDegraded"));
   items.push(sep());
   items.push(
