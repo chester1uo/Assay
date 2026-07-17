@@ -145,6 +145,7 @@ class FactorReport:
     # --- evaluation context ----------------------------------------------
     eval_period: tuple[str, str] = ("", "")
     universe_id: str = ""
+    market: str = ""            # market the universe belongs to (US | CN | HK)
     n_dates: int = 0
     n_symbols: int = 0
     execution: str = "next_open"
@@ -196,6 +197,7 @@ class FactorReport:
             "suggestion": self.suggestion,
             "eval_period": list(self.eval_period),
             "universe_id": self.universe_id,
+            "market": self.market,
             "n_dates": self.n_dates,
             "n_symbols": self.n_symbols,
             "execution": self.execution,
@@ -262,6 +264,7 @@ class FactorReport:
             suggestion=d.get("suggestion"),
             eval_period=tuple(eval_period),
             universe_id=d.get("universe_id", ""),
+            market=d.get("market", ""),
             n_dates=d.get("n_dates", 0),
             n_symbols=d.get("n_symbols", 0),
             execution=d.get("execution", "next_open"),
@@ -300,6 +303,7 @@ class FactorSummary:
     failure_mode: str | None = None
     source: str = "AGENT"
     universe_id: str = ""
+    market: str = ""
 
     @classmethod
     def from_report(cls, r: FactorReport) -> "FactorSummary":
@@ -315,6 +319,7 @@ class FactorSummary:
             failure_mode=r.failure_mode,
             source=r.lineage.source if r.lineage else "AGENT",
             universe_id=r.universe_id,
+            market=r.market,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -330,6 +335,7 @@ class FactorSummary:
             "failure_mode": self.failure_mode,
             "source": self.source,
             "universe_id": self.universe_id,
+            "market": self.market,
         }
 
     @classmethod
@@ -346,4 +352,5 @@ class FactorSummary:
             failure_mode=d.get("failure_mode"),
             source=d.get("source", "AGENT"),
             universe_id=d.get("universe_id", ""),
+            market=d.get("market", ""),
         )

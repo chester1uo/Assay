@@ -690,6 +690,7 @@ class AssayService:
             suggestion=(diagnostics.warnings[0].suggestion if diagnostics.warnings else None),
             eval_period=tuple(period),
             universe_id=universe,
+            market=self._market_for(universe),
             n_dates=T,
             n_symbols=N,
             execution=execution,
