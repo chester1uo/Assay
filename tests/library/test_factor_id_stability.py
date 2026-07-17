@@ -15,7 +15,9 @@ from assay.library.report import FactorReport
 # Frozen daily report-JSON key shape (design §10: granularity="1d" report keys
 # byte-identical to pre-minute). Adding a tagged field (e.g. M5/M7 `granularity`)
 # must break this consciously, not drift silently.
-_REPORT_KEYS_SHA = "fef929a84a208cdc"
+# Bumped 2026-07: added `market` (US|CN|HK) to the report so a factor is
+# self-describing (a CSI300 eval reports market=CN, not the deployment default).
+_REPORT_KEYS_SHA = "93ea359bfd1aa4c2"
 
 # Pinned legacy digests — frozen daily contract. Do not edit to "make it pass".
 _LEGACY = {
