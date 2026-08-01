@@ -7,8 +7,8 @@ Alpha 挖掘。在同一套引擎之上，它提供四种接入方式——Pytho
 面向智能体的 MCP 服务，以及零安装的 WebUI——外加完整的 **组合回测（portfolio backtest）**
 模块和 **因子合成（factor combination）** 工作区。
 
-它同时服务 **美股**（NASDAQ-100 / S&P 500，数据源 MASSIVE）与 **A 股**
-（沪深 300 / 500 / 1000，数据源 Tushare）。原始（RAW）供应商数据既可以由内置的
+它同时服务 **美股**（NASDAQ-100 / S&P 500，数据源 MASSIVE）、**A 股**
+（沪深 300 / 500 / 1000，数据源 Tushare）与 **港股**（HK100，数据源 Tushare）。原始（RAW）供应商数据既可以由内置的
 **数据管理器（Data Manager，WebUI）** 下载并保持同步，也可以从本地镜像导入——详见
 [数据流水线](docs/cn/guide/data-pipeline.md) 指南。
 
@@ -75,9 +75,10 @@ Assay 把 **RAW** 供应商镜像与已准备好的 **ASSAY** parquet 存储分�
 | 变量 | 用途 |
 |---|---|
 | `MASSIVE_DATA_DIR` | 本地 MASSIVE（美股）镜像根目录（默认 `/data/massive_data`） |
-| `TUSHARE_DATA_DIR` | 本地 Tushare（A 股）镜像根目录（默认 `/data/tushare_data`） |
-| `TUSHARE_TOKEN` | Tushare API token（A 股下载） |
-| `ASSAY_DATA_DIR` / `ASSAY_DATA_DIR_CN` | 已准备存储的输出根目录 |
+| `TUSHARE_DATA_DIR` | 本地 Tushare（A 股 + 港股）镜像根目录（默认 `/data/tushare_data`） |
+| `TUSHARE_TOKEN` | Tushare API token（A 股 / 港股下载） |
+| `TUSHARE_API_URL` | 接口地址覆盖——指向遵循 Tushare 协议的中转网关（默认 `api.tushare.pro`）；港股行情接口必须走中转 |
+| `ASSAY_DATA_DIR` / `ASSAY_DATA_DIR_CN` / `ASSAY_DATA_DIR_HK` | 已准备存储的输出根目录 |
 
 把 `.env.example` 复制为 `.env` 可覆盖默认值——`assay.config` 会自动加载 `.env`（shell
 环境始终优先）。`.env` 和 `data/` 都已被 git 忽略。

@@ -167,10 +167,10 @@ export function render(root, ctx) {
     const inp = (val, type) => el("input", { className: "input", type: type || "text", value: val == null ? "" : String(val), spellcheck: "false", autocomplete: "off" });
     const f = {
       raw_massive: inp(d.raw_massive), raw_tushare: inp(d.raw_tushare),
-      assay_us: inp(d.assay_us), assay_cn: inp(d.assay_cn),
+      assay_us: inp(d.assay_us), assay_cn: inp(d.assay_cn), assay_hk: inp(d.assay_hk),
       access_key_id: inp(s3.access_key_id), secret_access_key: inp(s3.secret_access_key, "password"),
       endpoint: inp(s3.endpoint), bucket: inp(s3.bucket),
-      token: inp(ts.token, "password"),
+      token: inp(ts.token, "password"), api_url: inp(ts.api_url),
     };
     const field = (label, node) => el("div", { className: "dm-field" }, el("span", { className: "label" }, label), node);
 
@@ -193,9 +193,9 @@ export function render(root, ctx) {
     saveBtn.addEventListener("click", () => {
       saveBtn.disabled = true;
       api.adminConfigPut({
-        dirs: { raw_massive: f.raw_massive.value.trim(), raw_tushare: f.raw_tushare.value.trim(), assay_us: f.assay_us.value.trim(), assay_cn: f.assay_cn.value.trim() },
+        dirs: { raw_massive: f.raw_massive.value.trim(), raw_tushare: f.raw_tushare.value.trim(), assay_us: f.assay_us.value.trim(), assay_cn: f.assay_cn.value.trim(), assay_hk: f.assay_hk.value.trim() },
         massive_s3: { access_key_id: f.access_key_id.value.trim(), secret_access_key: f.secret_access_key.value, endpoint: f.endpoint.value.trim(), bucket: f.bucket.value.trim() },
-        tushare: { token: f.token.value },
+        tushare: { token: f.token.value, api_url: f.api_url.value.trim() },
       }).then((m) => { renderConfig(card, m); toast("Config saved"); })
         .catch((e) => toast("Save failed: " + (e.message || e), true))
         .finally(() => { saveBtn.disabled = false; });
@@ -206,15 +206,18 @@ export function render(root, ctx) {
       el("div", { className: "card-body" },
         el("div", { className: "dm-sub" }, "Directories"),
         el("div", { className: "dm-grid" },
-          field("RAW · MASSIVE (US source)", f.raw_massive), field("RAW · Tushare (CN source)", f.raw_tushare),
-          field("ASSAY · US (output)", f.assay_us), field("ASSAY · CN (output)", f.assay_cn)),
+          field("RAW · MASSIVE (US source)", f.raw_massive), field("RAW · Tushare (CN/HK source)", f.raw_tushare),
+          field("ASSAY · US (output)", f.assay_us), field("ASSAY · CN (output)", f.assay_cn),
+          field("ASSAY · HK (output)", f.assay_hk)),
         el("div", { className: "dm-sub" }, el("span", {}, "MASSIVE S3 (US download)"), testBtn("Test connection", "massive", massiveTest)),
         el("div", { className: "dm-grid" },
           field("Access Key ID", f.access_key_id), field("Secret Access Key", f.secret_access_key),
           field("S3 Endpoint", f.endpoint), field("Bucket", f.bucket)),
         massiveTest,
-        el("div", { className: "dm-sub" }, el("span", {}, "Tushare (CN download)"), testBtn("Test token", "tushare", tushareTest)),
-        el("div", { className: "dm-grid" }, field("API Token", f.token)),
+        el("div", { className: "dm-sub" }, el("span", {}, "Tushare (CN/HK download)"), testBtn("Test token", "tushare", tushareTest)),
+        el("div", { className: "dm-grid" },
+          field("API Token", f.token),
+          field("API Endpoint (blank = api.tushare.pro)", f.api_url)),
         tushareTest,
         el("div", { style: { marginTop: "12px" } }, saveBtn, note)
       )
@@ -289,7 +292,8 @@ export function render(root, ctx) {
     }
     body.append(el("div", { style: { marginTop: "10px", display: "flex", gap: "8px" } },
       el("button", { className: "btn btn--sm", type: "button", onClick: () => rebuild("US") }, "Rebuild US"),
-      el("button", { className: "btn btn--sm", type: "button", onClick: () => rebuild("CN") }, "Rebuild CN")));
+      el("button", { className: "btn btn--sm", type: "button", onClick: () => rebuild("CN") }, "Rebuild CN"),
+      el("button", { className: "btn btn--sm", type: "button", onClick: () => rebuild("HK") }, "Rebuild HK")));
     card.replaceChildren(head, body);
   }
 

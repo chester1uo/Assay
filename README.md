@@ -7,8 +7,8 @@ agent-driven alpha mining. On top of a shared engine it exposes four surfaces �
 a REST API (with SSE streaming), an MCP server for agents, and a zero-install WebUI — plus a
 full **portfolio backtest** module and a **factor-combination** workspace.
 
-It serves both **US equities** (NASDAQ-100 / S&P 500, via MASSIVE) and **China A-shares**
-(CSI300/500/1000, via Tushare). Raw vendor data can be downloaded and kept in sync from the
+It serves **US equities** (NASDAQ-100 / S&P 500, via MASSIVE), **China A-shares**
+(CSI300/500/1000, via Tushare) and **Hong Kong** (HK100, via Tushare). Raw vendor data can be downloaded and kept in sync from the
 built-in **Data Manager** (WebUI) or ingested from a local mirror — see the
 [Data Pipeline](docs/en/guide/data-pipeline.md) guide.
 
@@ -78,9 +78,10 @@ There are two ways to populate RAW:
 | Variable | Purpose |
 |---|---|
 | `MASSIVE_DATA_DIR` | root of the local MASSIVE (US) mirror (default `/data/massive_data`) |
-| `TUSHARE_DATA_DIR` | root of the local Tushare (CN) mirror (default `/data/tushare_data`) |
-| `TUSHARE_TOKEN` | Tushare API token (CN download) |
-| `ASSAY_DATA_DIR` / `ASSAY_DATA_DIR_CN` | output root(s) for the prepared stores |
+| `TUSHARE_DATA_DIR` | root of the local Tushare (CN + HK) mirror (default `/data/tushare_data`) |
+| `TUSHARE_TOKEN` | Tushare API token (CN / HK download) |
+| `TUSHARE_API_URL` | endpoint override — a relay gateway speaking the Tushare protocol (default `api.tushare.pro`); required for the HK price endpoints |
+| `ASSAY_DATA_DIR` / `ASSAY_DATA_DIR_CN` / `ASSAY_DATA_DIR_HK` | output root(s) for the prepared stores |
 
 Expected source layout under `MASSIVE_DATA_DIR`:
 

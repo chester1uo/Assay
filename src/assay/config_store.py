@@ -46,6 +46,7 @@ def _defaults() -> dict[str, Any]:
             "raw_tushare": os.environ.get("TUSHARE_DATA_DIR", "/data/tushare_data"),
             "assay_us": os.environ.get("ASSAY_DATA_DIR", str(_REPO_ROOT / "data_us")),
             "assay_cn": os.environ.get("ASSAY_DATA_DIR_CN", str(_REPO_ROOT / "data_cn")),
+            "assay_hk": os.environ.get("ASSAY_DATA_DIR_HK", str(_REPO_ROOT / "data_hk")),
         },
         "massive_s3": {
             "access_key_id": os.environ.get("MASSIVE_ACCESS_KEY_ID", ""),
@@ -53,7 +54,13 @@ def _defaults() -> dict[str, Any]:
             "endpoint": os.environ.get("MASSIVE_S3_ENDPOINT", "https://files.massive.com"),
             "bucket": os.environ.get("MASSIVE_S3_BUCKET", "flatfiles"),
         },
-        "tushare": {"token": os.environ.get("TUSHARE_TOKEN", "")},
+        # ``api_url`` lets the token be spent against a relay/cache gateway that
+        # speaks the Tushare protocol but carries its own (often broader-scoped)
+        # entitlements — notably the HK price endpoints. Empty = api.tushare.pro.
+        "tushare": {
+            "token": os.environ.get("TUSHARE_TOKEN", ""),
+            "api_url": os.environ.get("TUSHARE_API_URL", ""),
+        },
         # System settings (non-secret) — applied onto the live AssayConfig by
         # AssayService.apply_system_config(). Kept FLAT so the one-level deep-merge
         # in update()/_merge() handles partial saves cleanly. Defaults mirror
@@ -86,6 +93,7 @@ def _defaults() -> dict[str, Any]:
         "schedule": {
             "us": {"enabled": False, "time": "18:30"},
             "cn": {"enabled": False, "time": "18:30"},
+            "hk": {"enabled": False, "time": "18:30"},
         },
     }
 
@@ -168,13 +176,16 @@ def apply_to_env(cfg: dict[str, Any] | None = None) -> None:
     cfg = cfg or load()
     dirs = cfg.get("dirs", {})
     s3 = cfg.get("massive_s3", {})
-    tok = (cfg.get("tushare", {}) or {}).get("token", "")
+    ts = cfg.get("tushare", {}) or {}
+    tok = ts.get("token", "")
     env = {
         "MASSIVE_DATA_DIR": dirs.get("raw_massive", ""),
         "TUSHARE_DATA_DIR": dirs.get("raw_tushare", ""),
         "ASSAY_DATA_DIR": dirs.get("assay_us", ""),
         "ASSAY_DATA_DIR_CN": dirs.get("assay_cn", ""),
+        "ASSAY_DATA_DIR_HK": dirs.get("assay_hk", ""),
         "TUSHARE_TOKEN": tok or "",
+        "TUSHARE_API_URL": ts.get("api_url", "") or "",
         "MASSIVE_ACCESS_KEY_ID": s3.get("access_key_id", ""),
         "MASSIVE_SECRET_ACCESS_KEY": s3.get("secret_access_key", ""),
         "MASSIVE_S3_ENDPOINT": s3.get("endpoint", ""),
@@ -183,11 +194,22 @@ def apply_to_env(cfg: dict[str, Any] | None = None) -> None:
     for k, v in env.items():
         if v:
             os.environ[k] = str(v)
+    # Blanking the endpoint means "go back to api.tushare.pro", which the
+    # non-empty rule above cannot express: leaving a stale value in the
+    # environment would keep sending the token to a relay the operator just
+    # removed. This one key is therefore cleared explicitly.
+    if not env["TUSHARE_API_URL"]:
+        os.environ.pop("TUSHARE_API_URL", None)
 
 
 # ----- typed accessors (used by the downloaders / orchestration) -----
 def tushare_token() -> str:
     return str((load().get("tushare", {}) or {}).get("token", "") or "")
+
+
+def tushare_api_url() -> str:
+    """Endpoint the Tushare token is spent against ("" = api.tushare.pro)."""
+    return str((load().get("tushare", {}) or {}).get("api_url", "") or "")
 
 
 def massive_s3() -> dict[str, str]:
@@ -228,4 +250,7 @@ def raw_dir(market: str) -> str:
 
 def assay_dir(market: str) -> str:
     d = load().get("dirs", {})
-    return d.get("assay_cn", "") if market.upper() in ("CN", "HK", "A") else d.get("assay_us", "")
+    mk = market.upper()
+    if mk == "HK":
+        return d.get("assay_hk", "")
+    return d.get("assay_cn", "") if mk in ("CN", "A") else d.get("assay_us", "")

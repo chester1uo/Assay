@@ -177,8 +177,18 @@ class PortfolioBacktester:
         # / offline runs). Gated on sector_neutral so a plain run is never silently
         # sector-balanced.
         cutoff = as_of or config.as_of_date or config.period_end
+        warnings: list[str] = []
         if groups is None and config.sector_neutral:
             groups = self._load_groups(symbols, cutoff)
+            if groups is None:
+                # The evaluate path already refuses to claim a neutralization it did
+                # not apply; the portfolio path must not be quieter about it. Both
+                # sector_neutral and max_sector_weight are inert without labels.
+                warnings.append(
+                    "sector_neutral=True requested but no security_groups are available "
+                    f"for market {config.market!r}; the signal was NOT sector-neutralised "
+                    "and max_sector_weight did not bind."
+                )
         signal = process_signal(factor, config, groups)
         signal = np.where(eligible, signal, np.nan)  # ineligible -> NaN (weight 0)
 
@@ -246,6 +256,7 @@ class PortfolioBacktester:
             symbols=[str(s) for s in symbols],
             n_scheduled=n_scheduled,
             adj=self._adj(config),
+            warnings=warnings,
         )
 
     # ================================================================= helpers ==
@@ -674,6 +685,7 @@ class PortfolioBacktester:
         symbols: list[str],
         n_scheduled: int,
         adj: str,
+        warnings: list[str] | None = None,
     ) -> PortfolioReport:
         """Fold the accountant output + metrics into a :class:`PortfolioReport`.
 
@@ -682,6 +694,7 @@ class PortfolioBacktester:
         ``annual_turnover`` / ``avg_holding_days``), resolves the drawdown date
         labels from the returned indices, attaches the optional trade/position logs
         per the §2.9 flags, and fills ``a_share_metrics`` only when ``market == 'A'``.
+        ``warnings`` carries any requested-but-inert constraint noted during the run.
         """
         nav = acct.nav_series
         gross = acct.gross_nav
@@ -757,6 +770,7 @@ class PortfolioBacktester:
             position_log=position_log,
             attribution=None,
             a_share_metrics=a_share,
+            warnings=list(warnings or []),
             lineage=PortfolioLineage(
                 data_snapshot=self._data_snapshot(),
                 eval_timestamp=None,  # the caller (service) stamps wall-clock time

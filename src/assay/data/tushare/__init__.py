@@ -20,7 +20,16 @@ from .constituents import (
     hk_constituents,
     hk_universe,
 )
-from .ingest import CN_INDICES, CN_MARKET, prepare_cn
+from .ingest import (
+    CN_INDICES,
+    CN_MARKET,
+    HK_HSHARE_INDEX,
+    HK_INDICES,
+    HK_MARKET,
+    hk_hshare_symbols,
+    prepare_cn,
+    prepare_hk,
+)
 
 __all__ = [
     "TushareClient",
@@ -30,6 +39,11 @@ __all__ = [
     "hk_constituents",
     "hk_universe",
     "prepare_cn",
+    "prepare_hk",
+    "HK_INDICES",
+    "HK_HSHARE_INDEX",
+    "HK_MARKET",
+    "hk_hshare_symbols",
     "CN_INDICES",
     "CN_MARKET",
 ]

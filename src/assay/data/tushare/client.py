@@ -8,6 +8,12 @@ tool calls, not for pulling millions of rows.
 
 Stdlib only (``urllib``) so it runs in the project venv without ``requests``.
 
+The endpoint is configurable (``base_url`` / ``$TUSHARE_API_URL``) so the same
+client can talk to a caching/relay gateway that fronts Tushare with a corporate
+key. Such gateways speak the identical ``{api_name, params, fields}`` protocol
+but authenticate on an ``X-API-Key`` header rather than the body ``token``, so
+the credential is sent both ways and whichever the endpoint reads wins.
+
 Behaviour worth knowing:
   * A global :class:`RateLimiter` spaces calls evenly (thread-safe), so a thread
     pool can share one client without tripping per-minute quotas.
@@ -21,7 +27,9 @@ Behaviour worth knowing:
 
 from __future__ import annotations
 
+import http.client
 import json
+import os
 import threading
 import time
 import urllib.error
@@ -45,6 +53,18 @@ DEFAULT_PAGE_LIMIT = 5000
 _MINUTE_MARKERS = ("分钟", "every minute", "per minute")
 _PERMISSION_MARKERS = ("没有接口", "访问权限", "没有访问")
 _QUOTA_MARKERS = ("次/小时", "次/天", "每天", "每日", "小时", "超限")
+
+# How long to pause on an HTTP 429 that carries no Retry-After. Long enough for a
+# per-minute window to drain a slot, short enough not to stall a bulk backfill.
+_THROTTLE_PAUSE_SEC = 5.0
+# Throttle waits are not failures and so do not consume the retry budget, but an
+# endpoint that answers 429 forever must still terminate rather than spin.
+_MAX_THROTTLE_WAITS = 60
+
+
+def default_base_url() -> str:
+    """The endpoint to call: ``$TUSHARE_API_URL`` if set, else Tushare proper."""
+    return os.environ.get("TUSHARE_API_URL", "").strip() or API_URL
 
 
 class TushareError(RuntimeError):
@@ -94,16 +114,26 @@ class TushareClient:
         self,
         token: str,
         *,
+        base_url: str | None = None,
         calls_per_min: int = 380,
         timeout: float = 60.0,
         max_retries: int = 6,
+        use_proxy: bool = True,
     ) -> None:
         if not token:
             raise ValueError("TushareClient requires a non-empty token")
         self._token = token
+        self._base_url = (base_url or default_base_url()).rstrip("/")
         self._timeout = timeout
         self._max_retries = max_retries
         self._limiter = RateLimiter(calls_per_min)
+        # An on-prem relay lives on the LAN, so routing it through the shell's
+        # $HTTP_PROXY only adds a hop that can rewrite or drop the request.
+        # use_proxy=False installs an empty ProxyHandler, which makes urllib
+        # ignore the proxy environment entirely and dial the host directly.
+        self._opener = urllib.request.build_opener(
+            *([] if use_proxy else [urllib.request.ProxyHandler({})])
+        )
 
     # -- low-level request -------------------------------------------------
 
@@ -112,9 +142,11 @@ class TushareClient:
             {"api_name": api, "token": self._token, "params": params, "fields": fields}
         ).encode("utf-8")
         req = urllib.request.Request(
-            API_URL, data=body, headers={"Content-Type": "application/json"}
+            self._base_url,
+            data=body,
+            headers={"Content-Type": "application/json", "X-API-Key": self._token},
         )
-        with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+        with self._opener.open(req, timeout=self._timeout) as resp:
             return json.loads(resp.read())
 
     def call(
@@ -130,11 +162,46 @@ class TushareClient:
         fields = fields or ""
 
         attempt = 0
+        throttled = 0
         while True:
             self._limiter.acquire()
             try:
                 payload = self._post(api, params, fields)
-            except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            except urllib.error.HTTPError as exc:
+                # A gateway rejects a bad/expired key with 401/403. That is a
+                # property of the credential, not a blip — fail fast instead of
+                # burning the retry budget on it.
+                if exc.code in (401, 403):
+                    raise TusharePermissionError(exc.code, exc.reason or "unauthorized", api) from exc
+                # 429 means "slow down", not "something broke". Exponential backoff
+                # here would be self-defeating on a long backfill: the request is
+                # fine and will succeed shortly. Wait the advertised Retry-After (or
+                # a short fixed pause) and do not spend the retry budget on it.
+                if exc.code == 429:
+                    throttled += 1
+                    if throttled > _MAX_THROTTLE_WAITS:
+                        raise TushareError(429, "rate limited; lower calls_per_min", api) from exc
+                    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                    try:
+                        pause = min(float(retry_after), 60.0)
+                    except (TypeError, ValueError):
+                        pause = _THROTTLE_PAUSE_SEC
+                    time.sleep(max(pause, _THROTTLE_PAUSE_SEC))
+                    continue
+                attempt += 1
+                if attempt > self._max_retries:
+                    raise TushareError(-1, f"http {exc.code}: {exc.reason}", api) from exc
+                time.sleep(min(2 ** attempt, 30))
+                continue
+            # http.client.HTTPException covers IncompleteRead: a relay that closes
+            # mid-body raises it rather than a URLError/ConnectionError, so leaving
+            # it out crashes the process instead of retrying a truncated response.
+            except (
+                urllib.error.URLError,
+                http.client.HTTPException,
+                TimeoutError,
+                ConnectionError,
+            ) as exc:
                 attempt += 1
                 if attempt > self._max_retries:
                     raise TushareError(-1, f"network error: {exc}", api) from exc

@@ -12,9 +12,9 @@ config so the same code serves every market (the section-6 table picks the rates
 
 * **commission** (佣金) — ``commission_rate`` on both sides, with a per-trade
   minimum ``commission_min`` re-expressed as a fraction of notional;
-* **stamp duty** (印花税) — ``stamp_duty_rate`` on the *sell* side only (A/HK
-  differ in side coverage but the config already encodes the rate, so the side
-  rule here is the A-share convention the doc specifies);
+* **stamp duty** (印花税) — ``stamp_duty_rate``, charged on the *sell* side only
+  in the A-share regime but on **both** sides in HK, which is how the two
+  exchanges actually levy it;
 * **transfer fee** (过户费) — ``transfer_fee_rate`` on both sides;
 * **slippage / market impact** — one of ``{'sqrt','linear','zero','almgren_chriss'}``
   scaled by ``slippage_k`` and the order's ADV participation (2.7).
@@ -94,7 +94,7 @@ class TransactionCostModel:
           floor is ``commission_min / |notional|`` where ``|notional|`` is in
           market currency (``|notional_fraction| * nav_capital``); with no capital
           scale the floor is skipped (rate-only commission, documented);
-        * stamp duty ``stamp_duty_rate`` on ``side == 'sell'`` only;
+        * stamp duty ``stamp_duty_rate`` — both sides in HK, sell side elsewhere;
         * transfer fee ``transfer_fee_rate`` both sides;
         * slippage from :meth:`slippage`.
 
@@ -113,8 +113,11 @@ class TransactionCostModel:
             if notional_ccy > 0.0:
                 commission = max(commission, cfg.commission_min / notional_ccy)
 
-        # Stamp duty: sell side only (印花税).
-        stamp = cfg.stamp_duty_rate if side == "sell" else 0.0
+        # Stamp duty (印花税). HKEX levies it on buys as well as sells; the A-share
+        # 印花税 is sell-side only. Charging HK on one side alone would understate a
+        # round trip by a third.
+        both_sides = cfg.market == "HK"
+        stamp = cfg.stamp_duty_rate if (both_sides or side == "sell") else 0.0
 
         # Transfer fee: both sides (过户费).
         transfer = cfg.transfer_fee_rate

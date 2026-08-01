@@ -57,12 +57,12 @@ python -m assay.cli prepare-nasdaq100 --start 2025-01-01 --end 2026-06-09
 
 WebUI 的 **Data** 标签页（以及 `/v1/admin/*` API）无需 CLI 即可驱动整个数据层：
 
-- **Keys & Dirs**——配置 MASSIVE S3 凭证（US）、Tushare token（CN）以及
+- **Keys & Dirs**——配置 MASSIVE S3 凭证（US）、Tushare token 与接口地址（CN / HK）以及
   数据目录；**Test connection** 会列出你的 S3 key 能读取的数据集 / 校验 token。
   密钥以掩码形式存储在被 git 忽略的 `.assay.config.json` 中。
 - **Data Setup**——按市场以 `mode` 运行任务：
   - `init`——完整历史（下载 + 导入）；
-  - `update`——增量下载 + 导入（CN 按**交易日**抓取，每次调用返回所有代码，
+  - `update`——增量下载 + 导入（CN 与 HK 按**交易日**抓取，每次调用返回所有代码，
     因此每日刷新只需少量 API 调用，然后追加到原始文件）；
   - `ingest`——**仅 RAW→ASSAY**，不下载（当原始镜像已就绪时）。
   - **自动更新计划**（按市场，每日一个时间）会自动排入 `update` 任务。

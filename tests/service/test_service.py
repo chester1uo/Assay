@@ -240,6 +240,26 @@ def test_batch_empty_returns_empty(service):
     assert service.batch([]) == []
 
 
+def test_batch_reports_record_the_requested_universe_not_the_default(service):
+    """A batch shares one session for the panel, but each report must still say
+    which universe/period/market it was actually scored on.
+
+    ``batch`` used to hand ``evaluate`` only the session id, so every report fell
+    back to the config defaults — a batch of HK factors filed itself as
+    NASDAQ100/US over the default window while holding correct HK numbers.
+    """
+    period = ("2021-01-04", "2021-03-31")
+    reports = service.batch(
+        ["cs_rank(ts_returns(close, 5))", "cs_rank(ts_returns(close, 10))"],
+        universe="CSI300", period=period, save=False,
+    )
+    assert len(reports) == 2
+    for r in reports:
+        assert r.universe_id == "CSI300"
+        assert r.market == "CN"
+        assert tuple(r.eval_period) == period
+
+
 # ---------------------------------------------------------------------------
 # stream: events ordered eval.started .. eval.complete
 # ---------------------------------------------------------------------------

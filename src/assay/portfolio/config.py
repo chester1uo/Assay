@@ -63,7 +63,12 @@ _HASH_FIELDS_V1: frozenset[str] = frozenset({
 
 # Enumerated valid-value sets (design-doc section 2). Kept module-level so the
 # validator and any UI/CLI can introspect them.
-_UNIVERSES = {"CSI300", "CSI500", "CSI1000", "CSI800", "SP500", "NASDAQ100", "HSI", "CUSTOM"}
+_UNIVERSES = {
+    "CSI300", "CSI500", "CSI1000", "CSI800",
+    "SP500", "NASDAQ100",
+    "HK100", "HSHARE100", "HSI", "HSTECH",
+    "CUSTOM",
+}
 _MARKETS = {"A", "US", "HK"}
 _REBALANCE_TYPES = {"daily", "weekly", "monthly", "quarterly", "threshold", "signal"}
 _WEIGHT_METHODS = {"equal", "signal_prop", "mv", "risk_parity", "quintile", "decile", "bl"}
@@ -364,15 +369,19 @@ class PortfolioBacktestConfig:
         elif m == "HK":
             base = dict(
                 market="HK",
-                universe="HSI",
+                universe="HK100",
                 t_plus_1=False,
                 price_limit_pct=None,
                 star_chinext_limit=None,
                 enforce_limit_price=False,
-                stamp_duty_rate=0.0013,  # both sides — see note below
+                # Per side: brokerage 0.04% + stamp duty 0.10% (charged on buys too
+                # in HK — see costs.py) + the fixed HKEX/regulator levies
+                # (trading fee 0.00565% + SFC 0.0027% + FRC 0.00015% = 0.0085%),
+                # totalling 0.1485%.
+                stamp_duty_rate=0.001,
                 commission_rate=0.0004,
                 commission_min=0.0,
-                transfer_fee_rate=0.00003,
+                transfer_fee_rate=0.000085,
                 st_filter=False,
                 new_listing_lockout_days=0,
                 rebalance_around_index=False,

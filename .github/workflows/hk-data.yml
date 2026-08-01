@@ -1,0 +1,168 @@
+name: Hong Kong data pipeline
+
+# Two independent jobs:
+#
+#   tests   — runs on every push/PR that touches the HK path. Hermetic: it builds
+#             a synthetic Tushare mirror in a temp dir, runs the real ingester over
+#             it and drives every REST endpoint against the resulting market=HK
+#             store. No token, no network, no downloaded data.
+#
+#   refresh — incremental HK update against the live Tushare API. Manual, plus a
+#             weekly cron. Needs a TUSHARE_TOKEN secret; the HK price endpoints are
+#             not permissioned on a plain community token, so TUSHARE_API_URL can
+#             point at a relay gateway that spends an entitled key instead.
+#
+# The refresh job deliberately does NOT attempt the full 2010-present backfill —
+# that is ~12k API calls over several hours and wants a persistent disk. It runs
+# the by-trade-date incremental path, which costs a handful of calls per new
+# session. Seed the mirror once locally with
+# `scripts/download_tushare.py --markets hk`, then let this keep it current.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/assay/data/tushare/**"
+      - "src/assay/data/orchestrate.py"
+      - "scripts/download_tushare.py"
+      - "scripts/prepare_hk.py"
+      - "tests/data/test_hk_ingest.py"
+      - "tests/api/test_api_hk.py"
+      - ".github/workflows/hk-data.yml"
+  pull_request:
+    paths:
+      - "src/assay/data/tushare/**"
+      - "src/assay/data/orchestrate.py"
+      - "scripts/download_tushare.py"
+      - "scripts/prepare_hk.py"
+      - "tests/data/test_hk_ingest.py"
+      - "tests/api/test_api_hk.py"
+      - ".github/workflows/hk-data.yml"
+  schedule:
+    # 01:00 UTC Saturday = 09:00 HKT, well after the Friday HKEX close.
+    - cron: "0 1 * * 6"
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Window start (YYYY-MM-DD). Blank = resume from the mirror's last date."
+        required: false
+        type: string
+      end:
+        description: "Window end (YYYY-MM-DD). Blank = today."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hk-data-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: HK pipeline tests (offline)
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[api,perf]" pytest
+
+      - name: HK ingest + REST surface
+        env:
+          PYTHONPATH: src
+        run: |
+          pytest tests/data/test_hk_ingest.py tests/api/test_api_hk.py \
+                 tests/test_config_store.py -q
+
+      - name: Full suite
+        env:
+          PYTHONPATH: src
+        run: pytest tests -q
+
+  refresh:
+    name: Incremental HK refresh
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: tushare
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[api,perf]"
+
+      - name: Restore the raw Tushare mirror
+        id: mirror
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/tushare_data
+          key: tushare-hk-mirror-${{ github.run_id }}
+          restore-keys: tushare-hk-mirror-
+
+      - name: Download new HK sessions
+        env:
+          # Blank TUSHARE_API_URL falls back to https://api.tushare.pro (see
+          # assay.data.tushare.client.default_base_url).
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          TUSHARE_API_URL: ${{ secrets.TUSHARE_API_URL }}
+          TUSHARE_DATA_DIR: ${{ runner.temp }}/tushare_data
+          PYTHONPATH: src
+        run: |
+          if [ -z "$TUSHARE_TOKEN" ]; then
+            echo "::error::TUSHARE_TOKEN is not set; add it to the 'tushare' environment."
+            exit 1
+          fi
+          ARGS="--markets hk"
+          [ -n "${{ inputs.start }}" ] && ARGS="$ARGS --start $(echo '${{ inputs.start }}' | tr -d -)"
+          [ -n "${{ inputs.end }}" ] && ARGS="$ARGS --end $(echo '${{ inputs.end }}' | tr -d -)"
+          python scripts/download_tushare.py $ARGS
+
+      - name: Ingest into the market=HK store
+        env:
+          TUSHARE_DATA_DIR: ${{ runner.temp }}/tushare_data
+          ASSAY_DATA_DIR_HK: ${{ runner.temp }}/data_hk
+          PYTHONPATH: src
+        run: |
+          START="${{ inputs.start }}"
+          END="${{ inputs.end }}"
+          python scripts/prepare_hk.py "${START:-2010-01-01}" "${END:-$(date -u +%F)}"
+
+      - name: Summarise
+        env:
+          ASSAY_DATA_DIR_HK: ${{ runner.temp }}/data_hk
+          PYTHONPATH: src
+        run: |
+          python - <<'PY'
+          import os, glob, polars as pl
+          root = os.environ["ASSAY_DATA_DIR_HK"]
+          px = sorted(glob.glob(f"{root}/price_raw/market=HK/**/price_raw.parquet", recursive=True))
+          if px:
+              df = pl.scan_parquet(px).select("date", "symbol").collect()
+              print(f"price_raw: {df.height:,} rows | {df['symbol'].n_unique()} symbols "
+                    f"| {df['date'].min()} .. {df['date'].max()}")
+          snap = f"{root}/universe_snapshots/market=HK/universe_snapshots.parquet"
+          if os.path.isfile(snap):
+              u = pl.read_parquet(snap)
+              print("universes:", dict(u.group_by("index_id").len().iter_rows()))
+          PY

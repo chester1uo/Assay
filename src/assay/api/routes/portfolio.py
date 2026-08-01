@@ -30,6 +30,20 @@ from assay.api.app import get_service
 from assay.api.auth import get_api_key
 from assay.portfolio import PortfolioBacktestConfig
 
+
+def _market_for_universe(universe: str) -> str:
+    """Trading-rule regime implied by a universe id (US | A | HK).
+
+    The service knows which *data* market a universe lives in; the portfolio layer
+    spells the A-share regime ``A`` rather than ``CN``, so the two vocabularies are
+    bridged here — the same mapping the MCP tool applies.
+    """
+    from assay.service import AssayService
+
+    data_market = AssayService._UNIVERSE_MARKET.get(universe.upper(), "US")
+    return {"CN": "A"}.get(data_market, data_market)
+
+
 router = APIRouter()
 
 
@@ -72,9 +86,9 @@ class PortfolioBacktestRequest(BaseModel):
         :meth:`PortfolioBacktestConfig.from_dict` (it tolerates partial payloads and
         ignores unknown keys). Otherwise the inline section-2 fields (the extra slot
         plus ``period_start`` / ``period_end`` if present) are merged onto the market
-        preset chosen by the inline ``market`` (default US), so a minimal
-        ``{expr, period_start, period_end}`` request is valid and an A-share request
-        (``market='A'``) gets A-share cost/limit defaults. The config validator
+        preset chosen by the inline ``market``, or — when that is absent — by the
+        universe, so a minimal ``{expr, universe, period_start, period_end}`` request
+        already gets the right market's cost/limit defaults. The config validator
         raises on out-of-range fields (mapped to 422).
         """
         if self.config is not None:
@@ -86,14 +100,16 @@ class PortfolioBacktestRequest(BaseModel):
             for k, v in (self.model_extra or {}).items()
             if k not in self._RESERVED
         }
-        # Pick the cost/limit preset from the requested market (default US), so an
-        # inline ``{market: "A"}`` request gets the A-share stamp-duty / commission /
-        # price-limit defaults rather than US ones. Unknown markets fall back to US.
-        # ``market`` is passed positionally to preset(), so drop it from the kwargs
-        # overrides to avoid "multiple values for argument 'market'".
-        market = str(extra.pop("market", "US")).upper()
+        # An inline ``{market: "A"}`` picks the A-share stamp-duty / commission /
+        # price-limit preset. When the caller does not name one, it is derived from
+        # the universe rather than defaulting to US: running HK100 or CSI300 under
+        # the US cost model silently drops HK's both-sides stamp duty (and
+        # A-share's) and overstates the net return, with nothing saying so.
+        # ``market`` is passed positionally to preset(), so it is popped out of the
+        # kwargs to avoid "multiple values for argument 'market'".
+        market = str(extra.pop("market", "") or "").upper()
         if market not in ("US", "A", "HK"):
-            market = "US"
+            market = _market_for_universe(str(extra.get("universe") or ""))
         return PortfolioBacktestConfig.preset(market, **extra)
 
 

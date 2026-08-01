@@ -1,4 +1,4 @@
-# Multi-market support (China A-share)
+# Multi-market support (China A-share + Hong Kong)
 
 Assay's data layer and portfolio backtester are market-agnostic: prices,
 corporate actions and index membership live in canonical stores partitioned by
@@ -93,6 +93,67 @@ Two market knobs, intentionally separate:
   `n_forced_holds` (T+1), `n_blocked_suspended`, and the corresponding rates.
 
 Universes available for CN: `CSI300`, `CSI500`, `CSI1000` (point-in-time,
-survivorship-free). Hong Kong index series are downloaded but, per the token's
-limits, HK has no per-stock price history or membership API — see
-[tushare.md](tushare.md).
+survivorship-free).
+
+## 4. Hong Kong
+
+HK rides the same canonical stores under `market=HK`, fed by
+`assay.data.tushare.ingest.prepare_hk` (CLI: `scripts/prepare_hk.py`). It needs
+an entitled Tushare endpoint — see [tushare.md](tushare.md).
+
+| store | source | notes |
+|-------|--------|-------|
+| `price_raw` | `hk/daily` | unadjusted OHLCV (`volume` in **shares**, not lots) |
+| `adj_events` | `hk/adj_factor` | reconstructed from `cum_adjfactor` steps, corroborated against `pre_close` |
+| `universe_snapshots` | `hk/daily` turnover + `hk_basic` ISIN | **HK100** and **HSHARE100** point-in-time membership |
+| `trade_status` | — | not written: HKEX has no daily price-limit bands |
+| `security_groups` | — | not written: Tushare exposes no HK industry classification |
+
+```bash
+# writes market=HK partitions under $ASSAY_DATA_DIR_HK (default ./data_hk)
+python scripts/prepare_hk.py 2015-01-01 2026-07-27
+```
+
+**HK100** is the whole-board universe. It ranks every name that actually traded
+by trailing three-month turnover at each month end and takes the top 100 effective
+on the *next* month's first trading day — so a snapshot can never see the returns
+it would be scored on.
+
+**HSHARE100** applies exactly the same ranking to **H-shares** only —
+mainland-China-incorporated issuers listed on HKEX, as opposed to the red chips
+(Cayman/Bermuda holding companies) and local Hong Kong issuers that make up the
+rest of the board. Membership is decided by the ISIN country prefix (`CNE`),
+which is a property of where the issuer is registered and therefore never changes;
+because the listings table is downloaded with delisted names included, the pool is
+survivorship-free. The two universes overlap by roughly half — H-shares that are
+also among the most-traded names on the board.
+
+Use `HSHARE100` when the thesis is about mainland corporates (A/H pairs, mainland
+policy exposure, the Connect flow) and `HK100` when it is about the Hong Kong
+market as a whole. `HSI` and `HSTECH` are also registered but are vendored
+**current** snapshots and therefore survivorship-biased.
+
+The `HK` preset differs from `A` in every respect that matters:
+
+- **No price limits, no T+1.** HKEX has neither, so `price_limit_pct=None` and
+  `t_plus_1=False`; the limit and settlement gates simply do not engage.
+- **Shorting allowed.** Unlike `A`, `long_short=True` is accepted.
+- **Stamp duty on both sides.** HKEX levies 0.10% on buys as well as sells, so
+  `TransactionCostModel` charges it symmetrically when `market == "HK"` — the
+  A-share 印花税 stays sell-side only. Per side the preset totals 0.1484%:
+  brokerage 0.04% + stamp duty 0.10% + HKEX trading fee 0.00565% + SFC levy
+  0.0027% + FRC levy 0.00015%.
+- **Total-return basis**, same as `A`, and now genuinely backed by ingested
+  `adj_events`.
+
+```python
+store = DataStore(AssayConfig(market="HK", data_dir=Path(os.environ["ASSAY_DATA_DIR_HK"])))
+cfg = PortfolioBacktestConfig.preset(
+    "HK", universe="HK100",       # or "HSHARE100" for H-shares only
+    period_start="2022-01-01", period_end="2023-12-31",
+)
+```
+
+Two caveats specific to HK: **sector-neutralisation is unavailable** (no group
+labels), and NAV is denominated in **HKD** with no FX book, so an HK run is not
+directly comparable to a US or CN one.

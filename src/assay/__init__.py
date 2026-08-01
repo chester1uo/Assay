@@ -44,12 +44,19 @@ def init(config: AssayConfig | str | None = None) -> AssayService:
     """Initialise (or replace) the process-wide :class:`AssayService` and return it.
 
     * ``None``  — build an :class:`AssayConfig` from the environment / project
-      ``.env`` (:meth:`AssayConfig.from_env`).
+      ``.env`` (:meth:`AssayConfig.from_env`), after pushing the operator's saved
+      settings into that environment. Without this the per-market data dirs the
+      Data Manager writes (``dirs.assay_cn`` / ``dirs.assay_hk``) are invisible to
+      anything but the REST app, so a CLI or MCP request for a CN/HK universe
+      resolves against the US store and reports "no ingested data".
     * :class:`AssayConfig` — used as-is.
     * ``str`` / path — tolerated for ergonomics: treated as the ``data_dir`` of an
       offline config (no MASSIVE creds), so ``assay.init("/some/dir")`` never raises.
     """
     if config is None:
+        from assay import config_store
+
+        config_store.apply_to_env()
         cfg = AssayConfig.from_env()
     elif isinstance(config, AssayConfig):
         cfg = config
