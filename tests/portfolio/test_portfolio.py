@@ -449,6 +449,21 @@ def test_a_share_sell_cost_exceeds_buy():
     assert sell - buy == pytest.approx(cfg.stamp_duty_rate)
 
 
+def test_hk_stamp_duty_is_charged_on_both_sides():
+    """HKEX levies stamp duty on buys too — unlike the A-share sell-side 印花税."""
+    cfg = PortfolioBacktestConfig.preset("HK", period_start="2021-01-01", period_end="2021-12-31")
+    cm = TransactionCostModel(cfg)
+    assert cfg.stamp_duty_rate > 0.0
+    assert cm.trade_cost("buy", 0.02) == pytest.approx(cm.trade_cost("sell", 0.02))
+    # ...and it is actually in the bill, not merely symmetric by being absent.
+    free = PortfolioBacktestConfig.preset(
+        "HK", period_start="2021-01-01", period_end="2021-12-31", stamp_duty_rate=0.0
+    )
+    assert cm.trade_cost("buy", 0.02) - TransactionCostModel(free).trade_cost(
+        "buy", 0.02
+    ) == pytest.approx(cfg.stamp_duty_rate)
+
+
 def test_price_limit_blocks_buy_at_limit_up():
     cfg = PortfolioBacktestConfig.preset("A", period_start="2021-01-01", period_end="2021-12-31")
     sim = ExecutionSimulator(cfg)
@@ -686,6 +701,30 @@ def test_threshold_rebalance_respects_gate_on_stable_factor(patched_engine):
     rep = PortfolioBacktester(store=None).run("open", cfg)
     # Exactly one rebalance: establish once, then the gate holds every later day.
     assert rep.n_rebalances == 1
+
+
+def test_sector_neutral_without_group_data_is_reported_not_silent(patched_engine):
+    """An inert constraint must be declared, the way the evaluate path declares it.
+
+    HK has no ``security_groups``, so ``sector_neutral`` and ``max_sector_weight``
+    cannot bind there. Running anyway and returning metrics identical to an
+    unconstrained run — with nothing in the report saying so — implies a control
+    that was never applied.
+    """
+    cfg = _cfg(
+        period_start="2021-01-04", period_end="2021-06-30", market="HK",
+        sector_neutral=True, max_sector_weight=0.30, benchmark="none",
+    )
+    # store=None -> no security_groups reachable, exactly the HK situation
+    rep = PortfolioBacktester(store=None).run("close", cfg)
+    assert any("sector_neutral" in w for w in rep.warnings)
+    assert "warnings" in rep.to_dict()
+
+    plain = PortfolioBacktester(store=None).run(
+        "close", _cfg(period_start="2021-01-04", period_end="2021-06-30",
+                      market="HK", benchmark="none")
+    )
+    assert plain.warnings == []
 
 
 def test_turnover_cap_enforced_against_drifted_book(patched_engine, monkeypatch):

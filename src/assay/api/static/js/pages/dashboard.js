@@ -15,6 +15,18 @@
 
 import { t } from "../i18n.js";
 
+// Data market a universe's store lives in (mirrors AssayService._UNIVERSE_MARKET).
+// Note this is the *data* vocabulary (US/CN/HK), not the portfolio trading-rule
+// vocabulary (US/A/HK) that pages/portfolio.js uses.
+const CN_UNIVERSES = new Set(["CSI300", "CSI500", "CSI1000", "CSI800"]);
+const HK_UNIVERSES = new Set(["HK100", "HSHARE100", "HSI", "HSTECH"]);
+function dataMarketFor(u) {
+  const x = String(u || "").toUpperCase();
+  if (CN_UNIVERSES.has(x)) return "CN";
+  if (HK_UNIVERSES.has(x)) return "HK";
+  return "US";
+}
+
 const STYLE_ID = "dashboard-page-style";
 const POLL_MS = 30000;
 const LEADERBOARD_LIMIT = 200;
@@ -665,7 +677,10 @@ export function render(root, ctx) {
     const [statusRes, factorsRes, calRes] = await Promise.allSettled([
       ctx.api.systemStatus(),
       ctx.api.libraryList({ universe, sort_by: "rank_icir", limit: LEADERBOARD_LIMIT }),
-      ctx.api.dataCalendar(undefined, undefined),
+      // Scope the calendar to the selected universe's market. Left unset it fell
+      // back to the primary (US) market, so an HK user saw US sessions marked
+      // covered and HK-only sessions (CNY, Buddha's Birthday) marked missing.
+      ctx.api.dataCalendar(dataMarketFor(universe), undefined),
     ]);
     if (token !== renderToken) return;
 

@@ -41,7 +41,7 @@ class Job:
 
     id: str
     kind: str            # "init" | "update" | ...
-    market: str          # "US" | "CN" | ...
+    market: str          # "US" | "CN" | "HK"
     mode: str            # free-form label (e.g. "init 2015..2026")
     status: str = "queued"   # queued | running | done | error
     progress: float = 0.0    # 0..1

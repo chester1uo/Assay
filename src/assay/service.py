@@ -46,6 +46,14 @@ __all__ = ["AssayService"]
 # the factor against that one grouping (residual of a per-date group-mean regression).
 _GROUP_NEUTRALIZE_KEYS = frozenset({"sector", "industry", "subindustry", "group"})
 
+# How to ingest each market, named in the NO_DATA remediation. Pointing an HK or CN
+# user at ``prepare-nasdaq100`` does not fix their store and pollutes the US one.
+_INGEST_HINT = {
+    "US": "Ingest it first (assay-data prepare-nasdaq100).",
+    "CN": "Ingest it first (scripts/prepare_cn.py, or the WebUI Data manager).",
+    "HK": "Ingest it first (scripts/prepare_hk.py, or the WebUI Data manager).",
+}
+
 
 def _group_residual(values: np.ndarray, labels: np.ndarray) -> np.ndarray:
     """Per-date group-neutral residual of ``(T, N)`` ``values`` (NaN-aware).
@@ -138,7 +146,7 @@ class AssayService:
     _UNIVERSE_MARKET = {
         "NASDAQ100": "US", "SP500": "US", "RUSSELL2000": "US",
         "CSI300": "CN", "CSI500": "CN", "CSI1000": "CN", "CSI800": "CN",
-        "HSI": "HK",
+        "HK100": "HK", "HSHARE100": "HK", "HSI": "HK", "HSTECH": "HK",
     }
 
     def __init__(self, config: AssayConfig) -> None:
@@ -584,6 +592,7 @@ class AssayService:
             suggestion=suggestion,
             eval_period=tuple(period),
             universe_id=universe,
+            market=self._market_for(universe),
             n_dates=0,
             n_symbols=0,
             execution=execution,
@@ -625,11 +634,12 @@ class AssayService:
             failure_mode="NO_DATA",
             suggestion=(
                 f"No ingested data for universe {universe!r} (market {market}) over "
-                f"{period[0]}..{period[1]}. Ingest it first (e.g. prepare-nasdaq100 for US, "
-                f"prepare_cn for A-share) or point ASSAY_DATA_DIR_{market} at its store. [{detail}]"
+                f"{period[0]}..{period[1]}. {_INGEST_HINT.get(market, _INGEST_HINT['US'])} "
+                f"Or point ASSAY_DATA_DIR_{market} at an existing store. [{detail}]"
             ),
             eval_period=tuple(period),
             universe_id=universe,
+            market=market,
             n_dates=0,
             n_symbols=0,
             execution=execution,
@@ -782,11 +792,19 @@ class AssayService:
             )["session_id"]
 
         try:
+            # The session supplies the panel, but the *report* still derives its
+            # universe_id / market / eval_period from these arguments — so they must
+            # be forwarded even though the data comes from the session. Omitting them
+            # made every batch-evaluated report claim the config default (a HK100
+            # batch filed itself as NASDAQ100/US over the default period).
+            _sess = self.sessions.get(session_id)
+            _meta = _sess.get_or_compute("_meta", dict) if _sess is not None else {}
+
             def _run(e):
                 return self.evaluate(
                     e, session_id=session_id, save=save,
-                    # universe/period/etc. come from the session; horizons/execution/
-                    # neutralize still flow through so per-call overrides work.
+                    universe=_meta.get("universe"),
+                    period=_meta.get("period"),
                     horizons=kw.get("horizons"),
                     execution=kw.get("execution"),
                     neutralize=kw.get("neutralize"),
@@ -905,7 +923,7 @@ class AssayService:
     _PRECOMPUTE_UNIVERSES = {
         "US": ["NASDAQ100", "SP500"],
         "CN": ["CSI300", "CSI500", "CSI1000"],
-        "HK": ["HSI"],
+        "HK": ["HK100", "HSHARE100"],
     }
 
     def _precompute_corpus(self) -> list[str]:

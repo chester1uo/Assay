@@ -426,7 +426,13 @@ def cmd_portfolio(args, config: AssayConfig | None) -> None:
         overrides["max_single_weight"] = args.max_weight
     if args.execution is not None:
         overrides["execution_price"] = args.execution
-    config_obj = PortfolioBacktestConfig.preset(args.market, **overrides)
+    # Default the trading-rule regime to whatever the universe implies. Leaving it
+    # pinned to US ran HK/A-share names under the US cost model — no stamp duty, no
+    # price limits — and silently overstated the net return.
+    from assay.api.routes.portfolio import _market_for_universe
+
+    market = args.market or _market_for_universe(args.universe)
+    config_obj = PortfolioBacktestConfig.preset(market, **overrides)
 
     report = assay.backtest_portfolio(
         args.expr,
@@ -594,12 +600,22 @@ def cmd_serve_mcp(args, config: AssayConfig | None) -> None:
 
 
 def cmd_verify(args, config: AssayConfig) -> None:
-    from assay.data.store import DataStore
+    import assay
 
-    store = DataStore(config)
+    # Route to the store that actually holds this universe's market, or a CN/HK
+    # index reads the US partition and comes back empty.
+    store = assay._service().store_for_universe(args.index)
     as_of = args.as_of or args.end
     universe = store.get_universe(args.index, args.end, as_of)
     if not universe:
+        # The live NASDAQ-100 list is a fallback for NASDAQ100 only. Applying it to
+        # any other index label printed US tickers under, say, an HSI heading —
+        # wrong data wearing the right name, with a zero exit code.
+        if str(args.index).upper() != "NASDAQ100":
+            raise SystemExit(
+                f"universe {args.index!r} has no snapshot in {store.config.data_dir} "
+                f"(market {store.config.market}) as-of {as_of}; ingest it first"
+            )
         universe = sorted(nasdaq100.members_on(args.end))
         print(f"(universe_snapshots empty; using live nasdaq100.members_on({args.end}))")
     print(f"universe[{args.index}] as-of {as_of}: {len(universe)} symbols")
@@ -724,8 +740,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--start", type=_date, required=True, help="period start YYYY-MM-DD")
     sp.add_argument("--end", type=_date, required=True, help="period end YYYY-MM-DD")
     sp.add_argument("--as-of", type=_date, default=None, help="point-in-time as-of date")
-    sp.add_argument("--market", default="US", choices=["US", "A", "HK"],
-                    help="market preset (cost/limit model; default US)")
+    sp.add_argument("--market", default=None, choices=["US", "A", "HK"],
+                    help="market preset (cost/limit model; default: inferred from --universe)")
     sp.add_argument("--rebalance", default="monthly",
                     choices=["daily", "weekly", "monthly", "quarterly", "threshold", "signal"],
                     help="rebalance schedule (default monthly)")

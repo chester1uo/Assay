@@ -57,12 +57,12 @@ Flags: `--skip-universe`, `--skip-corp-actions`, `--skip-prices`.
 
 The WebUI **Data** tab (and the `/v1/admin/*` API) drives the whole data layer without the CLI:
 
-- **Keys & Dirs** — configure the MASSIVE S3 credentials (US), the Tushare token (CN), and the
+- **Keys & Dirs** — configure the MASSIVE S3 credentials (US), the Tushare token + API endpoint (CN/HK), and the
   data dirs; **Test connection** lists the datasets your S3 key can read / validates the token.
   Secrets are stored masked in a git-ignored `.assay.config.json`.
 - **Data Setup** — run jobs per market with `mode`:
   - `init` — full history (download + ingest);
-  - `update` — incremental download + ingest (CN fetches **by trade-date**, all symbols per
+  - `update` — incremental download + ingest (CN and HK fetch **by trade-date**, all symbols per
     call, so a daily refresh is a handful of API calls, then appends to the raw files);
   - `ingest` — **RAW→ASSAY only**, no download (when the raw mirror is already populated).
   - An **auto-update schedule** (per market, a daily time) queues `update` jobs automatically.

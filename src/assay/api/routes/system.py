@@ -30,8 +30,21 @@ router = APIRouter()
 # Universes the engine knows about (architecture §4.4 / §6.3 enum). Russell2000 has
 # no ingested snapshot in any shipped store; it reports 0 symbols and is flagged
 # ``wired: false`` rather than pretending to be an available universe.
-_KNOWN_UNIVERSES = ("NASDAQ100", "SP500", "Russell2000", "CSI300", "CSI500", "CSI1000")
+_KNOWN_UNIVERSES = (
+    "NASDAQ100", "SP500", "Russell2000",
+    "CSI300", "CSI500", "CSI1000",
+    "HK100", "HSHARE100", "HSI", "HSTECH",
+)
 _UNWIRED = {"Russell2000"}
+
+# Universes whose membership is a vendored *current* snapshot rather than dated
+# history, so any backtest over them holds today's winners for all of the past.
+# Surfaced on /v1/system/universes so a caller cannot pick one unaware — the
+# warning previously lived only in a source comment.
+_SURVIVORSHIP_BIASED = {
+    "HSI": "membership is a current snapshot, not history — survivorship-biased; prefer HK100",
+    "HSTECH": "membership is a current snapshot, not history — survivorship-biased; prefer HK100",
+}
 
 
 def _market_dirs(svc) -> dict[str, Path]:
@@ -232,6 +245,8 @@ def list_universes(api_key: str | None = Depends(get_api_key)) -> list[dict]:
         row: dict[str, Any] = {"id": uid, "market": market, "n_symbols": 0,
                                "as_of": as_of, "last_rebalance": None,
                                "wired": uid not in _UNWIRED}
+        if uid in _SURVIVORSHIP_BIASED:
+            row["caveat"] = _SURVIVORSHIP_BIASED[uid]
         try:
             row["n_symbols"] = len(svc.store_for_universe(uid).get_universe(uid, as_of, as_of))
         except Exception as exc:  # noqa: BLE001

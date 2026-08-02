@@ -20,10 +20,11 @@ const DEFAULT_EXPR = "Sub($open, $close)";
 // universe -> market (mirrors AssayService._UNIVERSE_MARKET). Drives A-share rule
 // forcing, fee presets and the long-only constraint.
 const A_UNIVERSES = new Set(["CSI300", "CSI500", "CSI1000", "CSI800"]);
+const HK_UNIVERSES = new Set(["HK100", "HSHARE100", "HSI", "HSTECH"]);
 function marketForUniverse(u) {
   const x = String(u || "").toUpperCase();
   if (A_UNIVERSES.has(x)) return "A";
-  if (x === "HSI") return "HK";
+  if (HK_UNIVERSES.has(x)) return "HK";
   return "US";
 }
 
@@ -32,7 +33,7 @@ function marketForUniverse(u) {
 const FEE_PRESETS = {
   A:  { commission_rate: 0.0003, stamp_duty_rate: 0.0005, transfer_fee_rate: 0.00002, commission_min: 5, slippage_k: 0.20 },
   US: { commission_rate: 0.0005, stamp_duty_rate: 0.0,    transfer_fee_rate: 0.00001, commission_min: 0, slippage_k: 0.10 },
-  HK: { commission_rate: 0.0004, stamp_duty_rate: 0.0013, transfer_fee_rate: 0.00003, commission_min: 0, slippage_k: 0.15 },
+  HK: { commission_rate: 0.0004, stamp_duty_rate: 0.001,  transfer_fee_rate: 0.000085, commission_min: 0, slippage_k: 0.15 },
 };
 
 const REBALANCE_TYPES = ["daily", "weekly", "monthly", "quarterly"];

@@ -25,8 +25,8 @@ from typing import Any
 
 from assay import config_store
 
-_MARKETS = ("US", "CN")
-_INIT_START = {"US": dt.date(2016, 1, 1), "CN": dt.date(2015, 1, 1)}
+_MARKETS = ("US", "CN", "HK")
+_INIT_START = {"US": dt.date(2016, 1, 1), "CN": dt.date(2015, 1, 1), "HK": dt.date(2015, 1, 1)}
 
 
 # --------------------------------------------------------------------------- status
@@ -90,6 +90,31 @@ def _cn_raw_latest(raw_tushare: str) -> dt.date | None:
     return None
 
 
+def _hk_raw_latest(raw_tushare: str) -> dt.date | None:
+    """Latest date in the HK mirror, read from its per-date filenames.
+
+    The Tushare manifest's ``date_range`` is shared by every market that ran, so
+    it cannot answer this for HK specifically; the per-date shards can.
+    """
+    root = Path(raw_tushare) / "hk" / "daily"
+    if not root.exists():
+        return None
+    latest: dt.date | None = None
+    for p in root.glob("*/*.parquet"):
+        d = _parse_loose_date(p.stem)
+        if d and (latest is None or d > latest):
+            latest = d
+    return latest
+
+
+def _raw_latest(market: str, raw_dir: str) -> dt.date | None:
+    if market == "US":
+        return _us_raw_latest(raw_dir)
+    if market == "HK":
+        return _hk_raw_latest(raw_dir)
+    return _cn_raw_latest(raw_dir)
+
+
 def status() -> dict[str, Any]:
     """Per-market RAW-vs-ASSAY sync snapshot for the data manager."""
     today = dt.date.today()
@@ -97,7 +122,7 @@ def status() -> dict[str, Any]:
     for mk in _MARKETS:
         raw_dir = config_store.raw_dir(mk)
         assay_d = config_store.assay_dir(mk)
-        raw_latest = _us_raw_latest(raw_dir) if mk == "US" else _cn_raw_latest(raw_dir)
+        raw_latest = _raw_latest(mk, raw_dir)
         assay_latest, days = _assay_latest(assay_d, mk)
         behind = None
         if raw_latest and assay_latest:
@@ -143,6 +168,7 @@ def usage() -> dict[str, Any]:
     _RAW_SUBDIRS = {
         "US": ("us_stocks_sip/day_aggs_v1", "corporate_actions"),
         "CN": ("cn", "meta"),
+        "HK": ("hk", "meta"),
     }
     out = []
     for mk in _MARKETS:
@@ -184,7 +210,7 @@ def default_range(market: str, mode: str) -> tuple[dt.date, dt.date]:
     start = (assay_latest + dt.timedelta(days=1)) if assay_latest else _INIT_START.get(market, dt.date(2015, 1, 1))
     if mode == "ingest":
         raw_dir = config_store.raw_dir(market)
-        raw_latest = _us_raw_latest(raw_dir) if market == "US" else _cn_raw_latest(raw_dir)
+        raw_latest = _raw_latest(market, raw_dir)
         if raw_latest:
             end = raw_latest
     if start > end:
@@ -202,6 +228,8 @@ def run(market: str, mode: str, start: dt.date, end: dt.date, job) -> dict[str, 
         return _run_cn(mode, start, end, job, ingest_only=ingest_only)
     if market == "US":
         return _run_us(start, end, job, ingest_only=ingest_only)
+    if market == "HK":
+        return _run_hk(start, end, job, ingest_only=ingest_only)
     raise ValueError(f"unsupported market {market!r}")
 
 
@@ -246,17 +274,27 @@ def _run_cn(mode: str, start: dt.date, end: dt.date, job, ingest_only: bool = Fa
         token = config_store.tushare_token()
         if not token:
             raise RuntimeError("Tushare token not configured (set it in the data manager)")
-        from assay.data.tushare.download import TushareDownloadConfig, run_download
+        from assay.data.tushare.download import (
+            CN_SYMBOL_STEPS,
+            TushareDownloadConfig,
+            run_download,
+        )
 
         incremental = mode == "update"
         job.progress_to(0.03, "downloading Tushare raw data " + ("(incremental, by trade-date) …" if incremental else "…"))
         dlcfg = TushareDownloadConfig(
-            token=token, data_dir=Path(raw),
+            token=token, api_url=config_store.tushare_api_url(), data_dir=Path(raw),
             start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d"),
             incremental=incremental,
         )
         # Download owns 0.03..0.50 of the bar; stream its fine-grained progress there.
-        manifest = run_download(dlcfg, progress=lambda f, m: job.progress_to(0.03 + 0.47 * f, m))
+        # Scoped to the CN steps: the mirror is shared with HK, and a CN update must
+        # not silently kick off HK's multi-hour whole-market backfill.
+        manifest = run_download(
+            dlcfg,
+            steps={"meta", "cn_universe", *CN_SYMBOL_STEPS},
+            progress=lambda f, m: job.progress_to(0.03 + 0.47 * f, m),
+        )
         steps = sorted((manifest.get("results") or {}).keys())
         job.log(f"download steps: {steps}")
 
@@ -265,4 +303,42 @@ def _run_cn(mode: str, start: dt.date, end: dt.date, job, ingest_only: bool = Fa
 
     rep = prepare_cn(assay, start=start, end=end, tushare_data_dir=raw)
     job.progress_to(1.0, "CN " + ("ingest" if ingest_only else "update") + " complete")
+    return {"download_steps": steps, "ingest": rep}
+
+
+def _run_hk(start: dt.date, end: dt.date, job, ingest_only: bool = False) -> dict[str, Any]:
+    raw = config_store.raw_dir("HK")
+    assay = config_store.assay_dir("HK")
+
+    steps: list[str] = []
+    if ingest_only:
+        job.progress_to(0.05, "ingest-only: using existing Tushare RAW (no download) …")
+    else:
+        token = config_store.tushare_token()
+        if not token:
+            raise RuntimeError("Tushare token not configured (set it in the data manager)")
+        from assay.data.tushare.download import HK_BYDATE_STEPS, TushareDownloadConfig, run_download
+
+        job.progress_to(0.03, "downloading Tushare HK raw data (by trade-date) …")
+        dlcfg = TushareDownloadConfig(
+            token=token, api_url=config_store.tushare_api_url(), data_dir=Path(raw),
+            start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d"),
+        )
+        manifest = run_download(
+            dlcfg,
+            steps={"meta", "hk_index", *HK_BYDATE_STEPS},
+            progress=lambda f, m: job.progress_to(0.03 + 0.47 * f, m),
+        )
+        steps = sorted((manifest.get("results") or {}).keys())
+        job.log(f"download steps: {steps}")
+
+    job.progress_to(0.55, "ingesting HK → ASSAY (HK100 universe, prices, adj) …")
+    from assay.data.tushare.ingest import prepare_hk
+
+    # Prices append over the run's window, but the HK100 ranking needs its full
+    # trailing history to reproduce earlier snapshots.
+    rep = prepare_hk(
+        assay, start=start, end=end, universe_start=_INIT_START["HK"], tushare_data_dir=raw
+    )
+    job.progress_to(1.0, "HK " + ("ingest" if ingest_only else "update") + " complete")
     return {"download_steps": steps, "ingest": rep}

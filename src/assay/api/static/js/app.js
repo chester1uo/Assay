@@ -108,6 +108,10 @@ const KNOWN_UNIVERSES = [
   { id: "CSI300", label: "CSI300 (A股)", enabled: false },
   { id: "CSI500", label: "CSI500 (A股)", enabled: false },
   { id: "CSI1000", label: "CSI1000 (A股)", enabled: false },
+  { id: "HK100", label: "HK100 (港股)", enabled: false },
+  { id: "HSHARE100", label: "HSHARE100 (H股)", enabled: false },
+  { id: "HSI", label: "HSI (港股)", enabled: false },
+  { id: "HSTECH", label: "HSTECH (港股)", enabled: false },
 ];
 
 function populateUniverseSelect(universes) {

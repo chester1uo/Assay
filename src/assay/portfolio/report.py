@@ -239,6 +239,11 @@ class PortfolioReport:
     position_log: list[PositionSnapshot] = field(default_factory=list)  # if save_position_log
     attribution: dict[str, Any] | None = None  # present if compute_attribution
     a_share_metrics: dict[str, Any] | None = None  # present if market == 'A'
+    # Constraints that were requested but could not bind, because the data they
+    # need is absent for this market (e.g. sector-neutrality on HK, which has no
+    # security_groups). Reported rather than silently ignored, so a run never
+    # implies a control it did not actually apply.
+    warnings: list[str] = field(default_factory=list)
 
     # --- provenance -------------------------------------------------------
     lineage: PortfolioLineage = field(default_factory=PortfolioLineage)
@@ -286,6 +291,7 @@ class PortfolioReport:
             "position_log": [p.to_dict() for p in self.position_log],
             "attribution": _jsonify(self.attribution),
             "a_share_metrics": _jsonify(self.a_share_metrics),
+            "warnings": list(self.warnings),
             "lineage": self.lineage.to_dict(),
         }
 
@@ -331,6 +337,7 @@ class PortfolioReport:
             ],
             attribution=d.get("attribution"),
             a_share_metrics=d.get("a_share_metrics"),
+            warnings=list(d.get("warnings") or []),
             lineage=PortfolioLineage.from_dict(d.get("lineage")),
         )
 

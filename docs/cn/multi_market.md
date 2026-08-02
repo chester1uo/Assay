@@ -1,4 +1,4 @@
-# 多市场支持(中国 A 股)
+# 多市场支持(中国 A 股 + 香港)
 
 Assay 的数据层与组合回测器与市场无关:价格、
 公司行为和指数成分存放在按 `market=...` 分区的标准存储中,
@@ -93,6 +93,61 @@ print(report.total_return, report.sharpe, report.a_share_metrics)
   `n_forced_holds`(T+1)、`n_blocked_suspended` 及对应比率。
 
 CN 可用股票池:`CSI300`、`CSI500`、`CSI1000`(点对点、
-无幸存者偏差)。香港指数序列会被下载,但受该 token 的
-限制,HK 没有个股价格历史或成分 API — 见
-[tushare.md](tushare.md)。
+无幸存者偏差)。
+
+## 4. 香港
+
+HK 沿用同一套标准存储,置于 `market=HK` 下,由
+`assay.data.tushare.ingest.prepare_hk`(CLI:`scripts/prepare_hk.py`)写入。
+它需要有相应权限的 Tushare 接口 — 见 [tushare.md](tushare.md)。
+
+| 存储 | 来源 | 说明 |
+|-------|--------|-------|
+| `price_raw` | `hk/daily` | 未复权 OHLCV(`volume` 单位为**股**,而非手) |
+| `adj_events` | `hk/adj_factor` | 由 `cum_adjfactor` 的跳变重建,并与 `pre_close` 相互印证 |
+| `universe_snapshots` | `hk/daily` 成交额 + `hk_basic` ISIN | **HK100** 与 **HSHARE100** 点对点成分 |
+| `trade_status` | — | 不写入:港交所没有每日涨跌停区间 |
+| `security_groups` | — | 不写入:Tushare 未提供 HK 行业分类 |
+
+```bash
+# writes market=HK partitions under $ASSAY_DATA_DIR_HK (default ./data_hk)
+python scripts/prepare_hk.py 2015-01-01 2026-07-27
+```
+
+**HK100** 是覆盖整个港股大盘的股票池。它在每个月末按过去三个月的成交额,
+对所有真正有成交的标的排序,取前 100 名,并在*下*一个月的第一个交易日生效 —
+因此一份快照永远看不到用来给它打分的收益。
+
+**HSHARE100** 把完全相同的排名规则只施加于 **H 股** — 即在港交所上市、
+注册地却在中国内地的发行人,区别于构成大盘其余部分的红筹股
+(注册于开曼/百慕大的控股公司)与本地香港发行人。成分由 ISIN 的国家前缀
+(`CNE`)判定,那是发行人注册地的属性,因此永远不会改变;由于上市列表在
+下载时就已包含退市标的,这个池子不存在幸存者偏差。两个股票池大约有一半
+重叠 — 即那些同时也位列大盘成交最活跃标的之中的 H 股。
+
+当命题关乎内地企业(A/H 两地上市、内地政策敞口、港股通资金流)时,
+请用 `HSHARE100`;当命题关乎整个香港市场时,请用 `HK100`。`HSI` 与
+`HSTECH` 也已注册,但它们是供应商提供的**当前**快照,因而存在幸存者偏差。
+
+`HK` 预设在每一个要紧之处都与 `A` 不同:
+
+- **没有涨跌停,没有 T+1。** 港交所两者皆无,因此 `price_limit_pct=None`
+  且 `t_plus_1=False`;涨跌停与结算这两道闸门根本不会启用。
+- **允许做空。** 与 `A` 不同,`long_short=True` 是被接受的。
+- **印花税双边收取。** 港交所对买入与卖出同样按 0.10% 征收,因此
+  `TransactionCostModel` 在 `market == "HK"` 时对称收取 — A 股的 印花税 仍
+  只在卖出侧收取。每一边预设合计 0.1484%:经纪佣金 0.04% + 印花税 0.10% +
+  港交所交易费 0.00565% + 证监会征费 0.0027% + 财汇局征费 0.00015%。
+- **总回报基准**,与 `A` 相同,并且现在确实由已导入的 `adj_events` 支撑。
+
+```python
+store = DataStore(AssayConfig(market="HK", data_dir=Path(os.environ["ASSAY_DATA_DIR_HK"])))
+cfg = PortfolioBacktestConfig.preset(
+    "HK", universe="HK100",       # or "HSHARE100" for H-shares only
+    period_start="2022-01-01", period_end="2023-12-31",
+)
+```
+
+HK 特有的两点注意:**无法做行业中性化**(没有分组标签),以及 NAV 以
+**HKD** 计价且没有汇率账本,因此一次 HK 运行无法与美股或 CN 的运行直接
+比较。

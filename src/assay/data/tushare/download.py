@@ -13,19 +13,29 @@ Lands *raw* provider data under a local mirror (default ``/data/tushare_data``):
       cn/adj_factor/{ts_code}.parquet    split/merge adjustment factor
       cn/daily_basic/{ts_code}.parquet   valuation: PE/PB/turnover/total_mv/...
       cn/dividend/{ts_code}.parquet      cash + stock dividends / splits
+      meta/hk_trade_cal.parquet          HKEX trading calendar
       hk/index_global/{HSI,HSTECH}.parquet   index value series
       hk/constituents.parquet            current-snapshot HSI/HSTECH membership
-      hk/daily/{ts_code}.parquet         raw HK OHLCV (unadjusted; no adj factor)
+      hk/daily/{YYYY}/{YYYYMMDD}.parquet      raw HK OHLCV, whole market per date
+      hk/adj_factor/{YYYY}/{YYYYMMDD}.parquet cumulative adjustment factor
+      hk/daily_adj/{YYYY}/{YYYYMMDD}.parquet  market cap / shares / turnover
 
-Resume is by file existence: a per-symbol/per-index parquet that already exists
-is skipped unless ``force=True``. So an interrupted run is restarted simply by
-re-running the same command.
+CN is mirrored **per symbol** (its universe is known up front from index
+membership); HK is mirrored **per trade date**, because Tushare exposes no HK
+membership API — the tradable universe has to be discovered from whole-market
+daily responses, which also makes the HK price mirror survivorship-free.
 
-Known limitations (token / Tushare scope):
-  * HK prices are **unadjusted** — ``hk_adjfactor``/``hk_daily_adj`` are not
-    permissioned on this token.
+Resume is by file existence: a per-symbol / per-date / per-index parquet that
+already exists is skipped unless ``force=True``. So an interrupted run is
+restarted simply by re-running the same command.
+
+Known limitations (Tushare scope):
   * HK index membership is a **current snapshot only** (Tushare has no HK
-    membership API) — see :mod:`assay.data.tushare.constituents`.
+    membership API) — see :mod:`assay.data.tushare.constituents`. Prefer the
+    liquidity-ranked universe built by the ingest layer, which is point-in-time.
+  * The HK price endpoints are not permissioned on a plain Tushare token; they
+    require an entitled endpoint (see ``$TUSHARE_API_URL`` in
+    :mod:`assay.data.tushare.client`).
 """
 
 from __future__ import annotations
@@ -41,13 +51,13 @@ from pathlib import Path
 import polars as pl
 
 from ..io_utils import write_parquet_atomic
-from .client import TushareClient, TusharePermissionError, TushareQuotaError
-from .constituents import (
-    CN_INDEX_CODES,
-    HK_INDEX_CODES,
-    hk_constituents,
-    hk_universe,
+from .client import (
+    TushareClient,
+    TusharePermissionError,
+    TushareQuotaError,
+    default_base_url,
 )
+from .constituents import CN_INDEX_CODES, HK_INDEX_CODES, hk_constituents
 
 log = logging.getLogger("assay.tushare.download")
 
@@ -66,8 +76,11 @@ ALL_STEPS = (
     "cn_limit",
     "hk_index",
     "hk_prices",
+    "hk_adj",
+    "hk_valuation",
 )
 CN_SYMBOL_STEPS = ("cn_prices", "cn_adj", "cn_basic", "cn_dividend", "cn_limit")
+HK_BYDATE_STEPS = ("hk_prices", "hk_adj", "hk_valuation")
 
 
 def today_yyyymmdd() -> str:
@@ -79,6 +92,7 @@ class TushareDownloadConfig:
     """Where to write, what date range, and how hard to push the API."""
 
     token: str
+    api_url: str = ""
     data_dir: Path = Path(DEFAULT_DATA_DIR)
     start_date: str = DEFAULT_START
     end_date: str = field(default_factory=today_yyyymmdd)
@@ -99,6 +113,7 @@ class TushareDownloadConfig:
     @classmethod
     def from_env(cls, **overrides) -> "TushareDownloadConfig":
         token = overrides.pop("token", None) or os.environ.get("TUSHARE_TOKEN", "")
+        api_url = overrides.pop("api_url", None) or default_base_url()
         data_dir = overrides.pop("data_dir", None) or os.environ.get(
             "TUSHARE_DATA_DIR", DEFAULT_DATA_DIR
         )
@@ -108,7 +123,14 @@ class TushareDownloadConfig:
         end = overrides.pop("end_date", None) or os.environ.get(
             "TUSHARE_END", today_yyyymmdd()
         )
-        return cls(token=token, data_dir=Path(data_dir), start_date=start, end_date=end, **overrides)
+        return cls(
+            token=token,
+            api_url=api_url,
+            data_dir=Path(data_dir),
+            start_date=start,
+            end_date=end,
+            **overrides,
+        )
 
     # -- path helpers ------------------------------------------------------
 
@@ -153,6 +175,19 @@ def _exists_nonempty(path: Path) -> bool:
     return path.is_file() and path.stat().st_size > 0
 
 
+def _concat_nonempty(frames: list[pl.DataFrame]) -> pl.DataFrame | None:
+    """Concatenate the non-empty frames, or ``None`` if there are none.
+
+    ``pl.concat([])`` raises, and a step that raises something other than a
+    permission/quota error escapes ``guard`` and takes the whole run down with
+    it — including a CN job that merely shares the ``meta`` step.
+    """
+    frames = [f for f in frames if f is not None and f.height]
+    if not frames:
+        return None
+    return pl.concat(frames, how="vertical_relaxed")
+
+
 # ---------------------------------------------------------------------------
 # meta
 # ---------------------------------------------------------------------------
@@ -172,17 +207,11 @@ def run_meta(client: TushareClient, cfg: TushareDownloadConfig) -> dict:
             client.call("stock_basic", {"list_status": s}, fields)
             for s in ("L", "D", "P")
         ]
-        df = pl.concat([f for f in frames if f.height], how="vertical_relaxed")
-        write_parquet_atomic(df, sb_path)
-        out["stock_basic"] = df.height
-        log.info("meta stock_basic: %d rows", df.height)
-
-    hk_path = cfg.p("meta", "hk_basic.parquet")
-    if cfg.force or not _exists_nonempty(hk_path):
-        df = client.call("hk_basic", {})
-        write_parquet_atomic(df, hk_path)
-        out["hk_basic"] = df.height
-        log.info("meta hk_basic: %d rows", df.height)
+        df = _concat_nonempty(frames)
+        if df is not None:
+            write_parquet_atomic(df, sb_path)
+            out["stock_basic"] = df.height
+            log.info("meta stock_basic: %d rows", df.height)
 
     cal_path = cfg.p("meta", "trade_cal.parquet")
     if cfg.force or not _exists_nonempty(cal_path):
@@ -192,10 +221,44 @@ def run_meta(client: TushareClient, cfg: TushareDownloadConfig) -> dict:
             client.call("trade_cal", {"exchange": "SSE", "start_date": lo, "end_date": hi})
             for lo, hi in _year_ranges(cfg.start_date, cfg.end_date)
         ]
-        df = pl.concat([f for f in frames if f.height], how="vertical_relaxed")
-        write_parquet_atomic(df, cal_path)
-        out["trade_cal"] = df.height
-        log.info("meta trade_cal: %d rows", df.height)
+        df = _concat_nonempty(frames)
+        if df is not None:
+            write_parquet_atomic(df, cal_path)
+            out["trade_cal"] = df.height
+            log.info("meta trade_cal: %d rows", df.height)
+
+    # HK last: this step is shared with CN runs, and an endpoint entitled for
+    # A-shares but not HK must not cost the caller its SSE calendar.
+    hk_path = cfg.p("meta", "hk_basic.parquet")
+    if cfg.force or not _exists_nonempty(hk_path):
+        # hk_basic defaults to list_status="L"; the delisted set must be asked for
+        # explicitly or the listings table silently becomes survivorship-biased.
+        try:
+            frames = [client.call("hk_basic", {"list_status": s}) for s in ("L", "D")]
+        except (TusharePermissionError, TushareQuotaError) as exc:
+            log.warning("meta hk_basic unavailable: %s", exc.msg)
+            frames = []
+        df = _concat_nonempty(frames)
+        if df is not None:
+            write_parquet_atomic(df, hk_path)
+            out["hk_basic"] = df.height
+            log.info("meta hk_basic: %d rows", df.height)
+
+    hk_cal_path = cfg.p("meta", "hk_trade_cal.parquet")
+    if cfg.force or not _exists_nonempty(hk_cal_path):
+        try:
+            frames = [
+                client.call("hk_tradecal", {"start_date": lo, "end_date": hi})
+                for lo, hi in _year_ranges(cfg.start_date, cfg.end_date)
+            ]
+        except (TusharePermissionError, TushareQuotaError) as exc:
+            log.warning("meta hk_trade_cal unavailable: %s", exc.msg)
+            frames = []
+        df = _concat_nonempty(frames)
+        if df is not None:
+            write_parquet_atomic(df, hk_cal_path)
+            out["hk_trade_cal"] = df.height
+            log.info("meta hk_trade_cal: %d rows", df.height)
 
     return out
 
@@ -520,19 +583,114 @@ def run_hk_index(client: TushareClient, cfg: TushareDownloadConfig) -> dict:
     return out
 
 
-def run_hk_symbols(client: TushareClient, cfg: TushareDownloadConfig) -> dict:
-    """Write the current-snapshot constituents table, then raw hk_daily per name."""
-    # constituents.parquet — vendored membership enriched with names from hk_basic.
+def run_hk_constituents(client: TushareClient, cfg: TushareDownloadConfig) -> dict:
+    """Write the vendored current-snapshot HSI/HSTECH membership table."""
     cons = pl.DataFrame(hk_constituents(), schema=["ts_code", "index"], orient="row")
     hk_basic_path = cfg.p("meta", "hk_basic.parquet")
     if _exists_nonempty(hk_basic_path):
         names = pl.read_parquet(hk_basic_path).select(["ts_code", "name"]).unique(subset=["ts_code"])
         cons = cons.join(names, on="ts_code", how="left")
     write_parquet_atomic(cons, cfg.p("hk", "constituents.parquet"))
+    return {"constituents": cons.height}
 
-    symbols = hk_universe()
-    date = {"start_date": cfg.start_date, "end_date": cfg.end_date}
-    return _run_symbol_pool(client, cfg, symbols, [("hk_daily", "daily", date)], "hk")
+
+# (step, subdir, api) for the HK endpoints pulled one whole-market call per date.
+#
+# Unlike the CN mirror (per-symbol files, symbol universe known up front) HK is
+# stored **per trade date**: there is no HK membership API to derive a symbol list
+# from, so the universe has to be discovered from the by-date responses themselves.
+# That also makes the mirror survivorship-free — a delisted name simply stops
+# appearing after its last trading day instead of never appearing at all.
+_HK_BYDATE = (
+    ("hk_prices", "daily", "hk_daily"),
+    ("hk_adj", "adj_factor", "hk_adjfactor"),
+    ("hk_valuation", "daily_adj", "hk_daily_adj"),
+)
+
+
+def _hk_open_dates(client: TushareClient, cfg: TushareDownloadConfig) -> list[str]:
+    """Open HKEX trading dates (YYYYMMDD, ascending) in ``[start, end]``."""
+    frames = [
+        client.call("hk_tradecal", {"start_date": lo, "end_date": hi}, "cal_date,is_open")
+        for lo, hi in _year_ranges(cfg.start_date, cfg.end_date)
+    ]
+    frames = [f for f in frames if f.height]
+    if not frames:
+        return []
+    df = pl.concat(frames, how="vertical_relaxed")
+    open_df = df.filter(pl.col("is_open").cast(pl.Utf8).is_in(["1", "1.0"]))
+    return sorted(open_df["cal_date"].cast(pl.Utf8).to_list())
+
+
+def hk_date_path(cfg: TushareDownloadConfig, subdir: str, date: str) -> Path:
+    """Year-sharded so no single directory holds ~4k files."""
+    return cfg.p("hk", subdir, date[:4], f"{date}.parquet")
+
+
+def run_hk_by_date(
+    client: TushareClient,
+    cfg: TushareDownloadConfig,
+    steps: set[str],
+    progress=None,
+) -> dict:
+    """Pull each HK endpoint one whole-market call per trading date.
+
+    Resume is per (endpoint, date) file, so an interrupted multi-hour backfill
+    restarts where it stopped. The same routine serves the incremental update:
+    already-present dates are skipped and only the new tail costs calls.
+    """
+    endpoints = [(subdir, api) for (step, subdir, api) in _HK_BYDATE if step in steps]
+    if not endpoints:
+        return {}
+    dates = _hk_open_dates(client, cfg)
+    counts: dict = {"dates": len(dates), "calls": 0, "rows": 0, "by_store": {}}
+    if not dates:
+        return counts
+
+    total = max(1, len(endpoints) * len(dates))
+    step_i = 0
+    for subdir, api in endpoints:
+        wrote = rows = skipped = pending = 0
+        for i, d in enumerate(dates):
+            step_i += 1
+            path = hk_date_path(cfg, subdir, d)
+            # The newest date is always re-fetched: an update run that lands before
+            # the exchange has published the full session would otherwise freeze a
+            # partial bar set behind resume-on-existence, and nothing would ever
+            # revisit it (unlike the CN path, which merges and self-heals).
+            is_tail = i == len(dates) - 1
+            if not cfg.force and not is_tail and _exists_nonempty(path):
+                skipped += 1
+                continue
+            try:
+                df = client.call_paged(api, {"trade_date": d})
+            except (TusharePermissionError, TushareQuotaError) as exc:
+                log.warning("hk by-date %s unavailable: %s", subdir, exc.msg)
+                counts["by_store"][subdir] = {"unavailable": exc.msg, "dates": wrote}
+                break
+            counts["calls"] += 1
+            # hk_daily_adj pads its response with rows carrying only an adj_factor
+            # and a null ts_code — real quotes are the ones with a symbol.
+            if "ts_code" in df.columns:
+                df = df.filter(pl.col("ts_code").is_not_null())
+            if df.height == 0:
+                # An open trading date with no quotes means "not published yet".
+                # Persisting that would cache the hole forever.
+                pending += 1
+                continue
+            write_parquet_atomic(df, path)
+            wrote += 1
+            rows += df.height
+            if progress:
+                progress(step_i / total, f"hk {subdir}: {i + 1}/{len(dates)} ({d})")
+        else:
+            counts["by_store"][subdir] = {
+                "dates": wrote, "skipped": skipped, "rows": rows, "pending": pending
+            }
+        counts["rows"] += rows
+        log.info("hk by-date %s: %d dates written, %d skipped, %d unpublished, %d rows",
+                 subdir, wrote, skipped, pending, rows)
+    return counts
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +710,7 @@ def run_download(cfg: TushareDownloadConfig, steps: set[str] | None = None, prog
     ``[0, 1]`` so a UI can show a moving bar + which step/date is downloading.
     """
     steps = set(steps) if steps else set(ALL_STEPS)
-    client = TushareClient(cfg.token, calls_per_min=cfg.calls_per_min)
+    client = TushareClient(cfg.token, base_url=cfg.api_url or None, calls_per_min=cfg.calls_per_min)
 
     def _say(frac: float, msg: str) -> None:
         if progress:
@@ -562,13 +720,14 @@ def run_download(cfg: TushareDownloadConfig, steps: set[str] | None = None, prog
         "started": started.isoformat(timespec="seconds"),
         "data_dir": str(cfg.data_dir),
         "date_range": [cfg.start_date, cfg.end_date],
+        "api_url": cfg.api_url or default_base_url(),
         "calls_per_min": cfg.calls_per_min,
         "max_workers": cfg.max_workers,
         "steps": sorted(steps),
         "results": {},
         "notes": [
-            "HK prices are UNADJUSTED (no hk_adjfactor permission on this token).",
             "HK index membership is a CURRENT snapshot only (no Tushare HK membership API); survivorship-biased.",
+            "HK prices are stored per trade date (whole market), so the price mirror itself is survivorship-free.",
         ],
     }
 
@@ -611,12 +770,16 @@ def run_download(cfg: TushareDownloadConfig, steps: set[str] | None = None, prog
         if res is not None:
             manifest["results"]["hk_index"] = res
 
-    if "hk_prices" in steps:
-        log.info("=== step: hk_prices ===")
-        _say(0.95, "hk prices …")
-        res = guard("hk_prices", lambda: run_hk_symbols(client, cfg))
+    if steps & set(HK_BYDATE_STEPS):
+        log.info("=== step: hk by-date (%s) ===", ",".join(sorted(steps & set(HK_BYDATE_STEPS))))
+        guard("hk_constituents", lambda: run_hk_constituents(client, cfg))
+        hk_prog = lambda f, m: _say(0.93 + 0.07 * f, m)  # noqa: E731 — hk step owns 93%..100%
+        # Guarded like every other step: _hk_open_dates calls hk_tradecal first, and
+        # an endpoint entitled for HK prices but not its calendar must abort cleanly
+        # into the manifest rather than kill the run before it is written.
+        res = guard("hk_bydate", lambda: run_hk_by_date(client, cfg, steps, progress=hk_prog))
         if res is not None:
-            manifest["results"]["hk_prices"] = res
+            manifest["results"]["hk_bydate"] = res
     _say(1.0, "download complete")
 
     finished = dt.datetime.now()

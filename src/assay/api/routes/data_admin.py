@@ -90,7 +90,7 @@ def get_schedule(api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
 
 @router.put("/v1/admin/schedule", include_in_schema=False)
 def put_schedule(patch: dict, api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
-    """Update the schedule. Body: ``{schedule: {us:{enabled,time}, cn:{...}}}`` (or flat)."""
+    """Update the schedule. Body: ``{schedule: {us:{enabled,time}, cn:{...}, hk:{...}}}`` (or flat)."""
     from assay.data import scheduler
 
     sched = (patch or {}).get("schedule", patch or {})
@@ -113,15 +113,15 @@ def _parse_date(s: str | None) -> dt.date | None:
 def start_job(body: dict, api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
     """Queue a data pipeline job. Body: ``{market, mode, start?, end?}``.
 
-    ``market`` ∈ US|CN; ``mode`` ∈ init|update|**ingest**. ``ingest`` skips the download
+    ``market`` ∈ US|CN|HK; ``mode`` ∈ init|update|**ingest**. ``ingest`` skips the download
     and only re-runs RAW→ASSAY (for when raw is already present). When ``start``/``end``
     are omitted they default to the full history (init), the incremental range since the
     last ingest (update), or last-ASSAY→latest-RAW (ingest). Returns the queued job.
     """
     market = str(body.get("market", "")).upper()
     mode = str(body.get("mode", "update")).lower()
-    if market not in ("US", "CN"):
-        raise HTTPException(status_code=422, detail="market must be US or CN")
+    if market not in ("US", "CN", "HK"):
+        raise HTTPException(status_code=422, detail="market must be US, CN or HK")
     if mode not in ("init", "update", "ingest"):
         raise HTTPException(status_code=422, detail="mode must be init, update or ingest")
 
@@ -162,7 +162,7 @@ def start_job(body: dict, api_key: str | None = Depends(get_api_key)) -> dict[st
 
 # Auto-refresh scope after an *update* run: just the primary universe per market
 # (fast, keeps the job snappy). An ``init`` run refreshes every universe (None).
-_AUTO_REFRESH_UNIVERSES = {"US": ["NASDAQ100"], "CN": ["CSI300"]}
+_AUTO_REFRESH_UNIVERSES = {"US": ["NASDAQ100"], "CN": ["CSI300"], "HK": ["HK100"]}
 
 
 # ------------------------------------------------------------------ hot cache
@@ -189,7 +189,7 @@ def cache_entries(scope: str, api_key: str | None = Depends(get_api_key)) -> dic
 
 @router.post("/v1/admin/cache/rebuild", include_in_schema=False)
 def cache_rebuild(body: dict | None = None, api_key: str | None = Depends(get_api_key)) -> dict[str, Any]:
-    """Queue a hot-cache rebuild job. Body: ``{market}`` (US|CN; default US).
+    """Queue a hot-cache rebuild job. Body: ``{market}`` (US|CN|HK; default US).
 
     Mines the factor library's common sub-expressions and precomputes them for the
     market's universes over the current data range (all universes — the thorough

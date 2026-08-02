@@ -229,8 +229,10 @@ def assay_lint(expr: str) -> dict[str, Any]:
     description=(
         "List the stock universes (pools) available for evaluation and backtesting, "
         "each with its market and current symbol count. Call this FIRST to discover "
-        "what data is live before choosing a universe — US (NASDAQ100, SP500…) and "
-        "A-share (CSI300, CSI500, CSI1000) can be served side by side. A universe "
+        "what data is live before choosing a universe — US (NASDAQ100, SP500…), "
+        "A-share (CSI300, CSI500, CSI1000) and Hong Kong (HK100, HSHARE100 = H-shares) "
+        "can be served side "
+        "by side. A universe "
         "with n_symbols=0 has no ingested data; don't evaluate against it."
     ),
 )
@@ -238,7 +240,8 @@ def assay_universes() -> dict[str, Any]:
     """Available universes as ``{universes:[{id, market, n_symbols}], default}``."""
     svc = get_service()
     _start, end = svc.config.default_period
-    known = ["NASDAQ100", "SP500", "RUSSELL2000", "CSI300", "CSI500", "CSI1000"]
+    known = ["NASDAQ100", "SP500", "RUSSELL2000", "CSI300", "CSI500", "CSI1000",
+             "HK100", "HSHARE100", "HSI", "HSTECH"]
     out: list[dict[str, Any]] = []
     for uid in known:
         n = 0

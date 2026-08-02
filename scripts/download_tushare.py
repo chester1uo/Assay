@@ -42,7 +42,7 @@ from assay.data.tushare.download import (  # noqa: E402
 )
 
 _CN_STEPS = ("cn_universe", "cn_prices", "cn_adj", "cn_basic", "cn_dividend", "cn_limit")
-_HK_STEPS = ("hk_index", "hk_prices")
+_HK_STEPS = ("hk_index", "hk_prices", "hk_adj", "hk_valuation")
 
 
 def _resolve_steps(args) -> set[str]:
@@ -64,6 +64,7 @@ def _resolve_steps(args) -> set[str]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--token", default=None, help="Tushare token (default: $TUSHARE_TOKEN)")
+    ap.add_argument("--api-url", default=None, help="endpoint override (default: $TUSHARE_API_URL, else api.tushare.pro)")
     ap.add_argument("--data-dir", default=None, help=f"output root (default: $TUSHARE_DATA_DIR or {DEFAULT_DATA_DIR})")
     ap.add_argument("--start", dest="start_date", default=None, help=f"YYYYMMDD (default: {DEFAULT_START})")
     ap.add_argument("--end", dest="end_date", default=None, help="YYYYMMDD (default: today)")
@@ -83,6 +84,7 @@ def main() -> int:
 
     cfg = TushareDownloadConfig.from_env(
         token=args.token,
+        api_url=args.api_url,
         data_dir=args.data_dir,
         start_date=args.start_date,
         end_date=args.end_date,

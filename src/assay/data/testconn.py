@@ -52,7 +52,9 @@ def test_tushare(token: str | None = None) -> dict[str, Any]:
     try:
         from assay.data.tushare.client import TushareClient
 
-        df = TushareClient(token, max_retries=1, timeout=15).call(
+        df = TushareClient(
+            token, base_url=config_store.tushare_api_url() or None, max_retries=1, timeout=15
+        ).call(
             "trade_cal",
             {"exchange": "SSE", "start_date": "20250101", "end_date": "20250110"},
             "cal_date,is_open",

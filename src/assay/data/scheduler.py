@@ -19,7 +19,7 @@ from typing import Any, Optional
 from assay import config_store
 from assay.data import jobs, orchestrate
 
-_MARKETS = ("US", "CN")
+_MARKETS = ("US", "CN", "HK")
 _LOCK = threading.Lock()
 _THREAD: Optional[threading.Thread] = None
 _STOP = threading.Event()
