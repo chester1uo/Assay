@@ -1,3 +1,4 @@
+import { P } from "../palette.js";
 // pages/combination.js — Factor Combination (design-doc §6.3).
 //
 // Blends several factors (selected from the library / Alpha catalogs or typed
@@ -60,14 +61,14 @@ function injectStyle() {
 .cb-table thead th { font-weight: 600; color: var(--text-muted); }
 .cb-table tbody tr:hover { background: var(--gray-1); }
 .cb-mono { font-family: var(--font-mono); }
-.cb-err { border: 1px solid #E8B5AE; background: #FCF4F3; border-radius: var(--radius-card); padding: var(--sp-3); }
+.cb-err { border: 1px solid var(--danger-border); background: var(--danger-bg); border-radius: var(--radius-card); padding: var(--sp-3); }
 .cb-err-title { font-weight: 600; color: var(--red); }
 .cb-json { font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; word-break: break-word;
   max-height: 360px; overflow: auto; background: var(--gray-1); padding: var(--sp-2); border-radius: var(--radius-badge); margin: var(--sp-2) 0 0; }
 .cb-latency { font-family: var(--font-mono); font-size: 12px; }
 .cb-pos { color: var(--green, #1E7B4B); } .cb-neg { color: var(--red, #C0392B); }
 .cb-chosen { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
-  font-size: 13px; background: var(--blue, #2D5BE3); color: #fff; padding: 3px 10px; border-radius: var(--radius-badge); }
+  font-size: 13px; background: var(--blue, #2D5BE3); color: var(--on-accent); padding: 3px 10px; border-radius: var(--radius-badge); }
 .cb-saved-list { display: flex; flex-direction: column; gap: var(--sp-2); }
 .cb-saved-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
   border: 1px solid var(--border); border-radius: var(--radius-badge); padding: var(--sp-2) var(--sp-3); }
@@ -383,7 +384,7 @@ export function render(root, ctx) {
     const ic = out.per_factor_train_ic || {};
     // signed weight bar chart
     const values = names.map((n) => Number(w[n]));
-    const colors = values.map((v) => (v >= 0 ? "#2D5BE3" : "#C0392B"));
+    const colors = values.map((v) => (v >= 0 ? P.primary : P.down));
     const labels = names.map((n) => (n.length > 14 ? n.slice(0, 13) + "…" : n));
     const chart = ctx.charts && ctx.charts.barChart
       ? ctx.charts.barChart({ labels, values, colors, dates: names, height: 220, width: 560,

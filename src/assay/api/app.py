@@ -16,6 +16,8 @@ House style: ``from __future__ import annotations``, type hints, concise docstri
 
 from __future__ import annotations
 
+import os
+
 import logging
 from pathlib import Path
 from typing import Any
@@ -210,10 +212,13 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="Assay API", version=assay.__version__)
 
+    # ASSAY_CORS_ORIGINS: comma-separated origins allowed to call the API from a
+    # browser (default: any origin, without credentials).
+    origins = [o.strip() for o in os.environ.get("ASSAY_CORS_ORIGINS", "").split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=origins or ["*"],
+        allow_credentials=bool(origins),
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -236,8 +241,12 @@ def create_app() -> FastAPI:
     app.include_router(system.router, prefix="/v1/system", tags=["System"])
     # Unlinked operations console at GET /admin (also installs the request-log
     # middleware + WARNING-level log capture it renders). Reached by URL only.
-    app.include_router(admin.router, tags=["Admin"])
-    app.include_router(data_admin.router, tags=["Admin"])
+    from fastapi import Depends
+
+    from assay.api.auth import require_admin
+
+    app.include_router(admin.router, tags=["Admin"], dependencies=[Depends(require_admin)])
+    app.include_router(data_admin.router, tags=["Admin"], dependencies=[Depends(require_admin)])
     admin.install(app)
     # Easter egg: the same SPA in a 2000s skin at GET /legacy (URL only).
     app.include_router(legacy.router, tags=["Legacy"])

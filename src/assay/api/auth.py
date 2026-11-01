@@ -21,7 +21,7 @@ import os
 
 from fastapi import Header, HTTPException, status
 
-__all__ = ["get_api_key", "allowed_keys", "auth_enabled"]
+__all__ = ["get_api_key", "require_admin", "allowed_keys", "admin_keys", "auth_enabled"]
 
 
 def allowed_keys() -> set[str]:
@@ -70,6 +70,36 @@ async def get_api_key(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key.",
+            headers={"WWW-Authenticate": "X-API-Key"},
+        )
+    return presented
+
+
+def admin_keys() -> set[str]:
+    """Keys allowed on operator routes (``/admin``, ``/v1/admin/*``): ``ASSAY_ADMIN_KEYS``.
+    Unset: the same keys as everything else (``ASSAY_API_KEYS``)."""
+    raw = os.environ.get("ASSAY_ADMIN_KEYS", "")
+    return {k.strip() for k in raw.split(",") if k.strip()}
+
+
+async def require_admin(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> str | None:
+    """Like :func:`get_api_key`, but checked against ``ASSAY_ADMIN_KEYS`` when that is
+    set, so a research key cannot change credentials, data jobs or schedules."""
+    admins = admin_keys()
+    if not admins:
+        return await get_api_key(x_api_key, authorization)
+    presented = x_api_key
+    if presented is None and authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and token:
+            presented = token.strip()
+    if presented not in admins:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN if presented else status.HTTP_401_UNAUTHORIZED,
+            detail="This route needs an admin key.",
             headers={"WWW-Authenticate": "X-API-Key"},
         )
     return presented

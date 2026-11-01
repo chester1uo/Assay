@@ -28,7 +28,15 @@ function authHeaders(extra = {}) {
   return headers;
 }
 
+function authRequired(res) {
+  if (res.status !== 401) return;
+  let hadKey = false;
+  try { hadKey = Boolean(localStorage.getItem(API_KEY_STORAGE)); } catch (_) {}
+  window.dispatchEvent(new CustomEvent("assay:auth-required", { detail: { hadKey } }));
+}
+
 async function parseError(res) {
+  authRequired(res);
   let envelope = null;
   let detailMsg = `${res.status} ${res.statusText}`;
   try {

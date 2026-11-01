@@ -3,14 +3,28 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=1280, initial-scale=1" />
-  <title>Assay — Factor Research</title>
+  <title>Assay · QFinVerse</title>
+  <link rel="icon" type="image/svg+xml" href="/brand/qfinverse-app-icon.svg" />
+  <script>
+    // theme before first paint: localStorage "qfv-theme" = light | dark | system (as in QFinVerse)
+    (function () {
+      var m = "system";
+      try { m = localStorage.getItem("qfv-theme") || "system"; } catch (e) {}
+      var dark = m === "dark" || (m === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.classList.toggle("dark", dark);
+    })();
+  </script>
+  <link rel="stylesheet" href="/fonts.css" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <header class="topnav" id="topnav">
-    <a class="topnav-logo" href="#/dashboard" data-i18n-aria="nav.home" aria-label="Assay home">
-      <span class="topnav-diamond" aria-hidden="true">&#9670;</span>
-      <span class="topnav-wordmark">ASSAY</span>
+    <a class="topnav-logo" href="#/dashboard" data-i18n-aria="nav.home" aria-label="QFinVerse Assay">
+      <svg class="topnav-mark" viewBox="0 0 88 64" aria-hidden="true">
+        <g class="q"><rect x="7.5" y="25.5" width="13" height="13" transform="rotate(45 14 32)"/><rect x="19.5" y="13.5" width="13" height="13" transform="rotate(45 26 20)"/><rect x="19.5" y="37.5" width="13" height="13" transform="rotate(45 26 44)"/><rect x="31.5" y="25.5" width="13" height="13" transform="rotate(45 38 32)"/></g>
+        <g class="v"><rect x="43.5" y="13.5" width="13" height="13" transform="rotate(45 50 20)"/><rect x="55.5" y="25.5" width="13" height="13" transform="rotate(45 62 32)"/><rect x="67.5" y="13.5" width="13" height="13" transform="rotate(45 74 20)"/><rect x="43.5" y="37.5" width="13" height="13" transform="rotate(45 50 44)"/></g>
+      </svg>
+      <span class="topnav-wordmark">Assay</span>
       <span class="topnav-version" id="app-version" title="Engine version"></span>
     </a>
 
@@ -48,7 +62,7 @@
       </div>
 
       <button type="button" id="theme-toggle" class="lang-toggle" data-i18n-title="ctrl.themeTitle"
-              title="Switch skin">Retro</button>
+              title="Theme">Light</button>
 
       <button type="button" id="lang-toggle" class="lang-toggle" data-i18n="ctrl.lang"
               data-i18n-title="ctrl.langTitle" title="切换到中文">中文</button>

@@ -333,49 +333,25 @@ function wireLangToggle() {
   });
 }
 
-// ---------------------------------------------------------------- theme (skin) ----
-// Client-side legacy ⇄ modern skin switch — the same retro look as the /legacy
-// easter egg, but toggleable on the main site. Persisted in localStorage, applied
-// on boot. The banner/footer are siblings of <main>, so they survive route changes.
-const THEME_KEY = "assay_theme";
-const LEGACY_BANNER =
-  '<div class="legacy-banner"><marquee scrollamount="6" behavior="scroll" direction="left">' +
-  "★★★ WELCOME TO ASSAY · Factor Research since 2025 · " +
-  "Best viewed in 1024×768 with Netscape Navigator · " +
-  '<span class="legacy-blink">NEW!</span> now with A-share support! · ' +
-  "sign our guestbook! ★★★</marquee></div>";
-const LEGACY_FOOTER =
-  '<div class="legacy-foot"><hr>You are visitor <span class="legacy-counter">00013370</span> ' +
-  '&nbsp;|&nbsp; <span class="legacy-blink">●</span> Made with Notepad &nbsp;|&nbsp; ' +
-  "© 2025 Assay Labs &nbsp;|&nbsp; " +
-  '<span class="uc">This site is under construction</span> 🚧</div>';
+// ---------------------------------------------------------------- theme ----
+// Light / dark / auto, shared with QFinVerse (localStorage "qfv-theme"). index.html
+// applies it before first paint; a switch reloads the page so charts pick up the new
+// colours. The retro skin still lives at /legacy.
+const THEME_KEY = "qfv-theme";
+const THEMES = ["light", "dark", "system"];
 
 function currentTheme() {
-  try { return localStorage.getItem(THEME_KEY) || "modern"; } catch (_) { return "modern"; }
+  try { const v = localStorage.getItem(THEME_KEY); return THEMES.includes(v) ? v : "system"; } catch (_) { return "system"; }
 }
 
 function refreshThemeLabel() {
   const btn = document.getElementById("theme-toggle");
-  if (btn) btn.textContent = t(currentTheme() === "legacy" ? "ctrl.themeToModern" : "ctrl.themeToRetro");
+  if (btn) btn.textContent = t("ctrl.theme." + currentTheme());
 }
 
 function applyTheme(theme) {
-  const legacy = theme === "legacy";
-  let link = document.getElementById("legacy-css");
-  if (legacy && !link) {
-    link = document.createElement("link");
-    link.id = "legacy-css"; link.rel = "stylesheet"; link.href = "/legacy.css";
-    document.head.appendChild(link);
-  } else if (!legacy && link) {
-    link.remove();
-  }
-  document.body.classList.toggle("legacy", legacy);
-  // retro chrome — remove any existing copy (incl. one injected by the /legacy route), re-add if legacy
-  document.querySelectorAll(".legacy-banner, .legacy-foot").forEach((n) => n.remove());
-  if (legacy) {
-    document.body.insertAdjacentHTML("afterbegin", LEGACY_BANNER);
-    document.body.insertAdjacentHTML("beforeend", LEGACY_FOOTER);
-  }
+  const dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.classList.toggle("dark", dark);
   refreshThemeLabel();
 }
 
@@ -383,11 +359,46 @@ function wireThemeToggle() {
   applyTheme(currentTheme());
   const btn = document.getElementById("theme-toggle");
   if (btn) btn.addEventListener("click", () => {
-    const next = currentTheme() === "legacy" ? "modern" : "legacy";
+    const next = THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length];
     try { localStorage.setItem(THEME_KEY, next); } catch (_) {}
     applyTheme(next);
+    location.reload();            // charts read their colours once (palette.js)
+  });
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (currentTheme() === "system") location.reload();
   });
 }
+
+// ---------------------------------------------------------------- API key ----
+// When the server answers 401, ask for a key once and keep it in localStorage
+// ("assay_api_key", sent as X-API-Key by api.js).
+let keyDialogOpen = false;
+
+function askForKey(rejected) {
+  if (keyDialogOpen) return;
+  keyDialogOpen = true;
+  const input = el("input", { className: "input", type: "password", autocomplete: "off", spellcheck: false });
+  const err = el("div", { className: "err" }, rejected ? t("auth.bad") : "");
+  const form = el("form", {},
+    el("h2", {}, t("auth.title")),
+    el("div", { className: "muted" }, t("auth.hint")),
+    input, err,
+    el("button", { className: "btn btn--primary", type: "submit" }, t("auth.save")));
+  const box = el("div", { className: "key-dialog", role: "dialog", "aria-modal": "true" }, form);
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = input.value.trim();
+    if (!v) return;
+    try { localStorage.setItem("assay_api_key", v); } catch (_) {}
+    box.remove();
+    keyDialogOpen = false;
+    location.reload();
+  });
+  document.body.appendChild(box);
+  input.focus();
+}
+
+window.addEventListener("assay:auth-required", (e) => askForKey(Boolean(e.detail && e.detail.hadKey)));
 
 let lastUniverses = [];
 
