@@ -26,6 +26,7 @@ House style: ``from __future__ import annotations``, dataclasses/type hints, num
 from __future__ import annotations
 
 import datetime as dt
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncGenerator, Iterable
@@ -147,6 +148,7 @@ class AssayService:
         "NASDAQ100": "US", "SP500": "US", "RUSSELL2000": "US",
         "CSI300": "CN", "CSI500": "CN", "CSI1000": "CN", "CSI800": "CN",
         "HK100": "HK", "HSHARE100": "HK", "HSI": "HK", "HSTECH": "HK",
+        "TOP500": "US", "TOP1000": "US", "TOP3000": "US",
     }
 
     def __init__(self, config: AssayConfig) -> None:
@@ -256,12 +258,26 @@ class AssayService:
         return self._store_for(self._market_for(universe))
 
     def _store_for(self, market: str):
-        """Lazily build + cache one :class:`DataStore` per market."""
-        if market not in self._stores:
-            from assay.data.store import DataStore
+        """Lazily build + cache one store per market.
 
-            self._stores[market] = DataStore(self._config_for_market(market))
-        return self._stores[market]
+        US reads the QFinVerse daily panel when ``ASSAY_QFV_PANEL_DIR`` points at one
+        (:class:`~assay.data.store.QFVPanelStore`); other markets, or US without it,
+        read Assay's own parquet stores."""
+        store = self._stores.get(market)
+        if store is None:
+            qfv_dir = os.environ.get("ASSAY_QFV_PANEL_DIR")
+            if market == "US" and qfv_dir:
+                from assay.data.store import QFVPanelStore
+
+                store = QFVPanelStore(qfv_dir, self._config_for_market(market))
+            else:
+                from assay.data.store import DataStore
+
+                store = DataStore(self._config_for_market(market))
+            self._stores[market] = store
+        elif hasattr(store, "refresh"):
+            store.refresh()
+        return store
 
     @classmethod
     def init(cls, config: AssayConfig) -> "AssayService":
@@ -1744,7 +1760,7 @@ class AssayService:
         )
         engine = self._build_engine(universe, period, as_of, adj, group_data)
         # Register a SessionCache over the engine's own panel so axes match exactly.
-        session_id = self.sessions.create_session(engine._panel)
+        session_id = self.sessions.create_session(engine.panel_frame())
         sess = self.sessions.get(session_id)
         assert sess is not None  # just created
         # Stash the built engine and the resolution metadata on the session memo so

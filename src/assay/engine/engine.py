@@ -118,6 +118,58 @@ class FactorEngine:
         self._panel = panel
         self._matrix_cache: dict[str, np.ndarray] = {}
         self._groups = self._build_groups(group_data or {})
+        self.membership: np.ndarray | None = None   # (T, N) bool: point-in-time universe membership
+        self.snapshot: str | None = None            # data version the panel was read from
+
+    @classmethod
+    def from_matrices(
+        cls,
+        dates,
+        symbols,
+        matrices: dict[str, np.ndarray],
+        group_data: dict[str, dict[str, object]] | None = None,
+    ) -> "FactorEngine":
+        """Build an engine from ``(T, N)`` field matrices (no long frame to pivot).
+
+        ``symbols`` must be sorted (the engine's cross-section axis order)."""
+        self = cls.__new__(cls)
+        self.dates = np.asarray(dates).astype("datetime64[D]")
+        self.symbols = np.asarray(symbols)
+        if not len(self.dates) or not len(self.symbols):
+            raise ValueError("cannot build a FactorEngine on an empty panel")
+        if np.any(self.symbols[1:] < self.symbols[:-1]):
+            raise ValueError("symbols must be sorted")
+        self._shape = (self.dates.shape[0], self.symbols.shape[0])
+        self._field_cols = list(matrices)
+        self._panel = None
+        self._matrix_cache = {f: np.asarray(m, dtype=np.float64) for f, m in matrices.items()}
+        for f, m in self._matrix_cache.items():
+            if m.shape != self._shape:
+                raise ValueError(f"field {f!r} has shape {m.shape}, expected {self._shape}")
+        self._groups = self._build_groups(group_data or {})
+        self.membership = None
+        self.snapshot = None
+        return self
+
+    def panel_frame(self):
+        """The panel as a long ``date, symbol, *fields`` frame (built on demand for matrix engines)."""
+        if self._panel is None:
+            import polars as pl
+
+            t, n = self._shape
+            cols = {"date": pl.Series(np.repeat(self.dates, n)).cast(pl.Date),
+                    "symbol": pl.Series(np.tile(self.symbols.astype(str), t))}
+            for f in self._field_cols:
+                cols[f] = pl.Series(self._matrix(f).reshape(-1))
+            frame = pl.DataFrame(cols)
+            self._panel = frame.filter(pl.any_horizontal([pl.col(f).is_not_nan() for f in self._field_cols]))
+        return self._panel
+
+    def _members_only(self, values: np.ndarray) -> np.ndarray:
+        """NaN where the security was not in the universe on that date."""
+        if self.membership is None:
+            return values
+        return np.where(self.membership, values, np.nan)
 
     # -- field pivot ----------------------------------------------------------
     def _matrix(self, field: str) -> np.ndarray:
@@ -177,7 +229,8 @@ class FactorEngine:
         values = self._eval(node, ctx)
         if np.isscalar(values) or np.ndim(values) == 0:  # a constant factor
             values = np.full(self._shape, float(values), dtype=np.float64)
-        return FactorResult(expr_str, np.asarray(values, dtype=np.float64), ctx.dates, ctx.symbols)
+        values = self._members_only(np.asarray(values, dtype=np.float64))
+        return FactorResult(expr_str, values, ctx.dates, ctx.symbols)
 
     def _eval(self, node, ctx: EvalContext):
         if isinstance(node, FieldNode):
@@ -271,7 +324,8 @@ class FactorEngine:
             values = self._eval_cse(nd, ctx, memo, hashes)
             if np.isscalar(values) or np.ndim(values) == 0:
                 values = np.full(self._shape, float(values), dtype=np.float64)
-            out.append(FactorResult(expr_str, np.asarray(values, dtype=np.float64), ctx.dates, ctx.symbols))
+            out.append(FactorResult(expr_str, self._members_only(np.asarray(values, dtype=np.float64)),
+                                    ctx.dates, ctx.symbols))
         return out
 
     @staticmethod
@@ -323,6 +377,8 @@ class FactorEngine:
             "\x1f".join(sorted(self._field_cols)).encode(), digest_size=4
         ).hexdigest()
         preimage = f"{first}|{last}|{int(d.size)}|{int(self._shape[1])}|{sym_digest}|{fld_digest}"
+        if self.snapshot:  # a new data version (restated history) must not reuse cached matrices
+            preimage += f"|{self.snapshot}"
         return hashlib.blake2b(preimage.encode(), digest_size=16).hexdigest()
 
     # -- diagnostics ----------------------------------------------------------
@@ -433,13 +489,25 @@ class FactorEngine:
         construction — see engineering-docs section 3.4).
         """
         fields = fields or ["open", "high", "low", "close", "volume"]
-        symbols = store.get_universe(universe, period[1], as_of)
-        panel = store.get_panel(
-            fields=fields,
-            symbols=symbols,
-            start_date=period[0],
-            end_date=period[1],
-            as_of_date=as_of,
-            adj=adj,
-        )
-        return cls(panel, group_data=group_data)
+        if hasattr(store, "universe_span"):
+            # every security that was a member during the period, masked to its member dates below
+            symbols = store.universe_span(universe, period[0], period[1], as_of)
+        else:
+            symbols = store.get_universe(universe, period[1], as_of)
+        if hasattr(store, "get_matrices"):
+            dates, syms, mats = store.get_matrices(fields, symbols, period[0], period[1], as_of, adj)
+            engine = cls.from_matrices(dates, syms, mats, group_data=group_data)
+        else:
+            panel = store.get_panel(
+                fields=fields,
+                symbols=symbols,
+                start_date=period[0],
+                end_date=period[1],
+                as_of_date=as_of,
+                adj=adj,
+            )
+            engine = cls(panel, group_data=group_data)
+        if hasattr(store, "get_membership"):
+            engine.membership = store.get_membership(universe, engine.dates, engine.symbols, as_of)
+        engine.snapshot = getattr(store, "snapshot_id", None)
+        return engine

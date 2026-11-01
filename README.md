@@ -82,6 +82,29 @@ There are two ways to populate RAW:
 | `TUSHARE_TOKEN` | Tushare API token (CN / HK download) |
 | `TUSHARE_API_URL` | endpoint override — a relay gateway speaking the Tushare protocol (default `api.tushare.pro`); required for the HK price endpoints |
 | `ASSAY_DATA_DIR` / `ASSAY_DATA_DIR_CN` / `ASSAY_DATA_DIR_HK` | output root(s) for the prepared stores |
+| `ASSAY_QFV_PANEL_DIR` | read US data from a QFinVerse daily panel store instead (see below) |
+| `ASSAY_API_KEYS` / `ASSAY_ADMIN_KEYS` | keys for the API; admin keys alone may use `/admin` and `/v1/admin/*` |
+| `ASSAY_CORS_ORIGINS` | origins allowed to call the API from a browser (default any, without credentials) |
+
+### US data from QFinVerse
+
+With `ASSAY_QFV_PANEL_DIR` set, US universes read the daily panel store QFinVerse
+builds from MASSIVE (`qfz-data daily build`, format `qfv-daily-panel/1`; the reader
+is vendored in `assay/data/qfv_panel`, refreshed by `scripts/sync_qfv_panel.py`).
+What changes:
+
+- universes `TOP500` / `TOP1000` / `TOP3000`: monthly point-in-time liquidity
+  universes of common stocks; `SP500` and `NASDAQ100` resolve their dated histories
+  to QFinVerse securities;
+- evaluation covers every security that was a member during the period and scores
+  it only on the dates it was a member (the parquet store uses the members on the
+  last day for the whole period);
+- splits and dividends come checked against the prices, renamed tickers are one
+  security (`FB` and `META`), and reused tickers are not (older holder: `ABC~2004-03`);
+- fields: `open high low close volume transactions`, plus `dvol` (dollar volume)
+  and `ret` (daily total return);
+- the store refreshes itself when QFinVerse publishes a new version; US ingest
+  jobs in the Data Manager are not needed.
 
 Expected source layout under `MASSIVE_DATA_DIR`:
 
