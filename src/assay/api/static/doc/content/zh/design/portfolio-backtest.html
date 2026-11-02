@@ -1,0 +1,218 @@
+<h1 class="doc-title">Assay — 组合回测设计</h1>
+<p><strong>版本：</strong> 0.1 · 草案 → <strong>已实现</strong>（市场无关核心）
+<strong>范围：</strong> 因子驱动的组合模拟，完整支持 A 股约束
+<strong>依赖：</strong> Assay FactorEngine、DataStore PIT 层、评估器</p>
+<blockquote>
+<p><strong>实现状态（2026-06）：✅ 已实现</strong>，位于 <a href="https://github.com/QFinVerse/Assay/tree/main/src/assay/portfolio" target="_blank" rel="noopener noreferrer"><code>src/assay/portfolio/</code></a>
+（config、report、signal、rebalance、weights、constraints、costs、execution、accounting、
+metrics、backtester），并接入 <code>AssayService.backtest_portfolio</code>、SDK
+（<code>assay.backtest_portfolio</code>）、REST <code>POST /v1/portfolio/backtest</code> 和 CLI <code>assay portfolio</code>。
+745+ 测试通过；一个真实的 NASDAQ-100 回测可端到端运行（见<a href="/doc/guide/portfolio-backtest">使用指南</a>）。</p>
+<p><strong>落地于现实。</strong> 市场无关的核心目前运行在我们唯一拥有的数据上——
+<strong>美股（NASDAQ-100，OHLCV）</strong>。A 股的<em>价格机制</em>规则（T+1 结算、
+涨跌停阻断、印花税/佣金/过户费成本模型）是<strong>当其输入被提供时才激活</strong>的配置。A 股的<em>数据依赖</em>
+过滤器（ST 过滤、停牌处理、指数调整规避、北向资金、行业中性）作为可选输入被搭建好，当那些数据
+不在存储中时会<strong>优雅地空操作</strong>。基准是一个<strong>等权股票池代理</strong>（Assay 没有指数价格序列）。
+状态图例：✅ 已实现 · 🔶 仅在提供正确输入时激活 · 📋 需要我们缺失的数据。</p>
+</blockquote>
+<hr />
+<h2 id="1-概述">1. 概述</h2>
+<p>组合回测回答一个 IC 分析无法回答的问题：<em>给定一个因子信号、真实的
+交易约束和市场成本，可实现的净收益是多少？</em> 该模块消费一个因子<strong>表达式</strong>（重新求值为
+<code>(T, N)</code> 矩阵），并在评估期内模拟建仓、再平衡、计费和盯市，产出一个
+结构化的 <code>PortfolioReport</code>。</p>
+<h3 id="1-1-流水线">1.1 流水线</h3>
+<pre><code>factor expression
+    │  evaluate -&gt; (T, N) factor matrix + close/open prices
+    ▼
+UniverseFilter        eligible = finite factor &amp; finite price (&amp; tradable mask)   ✅
+    ▼
+SignalProcessor       winsorize · neutralize · normalize (rank/zscore/raw)         ✅
+    ▼
+RebalanceScheduler    calendar · threshold · signal-autocorr                       ✅
+    ▼
+WeightConstructor     equal · signal_prop · quantile · mean-variance · risk-parity ✅
+    ▼
+ConstraintApplicator  position/count caps · turnover cap · gross/net · sector-neut ✅ / 🔶
+    ▼
+ExecutionSimulator    slippage · ADV cap · price limits · T+1 settlement           ✅ / 🔶
+    ▼
+PortfolioAccountant   weight drift · daily MTM NAV · costs · trade/position log    ✅
+    ▼
+PortfolioReport       Sharpe · drawdown · turnover · cost drag · benchmark · A-share ✅
+</code></pre>
+<p>优化再平衡器使用 <strong>scipy</strong>（<code>scipy.optimize.minimize</code>，SLSQP）和一个 numpy
+Ledoit-Wolf 收缩——<code>cvxpy</code>/<code>scikit-learn</code> 被有意<em>排除</em>在依赖之外。</p>
+<hr />
+<h2 id="2-配置">2. 配置</h2>
+<p>所有参数都位于一个 <code>PortfolioBacktestConfig</code>（72 个字段）上。<code>PortfolioBacktestConfig.preset('US'|'A'|'HK')</code>
+应用市场表（§6）的成本/限价默认值。标记 🔶 的字段是 A 股价格机制
+（在提供正确输入时激活）；📋 需要存储中缺失的 A 股数据。</p>
+<p><strong>评估期</strong> — <code>period_start</code>、<code>period_end</code>、<code>oos_split_date</code>、<code>warmup_days</code></p>
+<p><strong>股票池与市场</strong> — <code>universe</code>（默认 <code>NASDAQ100</code>）、<code>market</code>（默认 <code>US</code>）、
+<code>custom_symbols</code>、<code>as_of_date</code>、<code>include_delisted</code></p>
+<p><strong>再平衡</strong> — <code>rebalance_type</code>（daily/weekly/monthly/quarterly/threshold/signal）、
+<code>rebalance_day</code>、<code>threshold_rank_shift</code>、<code>threshold_weight_drift</code>、<code>signal_autocorr_floor</code>、
+<code>min_rebalance_interval</code>、<code>execution_offset_days</code>（≥1；0 是前视偏差）</p>
+<p><strong>权重构建</strong> — <code>weight_method</code>（equal/signal_prop/mv/risk_parity/quintile/decile/bl）、
+<code>long_short</code>、<code>gross_exposure</code>、<code>net_exposure</code>、<code>signal_transform</code>、<code>quintile_long_n</code>、
+<code>quintile_short_n</code>、<code>mv_risk_aversion</code>、<code>cov_window</code>、<code>cov_method</code>、<code>bl_tau</code></p>
+<p><strong>约束</strong> — <code>max_single_weight</code>、<code>min_single_weight</code>、<code>max_sector_weight</code> 📋、
+<code>sector_neutral</code> 📋、<code>market_neutral</code>、<code>max_turnover_per_period</code>、<code>max_annual_turnover</code>、
+<code>min_stock_count</code>、<code>max_stock_count</code>、<code>benchmark_tracking_err</code>、<code>capacity_adv_limit</code></p>
+<p><strong>A 股（§2.6）</strong> — 价格机制 🔶：<code>t_plus_1</code>、<code>price_limit_pct</code>、<code>star_chinext_limit</code>、
+<code>enforce_limit_price</code>、<code>stamp_duty_rate</code>、<code>commission_rate</code>、<code>commission_min</code>、
+<code>transfer_fee_rate</code>；数据依赖 📋：<code>st_filter</code>、<code>new_listing_lockout_days</code>/<code>ipo_lockout_days</code>、
+<code>suspend_handling</code>、<code>rebalance_around_index</code>、<code>inclusion_anticipation</code>、<code>northbound_flow_filter</code>、
+<code>sz_sh_connect_only</code></p>
+<p><strong>执行</strong> — <code>execution_price</code>（next_open/next_close/vwap/arrival）、<code>slippage_model</code>
+（sqrt/linear/zero/almgren_chriss）、<code>slippage_k</code>、<code>adv_window</code>、<code>max_adv_fraction</code>、
+<code>partial_fill_handling</code>（defer/cancel/force）、<code>include_bid_ask</code></p>
+<p><strong>基准与归因</strong> — <code>benchmark</code>（index→等权代理/cash/custom/none）、
+<code>benchmark_symbol</code>、<code>risk_free_rate</code>、<code>attribution_model</code>、<code>attribution_factors</code></p>
+<p><strong>输出</strong> — <code>output_frequency</code>、<code>save_trade_log</code>、<code>save_position_log</code>、<code>compute_attribution</code>、
+<code>bootstrap_sharpe</code>、<code>n_bootstrap</code></p>
+<hr />
+<h2 id="3-再平衡算法">3. 再平衡算法</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>类型</th>
+<th>何时使用</th>
+<th>典型年换手率</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>daily</code></td>
+<td>快速衰减因子（半衰期 &lt; 5d）</td>
+<td>400–1200%</td>
+</tr>
+<tr>
+<td><code>weekly</code></td>
+<td>半衰期 5–20d（动量 / 反转）</td>
+<td>100–400%</td>
+</tr>
+<tr>
+<td><code>monthly</code></td>
+<td>半衰期 20–60d（多数基本面/质量）</td>
+<td>50–150%</td>
+</tr>
+<tr>
+<td><code>quarterly</code></td>
+<td>半衰期 &gt; 60d（价值、资产负债表）</td>
+<td>20–60%</td>
+</tr>
+<tr>
+<td><code>threshold</code></td>
+<td>稳定因子；按排名漂移或权重漂移再平衡</td>
+<td>视情况</td>
+</tr>
+<tr>
+<td><code>signal</code></td>
+<td>当因子排名自相关跌破下限时再平衡</td>
+<td>视情况</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>min_rebalance_interval</code> 对每种类型都强制执行。<em>把再平衡频率匹配到
+因子的半衰期，而非技术上可能的最大频率。</em></p>
+<hr />
+<h2 id="4-绩效指标">4. 绩效指标</h2>
+<p><strong>收益</strong> — 总收益、年化（×252/T）、超额（对基准）、毛（成本前）、净。
+<strong>风险调整</strong> — Sharpe、Sortino、Calmar、信息比率、最大回撤（+起点/终点/恢复）、
+beta、CAPM alpha、跟踪误差。
+<strong>换手与成本</strong> — 单边 / 年换手率、成本拖累（毛 − 净）、隐含平均持仓天数。
+<strong>A 股（<code>market='A'</code>）</strong> — 涨跌停命中率、强制持有比率（T+1）、停牌影响、
+ST 敞口天数、指数调整 alpha、北向资金相关性。<em>（仅在
+底层输入存在时填充；在美股数据上只有涨跌停命中/强制持有有意义，且处于惰性状态。）</em></p>
+<p>所有年化均使用 252 个交易日。</p>
+<hr />
+<h2 id="5-portfolioreport-schema">5. PortfolioReport schema</h2>
+<p>镜像 <code>FactorReport</code>：供 agent 消费的机读 JSON。恒等标识（<code>run_id</code>
+= factor_id + config 哈希的 sha256[:12]、<code>factor_id</code>、<code>config</code>）；区间（<code>period_start/end</code>、
+<code>n_trading_days</code>、<code>n_rebalances</code>）；收益（<code>total/annual/gross/excess_return</code>）；风险
+（<code>sharpe</code>、<code>sortino</code>、<code>calmar</code>、<code>information_ratio</code>、<code>max_drawdown</code> + <code>_start</code>/<code>_end</code>/
+<code>drawdown_recovery_days</code>、<code>beta</code>、<code>alpha_capm</code>、<code>tracking_error</code>）；成本（<code>annual_turnover</code>、
+<code>cost_drag</code>、<code>avg_holding_days</code>）；明细（<code>nav_series</code>、<code>nav_dates</code>、<code>benchmark_series</code>、
+<code>monthly_returns</code>、<code>trade_log</code>、<code>position_log</code>、<code>attribution</code>、<code>a_share_metrics</code>）；溯源
+（<code>lineage.{data_snapshot, eval_timestamp, adj_version}</code>）。<code>to_dict()</code>/<code>to_json()</code> 是 JSON 安全的
+（NaN→None）；<code>from_dict()</code> 可往返。</p>
+<hr />
+<h2 id="6-市场对比">6. 市场对比</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>参数</th>
+<th>A 股（SSE/SZSE）</th>
+<th>美股（NYSE/NASDAQ）</th>
+<th>港股（HKEX）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>结算</td>
+<td>T+1</td>
+<td>T+2</td>
+<td>T+2</td>
+</tr>
+<tr>
+<td>涨跌停</td>
+<td>±10%（主板）、±20%（科创）</td>
+<td>无</td>
+<td>无</td>
+</tr>
+<tr>
+<td>印花税</td>
+<td>卖出 0.10%</td>
+<td>0%</td>
+<td>双边 0.13%</td>
+</tr>
+<tr>
+<td>佣金</td>
+<td>双边 0.03%，最低 ¥5</td>
+<td>0.01–0.05%</td>
+<td>0.03–0.05%</td>
+</tr>
+<tr>
+<td>过户费</td>
+<td>0.002%（仅 SSE）</td>
+<td>0%</td>
+<td>0.003%</td>
+</tr>
+<tr>
+<td>指数再平衡</td>
+<td>半年一次（6 月/12 月）</td>
+<td>季度</td>
+<td>季度</td>
+</tr>
+<tr>
+<td>行业分类</td>
+<td>CSRC</td>
+<td>GICS</td>
+<td>GICS / 恒生</td>
+</tr>
+<tr>
+<td>市场冲击 <code>k</code></td>
+<td>0.20</td>
+<td>0.10</td>
+<td>0.15</td>
+</tr>
+</tbody>
+</table></div>
+<p>当前数据只演练了<strong>美股</strong>列。A/港股预设已完整规定，
+并在对应市场数据被摄取时激活。</p>
+<hr />
+<h2 id="7-正确性说明">7. 正确性说明</h2>
+<ul>
+<li><strong>生存者偏差</strong> — 下载股票池是区间上的 PIT 并集
+（包含退市/剔除的名称）；绝不要用今天的成分做历史回测。</li>
+<li><strong>公司行为对齐</strong> — <code>adj_factor</code> 是版本化的，并按回测日期 as-of 查询。
+（当前数据集没有 <code>adj_events</code>，因此少数真实拆股未经复权而残留——见
+<a href="/doc/guide/portfolio-backtest">使用指南</a> 的注意事项；回填公司行为可修复。）</li>
+<li><strong>成本 = 费率 × 名义</strong> — 成本模型返回一个<em>费率</em>；执行器乘以
+交易权重比例。（此确切缺陷的一个回归测试已被捕获并修复。）</li>
+</ul>
+<hr />
+<p><em>原始 Word 源文件与本文件并存，名为 <code>portfolio-backtest.docx</code>。</em>
+<em>— Assay · Portfolio Backtest Design · AlphaBench Project —</em></p>

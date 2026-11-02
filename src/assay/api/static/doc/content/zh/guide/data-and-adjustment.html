@@ -1,0 +1,210 @@
+<h1 class="doc-title">数据与复权</h1>
+<p>这是「能否相信一次回测」最重要的文档：<strong>Assay 存了什么数据，以及因子在公司行为（拆股、分红）
+下究竟看到什么价格。</strong> 这里错了，所有 IC 数字都没有意义。Assay 的设计目标是：因子 <em>永远</em> 看不到
+查询时点尚不可知的信息，且复权价格能从第一性原理复现。</p>
+<hr />
+<h2 id="1-两层-raw-assay">1. 两层：RAW → ASSAY</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>层</th>
+<th>是什么</th>
+<th>位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>RAW</strong></td>
+<td>供应商原样数据，就地读取</td>
+<td><code>MASSIVE_DATA_DIR</code>（美股）、<code>TUSHARE_DATA_DIR</code>（A 股）</td>
+</tr>
+<tr>
+<td><strong>ASSAY</strong></td>
+<td>引擎读取的、归一化的点对点 parquet 存储</td>
+<td><code>ASSAY_DATA_DIR</code> / <code>ASSAY_DATA_DIR_CN</code></td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>导入</strong> 步骤（<code>prepare_us</code> / <code>prepare_cn</code>）把 RAW 归一化为固定 schema 并写出 ASSAY 存储。
+下游不再读取 RAW——引擎、IC 评估、组合回测和 WebUI 都通过同一个接口
+<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/data/store/datastore.py" target="_blank" rel="noopener noreferrer"><code>DataStore</code></a> 读取 ASSAY 存储。</p>
+<h3 id="assay-存储">ASSAY 存储</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>存储</th>
+<th>粒度</th>
+<th>关键列</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>price_raw</code></td>
+<td>每 (date, symbol) 一行</td>
+<td><code>date, symbol, open, high, low, close, volume, transactions, as_of_date, source_id</code></td>
+</tr>
+<tr>
+<td><code>adj_events</code></td>
+<td>每个公司行为一行</td>
+<td><code>symbol, ex_date, event_type, split_ratio, dividend_cash, as_of_date, provider_adj_factor</code></td>
+</tr>
+<tr>
+<td><code>universe_snapshots</code></td>
+<td>每次成分变更一行</td>
+<td><code>index_id, effective_date, symbols[], as_of_date</code></td>
+</tr>
+<tr>
+<td><code>trade_status</code>（A 股）</td>
+<td>每 (date, symbol) 一行</td>
+<td><code>date, symbol, up_limit, down_limit, limit_up_locked, limit_down_locked, close</code></td>
+</tr>
+<tr>
+<td><code>security_groups</code>（A 股）</td>
+<td>每 symbol 一行</td>
+<td><code>symbol, group, as_of_date</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>价格以 <strong>原始 / 未复权</strong> 存储。公司行为 <em>单独</em> 存在 <code>adj_events</code>，复权在 <strong>读取时</strong> 施加——
+从不写进存储。正是这一点让任意点对点切片可复现：相同的原始价格 + 只有查询时点已知的事件，
+唯一地得到一个复权面板。</p>
+<hr />
+<h2 id="2-双时间-date-与-as_of_date">2. 双时间：<code>date</code> 与 <code>as_of_date</code></h2>
+<p>每一行都带两个时间：</p>
+<ul>
+<li><strong><code>date</code></strong> —— <em>事件时间</em>：日线 / 行为发生的那一天。</li>
+<li><strong><code>as_of_date</code></strong> —— <em>可知时间</em>：这一行第一次「可知」的那一天。</li>
+</ul>
+<p>每次读取都要求一个 <strong>必填的 <code>as_of_date</code></strong>，存储只返回 <code>as_of_date &lt;= as_of_date</code> 的行。
+因此前瞻偏差在结构上不可能——你无法查询到当时尚不存在的数据。各来源的可知时间：</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>来源</th>
+<th><code>as_of_date</code> 是……</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>日线（EOD）</td>
+<td>交易日（当天收盘时可知）</td>
+</tr>
+<tr>
+<td>拆股 / 股本变更</td>
+<td>除权 / 执行日</td>
+</tr>
+<tr>
+<td>现金分红</td>
+<td>公告日（缺失时回退到除息日）</td>
+</tr>
+<tr>
+<td>成分归属</td>
+<td>生效日</td>
+</tr>
+</tbody>
+</table></div>
+<pre><code class="language-python">panel = store.get_panel(
+    fields=[&quot;close&quot;, &quot;volume&quot;], symbols=universe,
+    start_date=&quot;2024-01-01&quot;, end_date=&quot;2024-06-28&quot;,
+    as_of_date=&quot;2024-06-28&quot;,   # 必填——此后的一切不可见
+    adj=&quot;split&quot;,
+)
+</code></pre>
+<hr />
+<h2 id="3-因子在拆股与分红下看到的价格">3. 因子在拆股与分红下看到的价格</h2>
+<p>因子从不直接接触 <code>adj_events</code>。它看到的是 <code>DataStore.get_panel(..., adj=...)</code> 返回的、已复权的
+<code>(T, N)</code> 价格矩阵。计算逻辑在 <a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/data/store/adjust.py" target="_blank" rel="noopener noreferrer"><code>adjust.py</code></a>，采用
+<strong>前复权（即「后复权到今天」）</strong>：历史价格被重标到 <strong>最近一日的基准</strong> 上，因此最新日线永远等于
+原始价格，只有过去被重标。</p>
+<h3 id="3-1-拆股与股本变更">3.1 拆股与股本变更</h3>
+<p>一个 <strong>前向比率</strong> 为</p>
+<pre><code>r = split_to / split_from        # 1 拆 2 → r = 2 ；10 缩 1 → r = 0.1
+</code></pre>
+<p>的股本变更事件（拆股、缩股、并购换股），会把其除权日 <strong>严格之前</strong> 的每个价格除以 <code>r</code>，并把对应的
+<strong>成交量</strong> 乘以 <code>r</code>。除权日当天的日线已反映拆股，故保持不变。多次拆股按乘法叠加。缩股（<code>r &lt; 1</code>）
+与并购换股用同样机制。</p>
+<blockquote>
+<p>例：2024-06-10 执行 1 拆 2。2024-06-07 的收盘 <code>$400</code>，复权后变为 <code>$200</code>（÷2），与
+2024-06-10 起的约 <code>$200</code> 日线连续对齐；2024-06-07 的成交量翻倍。因此跨拆股计算的收益是正确的。</p>
+</blockquote>
+<h3 id="3-2-现金分红-仅-adj-total">3.2 现金分红（仅 <code>adj=&quot;total&quot;</code>）</h3>
+<p>在 <code>total</code> 模式下，一笔除息日为 <code>e</code> 的现金分红 <code>D</code>，会把 <code>e</code> <strong>严格之前</strong> 的每个价格乘以</p>
+<pre><code>ratio = 1 − D / close_prev
+</code></pre>
+<p>其中 <code>close_prev</code> 是 <code>e</code> 前一交易日的 <strong>原始</strong> 收盘价。由于 <code>D</code> 与 <code>close_prev</code> 都在原始价格
+空间，分红因子与拆股因子正确叠加（<code>price_factor = split_factor × dividend_factor</code>）。两条保护：</p>
+<ul>
+<li><strong>前收缺口</strong> —— 若 <code>e</code> 前一交易日在 <code>_MAX_PRIOR_GAP_DAYS = 10</code> 个自然日之外（数据缺口，或在
+加载的前导区间之外），则跳过该分红而非错误缩放。</li>
+<li><strong>分红 ≥ 价格</strong> —— 若 <code>D ≥ close_prev</code>（ratio ≤ 0），跳过该分红而非把历史翻负。</li>
+</ul>
+<h3 id="3-3-复权模式-adj">3.3 复权模式（<code>adj</code>）</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>模式</th>
+<th>拆股</th>
+<th>分红</th>
+<th>何时用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>none</code></td>
+<td>✗</td>
+<td>✗</td>
+<td>需要真实成交价（如涨跌停逻辑）</td>
+</tr>
+<tr>
+<td><code>split</code>（默认）</td>
+<td>✓</td>
+<td>✗</td>
+<td>大多数 alpha 研究——跨拆股连续，无分红漂移</td>
+</tr>
+<tr>
+<td><code>total</code>（别名 <code>forward</code>）</td>
+<td>✓</td>
+<td>✓</td>
+<td>全收益研究；分红再投资</td>
+</tr>
+</tbody>
+</table></div>
+<p>供应商自带的 <code>historical_adjustment_factor</code> 会 <strong>存但不用</strong> 于计算——复权只由查询时点已知的事件
+算出，因此不会有来自「悄悄编码了未来行为」的供应商因子的泄漏。</p>
+<h3 id="3-4-为因子选择-adj">3.4 为因子选择 <code>adj</code></h3>
+<ul>
+<li>动量 / 反转 / 多数价格形态因子 → <strong><code>split</code></strong>（默认）。你要跨拆股连续的序列且无分红台阶，但也
+不要拆股处的原始价格跳变。</li>
+<li>与全收益基准比较，或显式建模分红再投资 → <strong><code>total</code></strong>。</li>
+<li>执行约束 / 涨跌停逻辑（A 股）→ 对与原始 <code>up_limit</code> / <code>down_limit</code> 比较的价格用 <strong><code>none</code></strong>
+（见 §4）。</li>
+</ul>
+<hr />
+<h2 id="4-a-股特有事项">4. A 股特有事项</h2>
+<p>A 股数据（Tushare）比美股多几处细节：</p>
+<ul>
+<li><strong>送转</strong> 被转换为拆股比率：&quot;10 转 15&quot; → <code>1 + 15/10 = 2.5</code>，即当作 <code>r = 2.5</code> 的股本变更事件。
+现金分红进入 <code>adj_events.dividend_cash</code>（优先税后值）。</li>
+<li><strong>涨跌停</strong> 存于 <code>trade_status</code>（<code>up_limit</code> / <code>down_limit</code> 及 <code>*_locked</code> 标志）。对执行约束用
+<code>adj=&quot;none&quot;</code> 的价格——一只封涨停的股票无法按收盘买入。</li>
+<li><strong>成交量单位</strong> —— Tushare 以 手（100 股）报量。导入时已归一化；ASSAY 的 <code>volume</code> 列以「股」为
+单位，与美股路径一致。</li>
+<li><strong>增量更新</strong> 按 <strong>交易日</strong> 抓取（每次 API 调用返回全市场所有股票），并追加到逐股原始文件，因此
+一次日更是个位数次调用，而非每只股票一次。</li>
+</ul>
+<hr />
+<h2 id="5-自己复现">5. 自己复现</h2>
+<pre><code class="language-python">from assay.data.store import DataStore
+store = DataStore(cfg)
+
+raw   = store.get_panel([&quot;close&quot;], syms, s, e, as_of, adj=&quot;none&quot;)   # 成交价
+split = store.get_panel([&quot;close&quot;], syms, s, e, as_of, adj=&quot;split&quot;)  # 拆股连续
+total = store.get_panel([&quot;close&quot;], syms, s, e, as_of, adj=&quot;total&quot;)  # + 分红
+
+# 三种模式下最新日线完全相同；只有历史被重标。
+</code></pre>
+<p>命令行交叉核对（在已知行为附近对比复权与原始）：</p>
+<pre><code class="language-bash">python -m assay.cli verify --start 2024-06-01 --end 2024-06-30 --adj split
+</code></pre>
+<p>另见：<a href="/doc/guide/data-pipeline">数据流水线</a>（如何加载 / 更新数据）·
+<a href="/doc/guide/getting-started">快速上手</a> · <a href="/doc/design/engineering">工程设计</a>。</p>

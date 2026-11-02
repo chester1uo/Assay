@@ -254,7 +254,9 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["System"])
     async def health() -> dict:
         """Liveness probe — always cheap, never touches data."""
-        return {"status": "ok", "engine_version": assay.__version__}
+        from assay.api.build import build_info
+
+        return {"status": "ok", "engine_version": assay.__version__, "build": build_info()}
 
     # WebUI: serve the zero-build static shell at "/". Mounted LAST so the explicit
     # ``/v1/*`` routers and ``/health`` still resolve first; ``html=True`` serves
@@ -262,10 +264,38 @@ def create_app() -> FastAPI:
     # this file so it works from any CWD. Skipped if the dir is absent (e.g. a
     # backend-only checkout) so importing the app never fails.
     static_dir = Path(__file__).resolve().parent / "static"
+    _mount_doc_hub(app, static_dir / "doc")
     if static_dir.is_dir():
         app.mount("/", _NoCacheStaticFiles(directory=static_dir, html=True), name="webui")
 
     return app
+
+
+def _mount_doc_hub(app: FastAPI, doc_dir: Path) -> None:
+    """Doc Hub at ``/doc/``: its own files, else its page shell (paths like ``/doc/guide/cli``).
+
+    The pages are pre-rendered from ``docs/`` by ``scripts/build_doc_hub.py``.
+    """
+    from fastapi.responses import FileResponse, RedirectResponse
+
+    root = doc_dir.resolve()
+    shell = root / "index.html"
+    headers = {"Cache-Control": "no-cache"}
+
+    @app.get("/doc", include_in_schema=False)
+    async def doc_root() -> RedirectResponse:
+        return RedirectResponse("/doc/", status_code=308)
+
+    @app.get("/doc/{path:path}", include_in_schema=False)
+    async def doc_page(path: str):
+        target = (root / path).resolve()
+        if path and target.is_file() and root in target.parents:
+            return FileResponse(target, headers=headers)
+        if Path(path).suffix and Path(path).suffix != ".html":
+            raise StarletteHTTPException(status_code=404)
+        if not shell.is_file():
+            raise StarletteHTTPException(status_code=404)
+        return FileResponse(shell, headers=headers)
 
 
 class _NoCacheStaticFiles(StaticFiles):

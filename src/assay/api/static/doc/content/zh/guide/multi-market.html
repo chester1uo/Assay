@@ -1,0 +1,187 @@
+<h1 class="doc-title">多市场支持(中国 A 股 + 香港)</h1>
+<p>Assay 的数据层与组合回测器与市场无关:价格、
+公司行为和指数成分存放在按 <code>market=...</code> 分区的标准存储中,
+而执行模拟器已经建模了 A 股的
+微观结构规则。本文档介绍如何端到端地在<strong>中国
+A 股</strong>上运行本框架,使用 Tushare 镜像(见 <a href="/doc/guide/tushare">tushare.md</a>)。</p>
+<h2 id="1-导入-原始-tushare-标准-cn-存储">1. 导入:原始 Tushare → 标准 CN 存储</h2>
+<p><code>assay.data.tushare.ingest.prepare_cn</code> 读取原始镜像
+(<code>$TUSHARE_DATA_DIR</code>,默认 <code>/data/tushare_data</code>),并写入与
+美股管线相同的标准存储,置于 <code>market=CN</code> 下:</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>存储</th>
+<th>来源</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>price_raw</code></td>
+<td><code>cn/daily</code></td>
+<td>未复权 OHLCV(<code>volume</code> 单位为 手/lots)</td>
+</tr>
+<tr>
+<td><code>adj_events</code></td>
+<td><code>cn/dividend</code></td>
+<td>送转 → 前向 <code>split_ratio = 1 + stk_div</code>;税前现金(<code>cash_div_tax</code>)→ <code>dividend_cash</code>;仅<em>已实施</em>(实施)的分红</td>
+</tr>
+<tr>
+<td><code>universe_snapshots</code></td>
+<td><code>cn/index_weight</code></td>
+<td>CSI300/500/1000 点对点成分(成分变更快照)</td>
+</tr>
+<tr>
+<td><code>trade_status</code></td>
+<td><code>cn/stk_limit</code> + <code>cn/daily</code></td>
+<td>原始 涨停价/跌停价 区间 + 锁定标志(仅 A 股)</td>
+</tr>
+<tr>
+<td><code>security_groups</code></td>
+<td><code>cn/meta/stock_basic</code></td>
+<td>用于行业中性化的按标的行业标签(当前快照)</td>
+</tr>
+</tbody>
+</table></div>
+<pre><code class="language-bash"># writes market=CN partitions under $ASSAY_DATA_DIR
+python scripts/prepare_cn.py 2010-01-01 2026-06-27
+</code></pre>
+<p>复权在读取时从原始事件重新计算(与美股相同的前向
+机制),因此 <code>adj=&quot;split&quot;</code> 仅针对 送转 复权,而
+<code>adj=&quot;total&quot;</code> 额外加入现金分红。</p>
+<h2 id="2-组合回测中的交易约束">2. 组合回测中的交易约束</h2>
+<p>执行层(<code>assay.portfolio.execution.ExecutionSimulator</code>)在
+<code>PortfolioBacktestConfig.market == &quot;A&quot;</code> 且数据存在时强制执行
+A 股规则。这三项现在都已从标准存储接入:</p>
+<ul>
+<li><strong>每日涨跌停(涨跌停)。</strong> 买入正处于涨停的标的、以及卖出
+正处于跌停的标的都会<strong>零成交</strong>(<code>blocked_reason</code> 为 <code>limit_up</code> /
+<code>limit_down</code>)。回测器从 <code>trade_status</code> 自动加载<strong>真实的按板块
+区间</strong>(主板 10%、科创/创业板 20%、北交所 30%、ST 5%),而非
+统一百分比。涨跌停价是原始价而价格面板是复权后的,因此每个
+区间在比较前会通过 <code>adj_close / raw_close</code> 重新基准化到面板基准 —
+参见 <code>PortfolioBacktester._cn_limit_matrices</code>。</li>
+<li><strong>T+1 结算。</strong> 在某次调仓中买入的股票不能在同一步卖出
+(<code>blocked_reason</code> 为 <code>t_plus_1</code>)。对 <code>market == &quot;A&quot;</code> 经由预设激活。</li>
+<li><strong>停牌(停牌)。</strong> 停牌的标的根本没有 <code>price_raw</code> K 线,因此其价格
+为 NaN,执行器将其视为不可交易(<code>blocked_reason</code> 为 <code>suspended</code>)。
+无需额外数据。</li>
+</ul>
+<p><code>A</code> 预设还应用 A 股的<strong>成本模型</strong>:<strong>0.05% 印花税</strong>
+(卖出;2023-08-28 从 0.1% 下调)、0.03% 佣金(最低 ¥5)、0.002% 过户
+费、√-冲击 <code>k=0.20</code>。</p>
+<p>其他市场正确性默认值(预设 <code>'A'</code>):</p>
+<ul>
+<li><strong>强制只做多。</strong> <code>market=='A'</code> 且 <code>long_short=True</code> 会报错 — A 股
+短 卖(融券)受限/不可用,因此空头账本不可执行。</li>
+<li><strong>总回报基准。</strong> 引擎的复权基准由 <code>market</code> 派生
+(A/HK → <code>total</code> = 分红再投资,是 alpha 盈亏的正确基准;美股 →
+<code>split</code>),因此它绝不会在评估缓存中悄然混淆两次运行。</li>
+<li><strong>行业中性化</strong>使用真实行业标签:设置 <code>sector_neutral=True</code>,
+回测器就会从存储自动加载 <code>security_groups</code>(Tushare
+<code>industry</code>);信号中性化器与行业权重约束随即
+启用。不设置时,运行绝不会被悄然做行业平衡。</li>
+</ul>
+<h2 id="3-运行一次-cn-回测">3. 运行一次 CN 回测</h2>
+<pre><code class="language-python">import datetime as dt
+from assay.config import AssayConfig
+from assay.data.store.datastore import DataStore
+from assay.portfolio import PortfolioBacktestConfig, PortfolioBacktester
+
+# A CN DataStore reads market=CN partitions; the 'A' preset drives trading rules.
+store = DataStore(AssayConfig(market=&quot;CN&quot;, data_dir=AssayConfig.from_env().data_dir))
+bt = PortfolioBacktester(store=store)
+
+cfg = PortfolioBacktestConfig.preset(
+    &quot;A&quot;, universe=&quot;CSI300&quot;,
+    period_start=&quot;2022-01-01&quot;, period_end=&quot;2023-12-31&quot;,
+    rebalance_type=&quot;monthly&quot;, weight_method=&quot;signal_prop&quot;,
+)
+report = bt.run(&quot;ts_delta(close, 20) / delay(close, 20)&quot;, cfg)   # a momentum factor
+print(report.total_return, report.sharpe, report.a_share_metrics)
+</code></pre>
+<p>两个市场旋钮,有意分开:</p>
+<ul>
+<li><code>AssayConfig.market=&quot;CN&quot;</code> 选择存储读取哪个<strong>数据分区</strong>。</li>
+<li><code>PortfolioBacktestConfig.market=&quot;A&quot;</code> 选择<strong>交易规则体制</strong>
+(涨跌停 / T+1 / 成本模型)。<code>report.a_share_metrics</code> 报告 <code>n_limit_hits</code>、
+<code>n_forced_holds</code>(T+1)、<code>n_blocked_suspended</code> 及对应比率。</li>
+</ul>
+<p>CN 可用股票池:<code>CSI300</code>、<code>CSI500</code>、<code>CSI1000</code>(点对点、
+无幸存者偏差)。</p>
+<h2 id="4-香港">4. 香港</h2>
+<p>HK 沿用同一套标准存储,置于 <code>market=HK</code> 下,由
+<code>assay.data.tushare.ingest.prepare_hk</code>(CLI:<code>scripts/prepare_hk.py</code>)写入。
+它需要有相应权限的 Tushare 接口 — 见 <a href="/doc/guide/tushare">tushare.md</a>。</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>存储</th>
+<th>来源</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>price_raw</code></td>
+<td><code>hk/daily</code></td>
+<td>未复权 OHLCV(<code>volume</code> 单位为<strong>股</strong>,而非手)</td>
+</tr>
+<tr>
+<td><code>adj_events</code></td>
+<td><code>hk/adj_factor</code></td>
+<td>由 <code>cum_adjfactor</code> 的跳变重建,并与 <code>pre_close</code> 相互印证</td>
+</tr>
+<tr>
+<td><code>universe_snapshots</code></td>
+<td><code>hk/daily</code> 成交额 + <code>hk_basic</code> ISIN</td>
+<td><strong>HK100</strong> 与 <strong>HSHARE100</strong> 点对点成分</td>
+</tr>
+<tr>
+<td><code>trade_status</code></td>
+<td>—</td>
+<td>不写入:港交所没有每日涨跌停区间</td>
+</tr>
+<tr>
+<td><code>security_groups</code></td>
+<td>—</td>
+<td>不写入:Tushare 未提供 HK 行业分类</td>
+</tr>
+</tbody>
+</table></div>
+<pre><code class="language-bash"># writes market=HK partitions under $ASSAY_DATA_DIR_HK (default ./data_hk)
+python scripts/prepare_hk.py 2015-01-01 2026-07-27
+</code></pre>
+<p><strong>HK100</strong> 是覆盖整个港股大盘的股票池。它在每个月末按过去三个月的成交额,
+对所有真正有成交的标的排序,取前 100 名,并在<em>下</em>一个月的第一个交易日生效 —
+因此一份快照永远看不到用来给它打分的收益。</p>
+<p><strong>HSHARE100</strong> 把完全相同的排名规则只施加于 <strong>H 股</strong> — 即在港交所上市、
+注册地却在中国内地的发行人,区别于构成大盘其余部分的红筹股
+(注册于开曼/百慕大的控股公司)与本地香港发行人。成分由 ISIN 的国家前缀
+(<code>CNE</code>)判定,那是发行人注册地的属性,因此永远不会改变;由于上市列表在
+下载时就已包含退市标的,这个池子不存在幸存者偏差。两个股票池大约有一半
+重叠 — 即那些同时也位列大盘成交最活跃标的之中的 H 股。</p>
+<p>当命题关乎内地企业(A/H 两地上市、内地政策敞口、港股通资金流)时,
+请用 <code>HSHARE100</code>;当命题关乎整个香港市场时,请用 <code>HK100</code>。<code>HSI</code> 与
+<code>HSTECH</code> 也已注册,但它们是供应商提供的<strong>当前</strong>快照,因而存在幸存者偏差。</p>
+<p><code>HK</code> 预设在每一个要紧之处都与 <code>A</code> 不同:</p>
+<ul>
+<li><strong>没有涨跌停,没有 T+1。</strong> 港交所两者皆无,因此 <code>price_limit_pct=None</code>
+且 <code>t_plus_1=False</code>;涨跌停与结算这两道闸门根本不会启用。</li>
+<li><strong>允许做空。</strong> 与 <code>A</code> 不同,<code>long_short=True</code> 是被接受的。</li>
+<li><strong>印花税双边收取。</strong> 港交所对买入与卖出同样按 0.10% 征收,因此
+<code>TransactionCostModel</code> 在 <code>market == &quot;HK&quot;</code> 时对称收取 — A 股的 印花税 仍
+只在卖出侧收取。每一边预设合计 0.1484%:经纪佣金 0.04% + 印花税 0.10% +
+港交所交易费 0.00565% + 证监会征费 0.0027% + 财汇局征费 0.00015%。</li>
+<li><strong>总回报基准</strong>,与 <code>A</code> 相同,并且现在确实由已导入的 <code>adj_events</code> 支撑。</li>
+</ul>
+<pre><code class="language-python">store = DataStore(AssayConfig(market=&quot;HK&quot;, data_dir=Path(os.environ[&quot;ASSAY_DATA_DIR_HK&quot;])))
+cfg = PortfolioBacktestConfig.preset(
+    &quot;HK&quot;, universe=&quot;HK100&quot;,       # or &quot;HSHARE100&quot; for H-shares only
+    period_start=&quot;2022-01-01&quot;, period_end=&quot;2023-12-31&quot;,
+)
+</code></pre>
+<p>HK 特有的两点注意:<strong>无法做行业中性化</strong>(没有分组标签),以及 NAV 以
+<strong>HKD</strong> 计价且没有汇率账本,因此一次 HK 运行无法与美股或 CN 的运行直接
+比较。</p>

@@ -1,0 +1,1272 @@
+<h1 class="doc-title">Assay — Full-Stack Architecture Design</h1>
+<p><strong>Version:</strong> 0.1 · Draft<br />
+<strong>Scope:</strong> Functional API · REST API · WebUI · MCP for Agents</p>
+<blockquote>
+<p><strong>Implementation status (2026-06).</strong> The <strong>entire Python backend is now implemented and
+tested</strong> (662 offline tests green): data layer, factor engine, the IC/RankIC/decay/groups/
+turnover <strong>evaluator</strong>, the <strong>factor library</strong> (persistence + correlation + redundancy +
+prune), the <strong><code>AssayService</code></strong> singleton (evaluate / batch / sessions / streaming), the
+<strong>Python SDK</strong> (<code>assay.backtest/batch_backtest/Session/library/stream</code>), the <strong>REST API</strong>
+(FastAPI + SSE), the <strong>MCP server</strong> (8 FastMCP tools, stdio + SSE/HTTP), and the <strong>CLI</strong>
+(<code>run</code>/<code>batch</code>/<code>report</code>/<code>library</code>/<code>serve-api</code>/<code>serve-mcp</code>). See <a href="https://github.com/QFinVerse/Assay/tree/main/src/assay" target="_blank" rel="noopener noreferrer"><code>src/assay/</code></a>.</p>
+<p>Still <strong>planned</strong>: the React <strong>WebUI</strong> (§5, no <code>assay-ui/</code> yet); and two performance
+optimizations the backend works correctly without — the <strong>L1 Arena / incremental O(1)
+cache</strong> (only a session cache + L2 disk cache exist today) and <strong>DAG/CSE batch merging</strong>
+(<code>batch()</code> evaluates factors independently for now). Sections are tagged accordingly.</p>
+<p>Status legend — ✅ <strong>Implemented</strong> · 🔶 <strong>Implemented, simplified vs spec</strong> · 📋 <strong>Planned</strong></p>
+<p>The single universe wired up end-to-end today is <strong>NASDAQ-100</strong> (PIT constituent
+history from MASSIVE); SP500 / Russell 2000 are roadmap. The data source is <strong>MASSIVE</strong>
+US-equity day aggregates, which provide OHLCV + transaction count but <strong>no <code>vwap</code></strong>.</p>
+</blockquote>
+<hr />
+<h2 id="table-of-contents">Table of Contents</h2>
+<ol>
+<li><a href="#1-architecture-overview">Architecture Overview</a></li>
+<li><a href="#2-core-engine-shared-backend">Core Engine (Shared Backend)</a></li>
+<li><a href="#3-functional-python-api">Functional Python API</a></li>
+<li><a href="#4-rest-api">REST API</a></li>
+<li><a href="#5-webui-frontend">WebUI Frontend</a></li>
+<li><a href="#6-mcp-server-for-agents">MCP Server for Agents</a></li>
+<li><a href="#7-cross-cutting-concerns">Cross-Cutting Concerns</a></li>
+<li><a href="#8-deployment">Deployment</a></li>
+</ol>
+<hr />
+<h2 id="1-architecture-overview">1. Architecture Overview</h2>
+<h3 id="1-1-design-philosophy">1.1  Design philosophy</h3>
+<p>Assay exposes four consumption surfaces over a single shared engine. Every surface calls the same underlying computation, cache, and data layer — there is no &quot;API version&quot; of a result vs a &quot;SDK version&quot;. This means:</p>
+<ul>
+<li>A factor evaluated via Python SDK, REST API, WebUI, or MCP agent call produces an identical <code>FactorReport</code></li>
+<li>Cache is shared across all surfaces — a REST call that warms the L1 operator cache benefits a subsequent SDK call</li>
+<li>Auth, rate limiting, and lineage tracking apply uniformly regardless of entry point</li>
+</ul>
+<h3 id="1-2-layer-diagram">1.2  Layer diagram</h3>
+<p>Boxes are tagged with their build status: ✅ implemented, 🔶 partial, 📋 planned.</p>
+<pre><code>┌────────────────────────────────────────────────────────────────────┐
+│  Consumption surfaces                                              │
+│                                                                    │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐  │
+│  │  Python SDK  │  │   REST API   │  │  WebUI   │  │   MCP    │  │
+│  │ ✅ assay.*   │  │ ✅ (FastAPI) │  │🔶 vanilla│  │✅(FastMCP)│ │
+│  └──────┬───────┘  └──────┬───────┘  └────┬─────┘  └────┬─────┘  │
+│         │                 │               │              │        │
+│         └─────────────────┴───────────────┴──────────────┘        │
+│                                   │                                │
+├───────────────────────────────────┼────────────────────────────────┤
+│  Service layer   ✅ IMPLEMENTED    │                                │
+│                    ┌──────────────▼──────────────┐                 │
+│                    │      AssayService            │                 │
+│                    │  evaluate() · batch() ·      │                 │
+│                    │  library() · session()       │                 │
+│                    └──────────────┬──────────────┘                 │
+├───────────────────────────────────┼────────────────────────────────┤
+│  Core engine                      │                                │
+│         ┌─────────────────────────┼──────────────────────┐        │
+│         │             ┌───────────▼──────────┐            │        │
+│         │             │   FactorEngine ✅     │            │        │
+│         │             │ Parser ✅ · DAG/CSE 📋 │            │        │
+│         │             └───────────┬──────────┘            │        │
+│  ┌──────┴──────┐   ┌──────────────┴──────┐  ┌──────────┐  │        │
+│  │ DataStore ✅ │   │ Cache 🔶 session+L2 │  │Evaluator │  │        │
+│  │  (Parquet)  │   │  (L1 Arena/incr 📋)  │  │IC/Decay✅│  │        │
+│  └─────────────┘   └─────────────────────┘  └──────────┘  │        │
+│         └─────────────────────────────────────────────────┘        │
+└────────────────────────────────────────────────────────────────────┘
+</code></pre>
+<p>Built today: the full stack except the React WebUI — <code>DataStore</code>, <code>FactorEngine</code> +
+dual-syntax parser + operators + diagnostics, the IC/decay/groups/turnover <code>Evaluator</code>,
+the <code>FactorLibrary</code>, the <code>AssayService</code> facade, and the SDK / REST / MCP / CLI surfaces.
+The cache is a session + L2-disk cache (the L1 Arena and incremental O(1) update layer
+remain a perf optimization), and <code>batch()</code> runs factors independently (DAG/CSE is future).</p>
+<h3 id="1-3-surface-comparison">1.3  Surface comparison</h3>
+<p>Latency targets remain design goals (no L1 cache / DAG-CSE yet), but all four code
+surfaces below except the WebUI are implemented and tested.</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Surface</th>
+<th>Protocol</th>
+<th>Auth</th>
+<th>Latency target</th>
+<th>Primary user</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Python SDK</td>
+<td>In-process</td>
+<td>None (local)</td>
+<td>&lt; 400ms warm</td>
+<td>Researcher, notebook</td>
+<td>✅ <code>assay.backtest/batch_backtest/Session/library/stream</code></td>
+</tr>
+<tr>
+<td>REST API</td>
+<td>HTTP/SSE</td>
+<td>API key (optional)</td>
+<td>&lt; 500ms warm</td>
+<td>External apps, CI</td>
+<td>✅ FastAPI + SSE, all <code>/v1/*</code> routes</td>
+</tr>
+<tr>
+<td>WebUI</td>
+<td>HTTP → REST</td>
+<td>same-origin</td>
+<td>&lt; 600ms warm</td>
+<td>Human researcher</td>
+<td>🔶 zero-install vanilla-JS app (<code>api/static/</code>, served by FastAPI); React stack is the target rebuild</td>
+</tr>
+<tr>
+<td>MCP Server</td>
+<td>JSON-RPC (stdio/SSE)</td>
+<td>API key</td>
+<td>&lt; 600ms warm</td>
+<td>LLM agent</td>
+<td>✅ FastMCP, 11 tools, stdio + SSE</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="2-core-engine-shared-backend">2. Core Engine (Shared Backend)</h2>
+<blockquote>
+<p><strong>Status: ✅ Implemented</strong> (<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/service.py" target="_blank" rel="noopener noreferrer"><code>src/assay/service.py</code></a>). The
+<code>AssayService</code> singleton, sessions, streaming, and library wiring all exist. The sketch
+below matches the shipped API closely; the live constructor wires <code>DataStore</code> (lazily),
+<code>FactorLibrary</code>, the <code>L2FactorCache</code>, and a <code>SessionRegistry</code>. <code>batch()</code> is implemented
+via a thread pool (DAG/CSE merging is still a future optimization). See §2.1 for a minimal
+direct-engine path that bypasses the service.</p>
+</blockquote>
+<p>All four surfaces route through <code>AssayService</code>, which owns the engine, cache, and data access. It is never instantiated more than once per process.</p>
+<pre><code class="language-python"># assay/service.py   ✅ IMPLEMENTED (sketch — see source for the exact signature)
+
+class AssayService:
+    &quot;&quot;&quot;
+    Singleton service. All surfaces call this.
+    Thread-safe: uses a read-write lock on the factor library.
+    &quot;&quot;&quot;
+    _instance: &quot;AssayService | None&quot; = None
+
+    def __init__(self, config: AssayConfig):
+        self.data_store    = DataStore(config.data_path)
+        self.factor_engine = FactorEngine(config)
+        self.cache         = CacheManager(config.cache)
+        self.library       = FactorLibrary(config.library_path)
+        self.evaluator     = Evaluator(config)
+
+    @classmethod
+    def get(cls) -&gt; &quot;AssayService&quot;:
+        if cls._instance is None:
+            raise RuntimeError(&quot;AssayService not initialized&quot;)
+        return cls._instance
+
+    @classmethod
+    def init(cls, config: AssayConfig) -&gt; &quot;AssayService&quot;:
+        cls._instance = cls(config)
+        return cls._instance
+
+    # ── Primary methods (all surfaces call these) ────────────
+
+    async def evaluate(
+        self,
+        expr:       str,
+        universe:   str,
+        period:     tuple[str, str],
+        horizons:   list[int] = [1, 5, 10, 20],
+        execution:  str = &quot;next_open&quot;,
+        neutralize: list[str] | None = None,
+        as_of:      str | None = None,
+        stream:     bool = False,
+    ) -&gt; FactorReport | AsyncGenerator[FactorEvent, None]:
+        ...
+
+    async def batch(
+        self,
+        exprs:     list[str],
+        universe:  str,
+        period:    tuple[str, str],
+        n_jobs:    int = 8,
+        **kwargs,
+    ) -&gt; list[FactorReport]:
+        ...
+
+    def library_query(
+        self,
+        universe:       str | None = None,
+        min_rank_icir:  float = 0.0,
+        max_redundancy: float = 1.0,
+        source:         str | None = None,
+        sort_by:        str = &quot;rank_icir&quot;,
+        limit:          int = 100,
+    ) -&gt; list[FactorSummary]:
+        ...
+
+    def correlation_matrix(
+        self,
+        factor_ids: list[str],
+        universe:   str,
+        period:     tuple[str, str],
+    ) -&gt; CorrelationResult:
+        ...
+</code></pre>
+<h3 id="2-1-what-exists-today-the-engine-entry-point">2.1  What exists today — the engine entry point ✅</h3>
+<p>Until <code>AssayService</code> lands, the engine is driven directly. A <code>DataStore</code> reads a
+point-in-time panel; <code>FactorEngine.from_store</code> pivots it into aligned <code>(T, N)</code> matrices
+and evaluates a parsed expression. This is the real, runnable cold path
+(<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/engine/engine.py" target="_blank" rel="noopener noreferrer"><code>src/assay/engine/engine.py</code></a>,
+<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/data/store/datastore.py" target="_blank" rel="noopener noreferrer"><code>src/assay/data/store/datastore.py</code></a>):</p>
+<pre><code class="language-python">from assay.config import AssayConfig
+from assay.data.store import DataStore
+from assay.engine import FactorEngine, parse, lint
+
+store = DataStore(AssayConfig.from_env())
+
+# Build an engine over a PIT panel (look-ahead-safe: as_of is required).
+eng = FactorEngine.from_store(
+    store,
+    universe = &quot;NASDAQ100&quot;,                       # only universe wired up today
+    period   = (&quot;2023-01-01&quot;, &quot;2023-12-31&quot;),
+    as_of    = &quot;2023-12-31&quot;,
+    adj      = &quot;split&quot;,                            # none | split | total (alias: forward)
+)
+
+result = eng.evaluate(&quot;cs_rank(ts_corr(close, volume, 20))&quot;)
+result.values        # (T, N) float64 factor matrix
+result.to_frame()    # long (date, symbol, factor) Polars DataFrame
+
+# Structured, JSON-serialisable diagnostics for the agent loop (never raises):
+fd = eng.diagnose(&quot;ts_corr(close, volume, 20)&quot;)
+fd.to_dict()         # {status, failure_mode, errors[], warnings[], stats}
+
+# Panel-free syntax lint (no data needed):
+lint(&quot;ts_mean(close,&quot;).to_dict()                  # ASSAY-P00x parse diagnostic
+</code></pre>
+<p>The IC/RankIC evaluator, forward returns, cache and <code>FactorReport</code> assembly are <strong>now
+implemented</strong> — <code>AssayService.evaluate()</code> returns a scored <code>FactorReport</code> (the §2.1 engine
+path here is just the lowest-level primitive). Batch DAG/CSE merging remains the one
+unbuilt performance item; <code>service.batch()</code> works but evaluates factors independently.</p>
+<hr />
+<h2 id="3-functional-python-api">3. Functional Python API</h2>
+<blockquote>
+<p><strong>Status: ✅ Implemented</strong> (<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/__init__.py" target="_blank" rel="noopener noreferrer"><code>src/assay/__init__.py</code></a>). The full
+SDK below — <code>assay.init</code>, <code>assay.backtest</code>, <code>assay.batch_backtest</code>, <code>assay.Session</code>,
+<code>assay.library</code>, <code>assay.stream</code> — is shipped and tested. <code>assay.init()</code> reads config from
+the environment / project <code>.env</code>; <code>backtest()</code> auto-initializes if you skip it.</p>
+</blockquote>
+<p>The SDK is a thin, ergonomic wrapper over <code>AssayService</code>. It is the lowest-latency surface because it runs in-process with no serialization.</p>
+<h3 id="3-1-installation-and-initialization">3.1  Installation and initialization 📋</h3>
+<pre><code class="language-python">pip install assay-engine          # 📋 not yet published; install from source (§8.1)
+
+import assay
+
+# Initialize once — reads config from env / project .env (see §7.4).
+assay.init()                       # 📋 planned; today: AssayConfig.from_env()
+</code></pre>
+<h3 id="3-2-single-factor-evaluation">3.2  Single factor evaluation</h3>
+<pre><code class="language-python"># Minimal
+report = assay.backtest(&quot;ts_returns(close, 20)&quot;, universe=&quot;NASDAQ100&quot;)
+
+# Full options
+report = assay.backtest(
+    expr       = &quot;ts_corr(close, volume, 20)&quot;,
+    universe   = &quot;NASDAQ100&quot;,
+    period     = (&quot;2020-01-01&quot;, &quot;2024-12-31&quot;),
+    horizons   = [1, 5, 10, 20],
+    execution  = &quot;next_open&quot;,
+    neutralize = [&quot;sector&quot;],
+    as_of      = &quot;2024-12-31&quot;,        # PIT: only data known by this date
+)
+
+# Access results
+print(report.rank_ic)                 # 0.047
+print(report.rank_icir)               # 0.61
+print(report.decay_halflife_days)     # 12
+print(report.lookahead_detected)      # False
+print(report.suggestion)              # &quot;Consider shorter window...&quot;
+
+# Serialize
+report.to_dict()                      # dict — for agent consumption
+report.to_json()                      # JSON string
+report.to_dataframe()                 # pd.DataFrame of IC time series
+</code></pre>
+<h3 id="3-3-batch-evaluation">3.3  Batch evaluation</h3>
+<pre><code class="language-python">factors = [
+    &quot;ts_returns(close, 20)&quot;,
+    &quot;ts_corr(close, volume, 20)&quot;,
+    &quot;cs_rank(ts_std(ts_returns(close,1), 20))&quot;,
+    # ... hundreds of LLM-generated expressions
+]
+
+reports = assay.batch_backtest(
+    exprs    = factors,
+    universe = &quot;NASDAQ100&quot;,
+    period   = (&quot;2020-01-01&quot;, &quot;2024-12-31&quot;),
+    n_jobs   = 8,
+    sort_by  = &quot;rank_icir&quot;,
+)
+
+# Reports sorted by rank_icir descending
+for r in reports[:5]:
+    print(f&quot;{r.expr:&lt;50}  IC={r.rank_ic:.3f}  ICIR={r.rank_icir:.2f}&quot;)
+</code></pre>
+<h3 id="3-4-session-context-amortize-setup-costs">3.4  Session context (amortize setup costs)</h3>
+<pre><code class="language-python"># Session pre-loads the data panel and forward returns once.
+# All factors in the session share the same loaded data — no repeated I/O.
+
+with assay.Session(
+    universe = &quot;NASDAQ100&quot;,
+    period   = (&quot;2020-01-01&quot;, &quot;2024-12-31&quot;),
+) as sess:
+    r1 = sess.backtest(&quot;ts_returns(close, 20)&quot;)        # ~350ms (first: loads panel)
+    r2 = sess.backtest(&quot;ts_corr(close, volume, 20)&quot;)   # ~40ms  (panel already loaded)
+    r3 = sess.backtest(&quot;cs_rank(ts_std(close, 20))&quot;)   # ~35ms
+
+    # Batch within a session — shares panel + fwd returns
+    reports = sess.batch_backtest(factors, n_jobs=8)
+</code></pre>
+<h3 id="3-5-custom-python-factor-functions">3.5  Custom Python factor functions</h3>
+<pre><code class="language-python">import polars as pl
+
+def my_factor(df: pl.DataFrame) -&gt; pl.Series:
+    &quot;&quot;&quot;df has columns: date, symbol, open, high, low, close, volume, transactions
+
+    (The MASSIVE day-aggregate source provides OHLCV + transaction count; `vwap`
+    is not available — derive a proxy from price/volume if you need one.)
+    &quot;&quot;&quot;
+    momentum = df[&quot;close&quot;] / df[&quot;close&quot;].shift(20) - 1
+    return momentum * df[&quot;volume&quot;] / df[&quot;volume&quot;].shift(20)
+
+report = assay.backtest(my_factor, universe=&quot;NASDAQ100&quot;)   # 📋 custom-fn path planned
+</code></pre>
+<h3 id="3-6-factor-library-access">3.6  Factor library access</h3>
+<pre><code class="language-python"># Query the library
+factors = assay.library.list(
+    min_rank_icir  = 0.5,
+    max_redundancy = 0.6,
+    sort_by        = &quot;rank_icir&quot;,
+)
+
+# Correlation matrix
+corr = assay.library.correlation_matrix(
+    factor_ids = [f.factor_id for f in factors[:50]],
+    universe   = &quot;NASDAQ100&quot;,
+)
+
+# Add / remove
+assay.library.save(report)
+assay.library.delete(factor_id=&quot;abc123&quot;)
+assay.library.prune(redundancy_threshold=0.7, dry_run=True)
+</code></pre>
+<h3 id="3-7-streaming-async">3.7  Streaming (async)</h3>
+<pre><code class="language-python">import asyncio
+
+async def watch_evaluation():
+    async for event in assay.stream(&quot;ts_corr(close, volume, 20)&quot;, universe=&quot;NASDAQ100&quot;):
+        if event.type == &quot;ic_series&quot;:
+            print(f&quot;IC mean so far: {event.data['ic_mean']:.3f}&quot;)
+        elif event.type == &quot;complete&quot;:
+            print(f&quot;Done: RankICIR = {event.report.rank_icir:.2f}&quot;)
+
+asyncio.run(watch_evaluation())
+</code></pre>
+<hr />
+<h2 id="4-rest-api">4. REST API</h2>
+<blockquote>
+<p><strong>Status: ✅ Implemented</strong> (<a href="https://github.com/QFinVerse/Assay/tree/main/src/assay/api" target="_blank" rel="noopener noreferrer"><code>src/assay/api/</code></a>). The FastAPI app, all
+<code>/v1/*</code> routes, SSE streaming, optional API-key auth (<code>ASSAY_API_KEYS</code>; open if unset),
+and the diagnostics-based error schema (§4.6) are shipped and tested. Run it with
+<code>python -m assay.cli serve-api</code> (or <code>uvicorn assay.api.app:app</code>).</p>
+</blockquote>
+<p>The REST API is a FastAPI application. It exposes the same <code>AssayService</code> methods over HTTP. Streaming evaluation uses Server-Sent Events (SSE).</p>
+<h3 id="4-1-base-url-and-versioning">4.1  Base URL and versioning</h3>
+<pre><code>Base URL:  https://api.assay.local/v1
+Auth:      X-API-Key header (or Bearer token for WebUI sessions)
+Format:    application/json (default), text/event-stream (SSE)
+</code></pre>
+<h3 id="4-2-evaluation-endpoints">4.2  Evaluation endpoints</h3>
+<h4 id="post-v1-factor-evaluate"><code>POST /v1/factor/evaluate</code></h4>
+<p>Evaluate a single factor. Supports both blocking (returns full report) and streaming (SSE events) modes.</p>
+<pre><code>Request:
+  Content-Type: application/json
+
+  {
+    &quot;expr&quot;:       &quot;ts_corr(close, volume, 20)&quot;,
+    &quot;universe&quot;:   &quot;NASDAQ100&quot;,
+    &quot;period&quot;:     [&quot;2020-01-01&quot;, &quot;2024-12-31&quot;],
+    &quot;horizons&quot;:   [1, 5, 10, 20],
+    &quot;execution&quot;:  &quot;next_open&quot;,
+    &quot;neutralize&quot;: [&quot;sector&quot;],
+    &quot;as_of&quot;:      &quot;2024-12-31&quot;,
+    &quot;stream&quot;:     false
+  }
+
+Response (stream=false):
+  HTTP 200  application/json
+  { ...FactorReport }
+
+Response (stream=true):
+  HTTP 200  text/event-stream
+
+  event: eval.started
+  data: {&quot;factor_id&quot;: &quot;abc123&quot;, &quot;expr&quot;: &quot;ts_corr(close, volume, 20)&quot;}
+
+  event: eval.ic_series
+  data: {&quot;ic&quot;: [0.03, 0.05, ...], &quot;dates&quot;: [&quot;2020-01-02&quot;, ...]}
+
+  event: eval.decay
+  data: {&quot;ic_by_horizon&quot;: {&quot;1&quot;: 0.047, &quot;5&quot;: 0.041, &quot;10&quot;: 0.035, &quot;20&quot;: 0.028}, &quot;halflife&quot;: 12}
+
+  event: eval.groups
+  data: {&quot;quintile_returns&quot;: {&quot;Q1&quot;: -0.0012, &quot;Q2&quot;: -0.0003, &quot;Q3&quot;: 0.0002, &quot;Q4&quot;: 0.0008, &quot;Q5&quot;: 0.0015}}
+
+  event: eval.complete
+  data: { ...full FactorReport }
+</code></pre>
+<h4 id="post-v1-factor-batch"><code>POST /v1/factor/batch</code></h4>
+<p>Evaluate a list of factors in parallel. Returns when all complete.</p>
+<pre><code>Request:
+  {
+    &quot;exprs&quot;:    [&quot;ts_returns(close, 20)&quot;, &quot;ts_corr(close, volume, 20)&quot;, ...],
+    &quot;universe&quot;: &quot;NASDAQ100&quot;,
+    &quot;period&quot;:   [&quot;2020-01-01&quot;, &quot;2024-12-31&quot;],
+    &quot;n_jobs&quot;:   8,
+    &quot;sort_by&quot;:  &quot;rank_icir&quot;
+  }
+
+Response:
+  HTTP 200
+  {
+    &quot;total&quot;:   50,
+    &quot;elapsed_ms&quot;: 5420,
+    &quot;reports&quot;: [ ...FactorReport[], sorted by rank_icir ]
+  }
+</code></pre>
+<h4 id="post-v1-session-create"><code>POST /v1/session/create</code></h4>
+<p>Create a session that pre-loads the data panel. Subsequent evaluate calls in the session skip the panel load (~265ms saved per factor).</p>
+<pre><code>Request:
+  { &quot;universe&quot;: &quot;NASDAQ100&quot;, &quot;period&quot;: [&quot;2020-01-01&quot;, &quot;2024-12-31&quot;] }
+
+Response:
+  { &quot;session_id&quot;: &quot;sess_xyz789&quot;, &quot;setup_ms&quot;: 309, &quot;expires_at&quot;: &quot;2025-01-16T02:00:00Z&quot; }
+
+Usage:
+  POST /v1/factor/evaluate  with header  X-Session-Id: sess_xyz789
+  → panel load skipped, hot path only (~40ms)
+</code></pre>
+<h3 id="4-3-library-endpoints">4.3  Library endpoints</h3>
+<pre><code>GET  /v1/library/factors
+     ?universe=NASDAQ100&amp;min_rank_icir=0.5&amp;max_redundancy=0.6
+      &amp;source=AGENT&amp;sort_by=rank_icir&amp;limit=100&amp;offset=0
+  → { &quot;total&quot;: 284, &quot;factors&quot;: [FactorSummary...] }
+
+GET  /v1/library/factors/{factor_id}
+  → FactorReport (full)
+
+POST /v1/library/factors
+     body: FactorReport
+  → { &quot;factor_id&quot;: &quot;abc123&quot;, &quot;saved&quot;: true }
+
+DELETE /v1/library/factors
+       body: { &quot;factor_ids&quot;: [&quot;abc123&quot;, &quot;def456&quot;] }
+  → { &quot;deleted&quot;: 2 }
+
+GET  /v1/library/correlation-matrix
+     ?factor_ids=abc123,def456,...&amp;universe=NASDAQ100&amp;period=2020-01-01,2024-12-31
+  → { &quot;matrix&quot;: [[1.0, 0.82, ...], ...], &quot;factor_ids&quot;: [&quot;abc123&quot;, ...] }
+
+GET  /v1/library/embedding
+     ?factor_ids=...&amp;universe=NASDAQ100&amp;period=...
+  → { &quot;coords&quot;: [{&quot;id&quot;: &quot;abc123&quot;, &quot;x&quot;: 0.43, &quot;y&quot;: -0.21, &quot;rank_icir&quot;: 0.61}, ...] }
+
+POST /v1/library/prune
+     body: { &quot;redundancy_threshold&quot;: 0.7, &quot;dry_run&quot;: true }
+  → { &quot;would_delete&quot;: [&quot;abc123&quot;, ...], &quot;count&quot;: 14 }
+</code></pre>
+<h3 id="4-4-system-endpoints">4.4  System endpoints</h3>
+<pre><code>GET  /v1/system/status
+  → {
+      &quot;engine_version&quot;: &quot;0.1.0&quot;,
+      &quot;data&quot;: {
+        &quot;market&quot;: &quot;US&quot;,
+        &quot;last_sync&quot;: &quot;2024-12-31T21:05:00Z&quot;,
+        &quot;trading_days_available&quot;: 1260,
+        &quot;symbols_available&quot;: 101
+      },
+      &quot;cache&quot;: {
+        &quot;l1_entries&quot;: 892,
+        &quot;l1_hit_rate_1h&quot;: 0.84,
+        &quot;l2_entries&quot;: 4201,
+        &quot;l2_size_gb&quot;: 4.2
+      },
+      &quot;active_sessions&quot;: 3
+    }
+
+GET  /v1/system/data-calendar?market=US&amp;year=2024
+  → [{ &quot;date&quot;: &quot;2024-01-02&quot;, &quot;coverage_pct&quot;: 1.0, &quot;last_sync&quot;: &quot;2024-01-03T...&quot; }, ...]
+
+GET  /v1/system/universes
+  → [{ &quot;id&quot;: &quot;NASDAQ100&quot;, &quot;n_symbols&quot;: 101, &quot;last_rebalance&quot;: &quot;2024-12-20&quot; }, ...]
+</code></pre>
+<h3 id="4-5-fastapi-application-structure">4.5  FastAPI application structure</h3>
+<pre><code class="language-python"># assay/api/app.py
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title=&quot;Assay API&quot;, version=&quot;0.1.0&quot;)
+
+app.add_middleware(CORSMiddleware, allow_origins=[&quot;*&quot;])
+
+app.include_router(factor_router,  prefix=&quot;/v1/factor&quot;,  tags=[&quot;Factor&quot;])
+app.include_router(library_router, prefix=&quot;/v1/library&quot;, tags=[&quot;Library&quot;])
+app.include_router(session_router, prefix=&quot;/v1/session&quot;, tags=[&quot;Session&quot;])
+app.include_router(system_router,  prefix=&quot;/v1/system&quot;,  tags=[&quot;System&quot;])
+
+
+# assay/api/routes/factor.py
+
+@router.post(&quot;/evaluate&quot;)
+async def evaluate_factor(req: EvaluateRequest, api_key: APIKey = Depends(auth)):
+    svc = AssayService.get()
+    if req.stream:
+        return StreamingResponse(
+            svc.evaluate(stream=True, **req.dict(exclude={&quot;stream&quot;})),
+            media_type=&quot;text/event-stream&quot;
+        )
+    report = await svc.evaluate(**req.dict(exclude={&quot;stream&quot;}))
+    return report.to_dict()
+</code></pre>
+<h3 id="4-6-error-schema">4.6  Error schema</h3>
+<p>Errors mirror the implemented diagnostics system (<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/engine/diagnostics.py" target="_blank" rel="noopener noreferrer"><code>assay.engine.diagnostics</code></a>).
+Each problem carries the stable diagnostic <code>code</code> (<code>ASSAY-P###</code> parse / <code>ASSAY-E###</code>
+execute / <code>ASSAY-O###</code> output), the coarse <code>failure_mode</code>, a character <code>location</code>, and an
+actionable <code>suggestion</code>:</p>
+<pre><code class="language-json">{
+  &quot;error&quot;: {
+    &quot;code&quot;:       &quot;ASSAY-E007&quot;,
+    &quot;name&quot;:       &quot;LOOKAHEAD_SHIFT&quot;,
+    &quot;failure_mode&quot;: &quot;LOOKAHEAD&quot;,
+    &quot;severity&quot;:   &quot;error&quot;,
+    &quot;stage&quot;:      &quot;execute&quot;,
+    &quot;message&quot;:    &quot;A negative look-back peeks into the future (ts_delay(x, d&gt;=0)).&quot;,
+    &quot;location&quot;:   { &quot;start&quot;: 0, &quot;end&quot;: 8, &quot;snippet&quot;: &quot;ts_delay(close, -5)\n^^^^^^^^&quot; },
+    &quot;suggestion&quot;: &quot;Use a non-negative window.&quot;,
+    &quot;factor_id&quot;:  &quot;abc123&quot;
+  }
+}
+</code></pre>
+<p><code>failure_mode</code> (FactorReport-level, from the diagnostics catalog): <code>SYNTAX_ERROR</code> ·
+<code>LOOKAHEAD</code> · <code>CONSTANT</code> · <code>ALL_NAN</code> · <code>RUNTIME_ERROR</code>. Transport/data errors not produced
+by the engine — <code>DATA_NOT_FOUND</code>, <code>UNIVERSE_NOT_FOUND</code>, <code>SESSION_EXPIRED</code> — are 📋 planned
+service-layer additions on top of these.</p>
+<hr />
+<h2 id="5-webui-frontend">5. WebUI Frontend</h2>
+<blockquote>
+<p><strong>Status: 🔶 A runnable WebUI exists — but not in this React/Vite stack.</strong> Because the
+build environment has no npm access, the shipped UI is a <strong>zero-install vanilla-JS app</strong>
+at <a href="https://github.com/QFinVerse/Assay/tree/main/src/assay/api/static" target="_blank" rel="noopener noreferrer"><code>src/assay/api/static/</code></a>, served by FastAPI (<code>serve-api</code> →
+<code>http://localhost:8000</code>): the three screens, hand-rolled SVG charts, a lightweight editor
+(not Monaco), and SSE-streaming evaluate, all on the real <code>/v1/*</code> API. The React 18 + Vite</p>
+<ul>
+<li>Recharts + Monaco stack below remains the <strong>target rebuild</strong> (📋); see the companion
+<strong>Assay WebUI — Detailed Design</strong> doc (<a href="/doc/design/webui">webui.md</a>).</li>
+</ul>
+</blockquote>
+<h3 id="5-1-tech-stack">5.1  Tech stack</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Layer</th>
+<th>Technology</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Framework</td>
+<td>React 18</td>
+<td>Concurrent rendering for progressive chart streaming</td>
+</tr>
+<tr>
+<td>Build</td>
+<td>Vite</td>
+<td>Fast HMR, tree-shaking, &lt; 200ms dev reload</td>
+</tr>
+<tr>
+<td>Routing</td>
+<td>React Router v6</td>
+<td>File-based routing, nested layouts</td>
+</tr>
+<tr>
+<td>State</td>
+<td>Zustand</td>
+<td>Lightweight global state; no boilerplate</td>
+</tr>
+<tr>
+<td>Data fetching</td>
+<td>React Query + fetch</td>
+<td>SSE streaming support, caching, background refetch</td>
+</tr>
+<tr>
+<td>Charts</td>
+<td>Recharts</td>
+<td>React-native, composable, sufficient for all Phase 1 chart types</td>
+</tr>
+<tr>
+<td>Editor</td>
+<td>Monaco Editor</td>
+<td>VS Code engine; custom Assay language extension</td>
+</tr>
+<tr>
+<td>Styling</td>
+<td>Tailwind CSS</td>
+<td>Utility-first, design tokens, dark mode</td>
+</tr>
+<tr>
+<td>Icons</td>
+<td>Tabler Icons</td>
+<td>Consistent outline style, 5800+ icons</td>
+</tr>
+<tr>
+<td>Types</td>
+<td>TypeScript</td>
+<td>End-to-end type safety via OpenAPI codegen</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="5-2-project-structure">5.2  Project structure</h3>
+<pre><code>assay-ui/
+├── src/
+│   ├── api/                    # Auto-generated OpenAPI client + custom hooks
+│   │   ├── client.ts           # Generated from /v1/openapi.json
+│   │   ├── hooks/
+│   │   │   ├── useEvaluate.ts  # React Query hook wrapping SSE stream
+│   │   │   ├── useLibrary.ts
+│   │   │   └── useSystem.ts
+│   │   └── types.ts            # FactorReport, FactorSummary, etc.
+│   │
+│   ├── components/
+│   │   ├── editor/
+│   │   │   ├── ExprEditor.tsx  # Monaco instance with Assay language extension
+│   │   │   ├── assay-lang.ts   # Token rules, autocomplete, param hints
+│   │   │   └── syntax-bridge.ts # qlib ↔ Python syntax conversion
+│   │   ├── charts/
+│   │   │   ├── ICTimeSeries.tsx
+│   │   │   ├── DecayCurve.tsx
+│   │   │   ├── GroupReturns.tsx
+│   │   │   ├── FactorHeatmap.tsx
+│   │   │   ├── TurnoverPlot.tsx
+│   │   │   └── ReturnDistribution.tsx
+│   │   ├── library/
+│   │   │   ├── FactorList.tsx
+│   │   │   ├── CorrelationMatrix.tsx
+│   │   │   ├── AlphaSpaceMap.tsx
+│   │   │   └── LineageDAG.tsx
+│   │   └── shared/
+│   │       ├── FactorReport.tsx   # Structured FactorReport display
+│   │       ├── MetricCard.tsx
+│   │       └── StatusBadge.tsx
+│   │
+│   ├── pages/
+│   │   ├── Dashboard.tsx
+│   │   ├── FactorLibrary.tsx
+│   │   └── SingleFactorTest.tsx
+│   │
+│   ├── store/
+│   │   ├── global.ts           # universe, period, session_id (shared across pages)
+│   │   └── library.ts          # factor library client-side cache
+│   │
+│   └── main.tsx
+│
+├── public/
+└── vite.config.ts
+</code></pre>
+<h3 id="5-3-sse-streaming-hook">5.3  SSE streaming hook</h3>
+<pre><code class="language-typescript">// src/api/hooks/useEvaluate.ts
+
+type EvalEvent =
+  | { type: &quot;eval.started&quot;;   data: { factor_id: string } }
+  | { type: &quot;eval.ic_series&quot;; data: { ic: number[]; dates: string[] } }
+  | { type: &quot;eval.decay&quot;;     data: { ic_by_horizon: Record&lt;number, number&gt;; halflife: number } }
+  | { type: &quot;eval.groups&quot;;    data: { quintile_returns: Record&lt;string, number&gt; } }
+  | { type: &quot;eval.complete&quot;;  data: FactorReport }
+
+export function useEvaluate() {
+  const [events, setEvents] = useState&lt;EvalEvent[]&gt;([])
+  const [isLoading, setIsLoading] = useState(false)
+
+  const evaluate = useCallback(async (req: EvaluateRequest) =&gt; {
+    setIsLoading(true)
+    setEvents([])
+
+    const res = await fetch(&quot;/v1/factor/evaluate&quot;, {
+      method: &quot;POST&quot;,
+      headers: { &quot;Content-Type&quot;: &quot;application/json&quot; },
+      body: JSON.stringify({ ...req, stream: true }),
+    })
+
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const lines = decoder.decode(value).split(&quot;\n&quot;)
+      for (const line of lines) {
+        if (line.startsWith(&quot;data: &quot;)) {
+          const event = JSON.parse(line.slice(6)) as EvalEvent
+          setEvents(prev =&gt; [...prev, event])
+          if (event.type === &quot;eval.complete&quot;) setIsLoading(false)
+        }
+      }
+    }
+  }, [])
+
+  return { evaluate, events, isLoading }
+}
+</code></pre>
+<h3 id="5-4-monaco-assay-language-extension">5.4  Monaco Assay language extension</h3>
+<pre><code class="language-typescript">// src/components/editor/assay-lang.ts
+
+import * as monaco from &quot;monaco-editor&quot;
+import { OPERATOR_SCHEMA } from &quot;@/api/types&quot;
+
+export function registerAssayLanguage() {
+  monaco.languages.register({ id: &quot;assay&quot; })
+
+  // Syntax highlighting: operators, fields, numbers, operators
+  monaco.languages.setMonarchTokensProvider(&quot;assay&quot;, {
+    tokenizer: {
+      root: [
+        [/\$[a-z_]+/, &quot;variable.predefined&quot;],         // qlib $close
+        [/\b(ts_|cs_|calc_)\w+/, &quot;keyword&quot;],           // Assay operators
+        [/\b(Ref|Mean|Std|Corr|EMA|Rank|Delta)\b/, &quot;keyword.control&quot;], // qlib ops
+        [/\b(open|high|low|close|volume|transactions)\b/, &quot;variable&quot;],  // MASSIVE provides no vwap
+        [/[-+*/().,&lt;&gt;?:]/, &quot;operator&quot;],
+        [/\d+(\.\d+)?/, &quot;number&quot;],
+      ]
+    }
+  })
+
+  // Autocomplete: ts_ prefix → all time-series operators with signatures
+  monaco.languages.registerCompletionItemProvider(&quot;assay&quot;, {
+    provideCompletionItems(model, position) {
+      const word = model.getWordUntilPosition(position)
+      return {
+        suggestions: Object.entries(OPERATOR_SCHEMA).map(([name, schema]) =&gt; ({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Function,
+          insertText: schema.insert_template,  // e.g. &quot;ts_corr(${1:x}, ${2:y}, ${3:d})&quot;
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          documentation: schema.description,
+          detail: schema.signature,
+        }))
+      }
+    }
+  })
+
+  // Parameter hints inside function calls
+  monaco.languages.registerSignatureHelpProvider(&quot;assay&quot;, {
+    signatureHelpTriggerCharacters: [&quot;(&quot;, &quot;,&quot;],
+    provideSignatureHelp(model, position) {
+      // Parse which function and argument we're inside
+      // Return parameter documentation from OPERATOR_SCHEMA
+      ...
+    }
+  })
+}
+</code></pre>
+<h3 id="5-5-global-state">5.5  Global state</h3>
+<pre><code class="language-typescript">// src/store/global.ts  (Zustand)
+
+interface GlobalState {
+  universe:   string
+  period:     [string, string]
+  sessionId:  string | null
+  setUniverse: (u: string) =&gt; void
+  setPeriod:   (p: [string, string]) =&gt; void
+  createSession: () =&gt; Promise&lt;void&gt;
+}
+
+export const useGlobal = create&lt;GlobalState&gt;((set, get) =&gt; ({
+  universe:  &quot;NASDAQ100&quot;,
+  period:    [&quot;2020-01-01&quot;, &quot;2024-12-31&quot;],
+  sessionId: null,
+
+  setUniverse: (universe) =&gt; {
+    set({ universe, sessionId: null })  // changing universe invalidates session
+    get().createSession()
+  },
+
+  setPeriod: (period) =&gt; {
+    set({ period, sessionId: null })
+    get().createSession()
+  },
+
+  createSession: async () =&gt; {
+    const { universe, period } = get()
+    const res = await fetch(&quot;/v1/session/create&quot;, {
+      method: &quot;POST&quot;,
+      body: JSON.stringify({ universe, period })
+    })
+    const { session_id } = await res.json()
+    set({ sessionId: session_id })
+  }
+}))
+</code></pre>
+<hr />
+<h2 id="6-mcp-server-for-agents">6. MCP Server for Agents</h2>
+<blockquote>
+<p><strong>Status: ✅ Implemented</strong> (<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/mcp/server.py" target="_blank" rel="noopener noreferrer"><code>src/assay/mcp/server.py</code></a>). Built
+on the high-level <strong>FastMCP</strong> API (<code>mcp.server.fastmcp.FastMCP</code>); all eight tools below
+are registered over <code>AssayService</code>, and <code>assay_evaluate</code>'s description is enriched with
+the live <code>operator_schema()</code> (§6.6). Run it with <code>python -m assay.mcp.server</code> (stdio) or
+<code>python -m assay.cli serve-mcp --transport sse --port 8001</code>. (Note: the SDK-style
+low-level snippet in §6.4 predates the FastMCP implementation — see the source for the
+shipped decorator-based form.)</p>
+</blockquote>
+<p>The MCP server exposes Assay's evaluation capabilities as tools that LLM agents can call via the Model Context Protocol. This is the primary interface for LLM agent-driven alpha mining.</p>
+<h3 id="6-1-protocol">6.1  Protocol</h3>
+<pre><code>Transport:       stdio (default, for Claude Desktop / local agents)
+                 SSE over HTTP (for remote agents, e.g. cloud-hosted LLMs)
+MCP version:     2024-11-05
+Auth (SSE):      X-API-Key header
+</code></pre>
+<h3 id="6-2-exposed-tools">6.2  Exposed tools</h3>
+<p>The MCP server exposes eight tools covering the full evaluation-library loop:</p>
+<pre><code>assay_evaluate           — evaluate a single factor expression
+assay_batch              — evaluate multiple factors in parallel
+assay_library_list       — list factors in the library with filters
+assay_library_get        — get the full FactorReport for one factor
+assay_library_save       — save a FactorReport to the library
+assay_library_correlation— compute pairwise correlation between factors
+assay_library_prune      — identify and optionally remove redundant factors
+assay_system_status      — get data freshness and cache statistics
+</code></pre>
+<h3 id="6-3-tool-definitions">6.3  Tool definitions</h3>
+<pre><code class="language-json">{
+  &quot;name&quot;: &quot;assay_evaluate&quot;,
+  &quot;description&quot;: &quot;Evaluate a quantitative alpha factor expression and return a structured FactorReport with IC, RankIC, decay, redundancy score, lookahead detection, and a natural language suggestion. Supports both qlib syntax (Ref($close,5)) and Python syntax (ts_delay(close,5)).&quot;,
+  &quot;inputSchema&quot;: {
+    &quot;type&quot;: &quot;object&quot;,
+    &quot;properties&quot;: {
+      &quot;expr&quot;:      { &quot;type&quot;: &quot;string&quot;, &quot;description&quot;: &quot;Factor expression (qlib or Python syntax)&quot; },
+      &quot;universe&quot;:  { &quot;type&quot;: &quot;string&quot;, &quot;enum&quot;: [&quot;NASDAQ100&quot;, &quot;SP500&quot;, &quot;Russell2000&quot;], &quot;default&quot;: &quot;NASDAQ100&quot;, &quot;description&quot;: &quot;Only NASDAQ100 is wired up today; SP500/Russell2000 are roadmap.&quot; },
+      &quot;period&quot;:    { &quot;type&quot;: &quot;array&quot;,  &quot;items&quot;: {&quot;type&quot;: &quot;string&quot;}, &quot;description&quot;: &quot;['YYYY-MM-DD', 'YYYY-MM-DD']&quot; },
+      &quot;horizons&quot;:  { &quot;type&quot;: &quot;array&quot;,  &quot;items&quot;: {&quot;type&quot;: &quot;integer&quot;}, &quot;default&quot;: [1, 5, 10, 20] },
+      &quot;neutralize&quot;:{ &quot;type&quot;: &quot;array&quot;,  &quot;items&quot;: {&quot;type&quot;: &quot;string&quot;}, &quot;description&quot;: &quot;['sector', 'industry'] or null&quot; }
+    },
+    &quot;required&quot;: [&quot;expr&quot;]
+  }
+}
+</code></pre>
+<pre><code class="language-json">{
+  &quot;name&quot;: &quot;assay_batch&quot;,
+  &quot;description&quot;: &quot;Evaluate multiple factor expressions in parallel using DAG-aware common subexpression elimination. Returns results sorted by rank_icir. Prefer this over calling assay_evaluate in a loop — batch evaluation is 10-50x faster due to shared intermediate computations.&quot;,
+  &quot;inputSchema&quot;: {
+    &quot;type&quot;: &quot;object&quot;,
+    &quot;properties&quot;: {
+      &quot;exprs&quot;:    { &quot;type&quot;: &quot;array&quot;, &quot;items&quot;: {&quot;type&quot;: &quot;string&quot;}, &quot;description&quot;: &quot;List of factor expressions&quot; },
+      &quot;universe&quot;: { &quot;type&quot;: &quot;string&quot;, &quot;default&quot;: &quot;NASDAQ100&quot; },
+      &quot;period&quot;:   { &quot;type&quot;: &quot;array&quot;,  &quot;items&quot;: {&quot;type&quot;: &quot;string&quot;} },
+      &quot;n_jobs&quot;:   { &quot;type&quot;: &quot;integer&quot;, &quot;default&quot;: 8, &quot;description&quot;: &quot;Parallel workers&quot; },
+      &quot;sort_by&quot;:  { &quot;type&quot;: &quot;string&quot;, &quot;enum&quot;: [&quot;rank_icir&quot;, &quot;rank_ic&quot;, &quot;decay_halflife&quot;], &quot;default&quot;: &quot;rank_icir&quot; }
+    },
+    &quot;required&quot;: [&quot;exprs&quot;]
+  }
+}
+</code></pre>
+<pre><code class="language-json">{
+  &quot;name&quot;: &quot;assay_library_list&quot;,
+  &quot;description&quot;: &quot;List factors in the Assay factor library with optional filters. Use this to understand what factors already exist before generating new ones — the redundancy_score field tells you how similar a new factor is to existing ones.&quot;,
+  &quot;inputSchema&quot;: {
+    &quot;type&quot;: &quot;object&quot;,
+    &quot;properties&quot;: {
+      &quot;min_rank_icir&quot;:  { &quot;type&quot;: &quot;number&quot;, &quot;default&quot;: 0.0 },
+      &quot;max_redundancy&quot;: { &quot;type&quot;: &quot;number&quot;, &quot;default&quot;: 1.0, &quot;description&quot;: &quot;0.0-1.0; lower = more unique&quot; },
+      &quot;source&quot;:         { &quot;type&quot;: &quot;string&quot;, &quot;enum&quot;: [&quot;AGENT&quot;, &quot;HUMAN&quot;, &quot;WQ101&quot;, &quot;IMPORTED&quot;] },
+      &quot;sort_by&quot;:        { &quot;type&quot;: &quot;string&quot;, &quot;default&quot;: &quot;rank_icir&quot; },
+      &quot;limit&quot;:          { &quot;type&quot;: &quot;integer&quot;, &quot;default&quot;: 20, &quot;maximum&quot;: 100 }
+    }
+  }
+}
+</code></pre>
+<pre><code class="language-json">{
+  &quot;name&quot;: &quot;assay_library_correlation&quot;,
+  &quot;description&quot;: &quot;Compute pairwise rank-correlation between a list of factor IDs. Returns a correlation matrix. Use this to check if a newly generated factor is redundant with existing library factors before submitting it for detailed evaluation.&quot;,
+  &quot;inputSchema&quot;: {
+    &quot;type&quot;: &quot;object&quot;,
+    &quot;properties&quot;: {
+      &quot;factor_ids&quot;: { &quot;type&quot;: &quot;array&quot;, &quot;items&quot;: {&quot;type&quot;: &quot;string&quot;}, &quot;description&quot;: &quot;List of factor_id strings from the library&quot; },
+      &quot;universe&quot;:   { &quot;type&quot;: &quot;string&quot;, &quot;default&quot;: &quot;NASDAQ100&quot; }
+    },
+    &quot;required&quot;: [&quot;factor_ids&quot;]
+  }
+}
+</code></pre>
+<pre><code class="language-json">{
+  &quot;name&quot;: &quot;assay_library_prune&quot;,
+  &quot;description&quot;: &quot;Identify factors in the library with pairwise correlation above a threshold. In dry_run mode, returns the list of dominated factors that would be removed. In non-dry-run mode, removes them.&quot;,
+  &quot;inputSchema&quot;: {
+    &quot;type&quot;: &quot;object&quot;,
+    &quot;properties&quot;: {
+      &quot;redundancy_threshold&quot;: { &quot;type&quot;: &quot;number&quot;, &quot;default&quot;: 0.7 },
+      &quot;dry_run&quot;:              { &quot;type&quot;: &quot;boolean&quot;, &quot;default&quot;: true }
+    }
+  }
+}
+</code></pre>
+<h3 id="6-4-mcp-server-implementation">6.4  MCP server implementation</h3>
+<pre><code class="language-python"># assay/mcp/server.py
+
+from mcp import Server, Tool
+from mcp.server.stdio import stdio_server
+from assay.service import AssayService
+
+server = Server(&quot;assay&quot;)
+
+@server.tool()
+async def assay_evaluate(
+    expr:       str,
+    universe:   str = &quot;NASDAQ100&quot;,
+    period:     list[str] | None = None,
+    horizons:   list[int] = [1, 5, 10, 20],
+    neutralize: list[str] | None = None,
+) -&gt; dict:
+    &quot;&quot;&quot;Evaluate a factor expression and return a FactorReport.&quot;&quot;&quot;
+    svc = AssayService.get()
+    period = period or [&quot;2020-01-01&quot;, &quot;2024-12-31&quot;]
+    report = await svc.evaluate(
+        expr=expr, universe=universe,
+        period=tuple(period), horizons=horizons,
+        neutralize=neutralize,
+    )
+    return report.to_dict()
+
+
+@server.tool()
+async def assay_batch(
+    exprs:    list[str],
+    universe: str = &quot;NASDAQ100&quot;,
+    period:   list[str] | None = None,
+    n_jobs:   int = 8,
+    sort_by:  str = &quot;rank_icir&quot;,
+) -&gt; dict:
+    &quot;&quot;&quot;Batch evaluate factors. Faster than calling assay_evaluate in a loop.&quot;&quot;&quot;
+    svc = AssayService.get()
+    period = period or [&quot;2020-01-01&quot;, &quot;2024-12-31&quot;]
+    reports = await svc.batch(
+        exprs=exprs, universe=universe,
+        period=tuple(period), n_jobs=n_jobs,
+    )
+    sorted_reports = sorted(reports, key=lambda r: -getattr(r, sort_by, 0))
+    return {
+        &quot;total&quot;: len(sorted_reports),
+        &quot;reports&quot;: [r.to_dict() for r in sorted_reports],
+    }
+
+
+@server.tool()
+async def assay_library_list(
+    min_rank_icir:  float = 0.0,
+    max_redundancy: float = 1.0,
+    source:         str | None = None,
+    sort_by:        str = &quot;rank_icir&quot;,
+    limit:          int = 20,
+) -&gt; dict:
+    svc = AssayService.get()
+    factors = svc.library_query(
+        min_rank_icir=min_rank_icir,
+        max_redundancy=max_redundancy,
+        source=source, sort_by=sort_by, limit=limit,
+    )
+    return {&quot;total&quot;: len(factors), &quot;factors&quot;: [f.to_dict() for f in factors]}
+
+
+# Run as stdio server
+if __name__ == &quot;__main__&quot;:
+    import asyncio
+    asyncio.run(stdio_server(server))
+</code></pre>
+<h3 id="6-5-mcp-server-startup">6.5  MCP server startup</h3>
+<pre><code class="language-bash"># stdio mode (Claude Desktop, local agents)
+python -m assay.mcp.server
+
+# SSE mode (remote agents)
+python -m assay.mcp.server --transport sse --port 8001
+
+# Claude Desktop config (~/.config/claude/claude_desktop_config.json)
+{
+  &quot;mcpServers&quot;: {
+    &quot;assay&quot;: {
+      &quot;command&quot;: &quot;python&quot;,
+      &quot;args&quot;: [&quot;-m&quot;, &quot;assay.mcp.server&quot;],
+      &quot;env&quot;: { &quot;ASSAY_CONFIG&quot;: &quot;~/.assay/config.toml&quot; }
+    }
+  }
+}
+</code></pre>
+<h3 id="6-6-operator-schema-injection">6.6  Operator schema injection</h3>
+<p>The MCP server injects the full operator schema into the tool descriptions so agents have documentation inline without making separate calls. The schema source is <strong>implemented today</strong>: <code>assay.engine.operator_schema()</code> returns a live <code>{name: schema}</code> view of every registered operator (built-in <em>and</em> user-registered), so this enrichment works as soon as the server exists:</p>
+<pre><code class="language-python">from assay.engine import operator_schema   # ✅ available now
+
+# Dynamically enrich the assay_evaluate tool description
+# with the operator schema so agents know what operators exist
+OPERATOR_DOCS = &quot;\n\nAvailable operators (prefix ts_ = time-series, cs_ = cross-sectional):\n&quot;
+for name, schema in operator_schema().items():
+    sig = schema.get(&quot;signature&quot;, name)
+    OPERATOR_DOCS += f&quot;  {sig}: {schema.get('description', '')}  ({schema.get('output_range', '')})\n&quot;
+
+assay_evaluate.__doc__ += OPERATOR_DOCS
+</code></pre>
+<h3 id="6-7-typical-agent-loop">6.7  Typical agent loop</h3>
+<pre><code>Agent iteration 1:
+  call assay_library_list(limit=10) → &quot;what high-quality factors already exist?&quot;
+  call assay_evaluate(&quot;ts_returns(close, 20)&quot;) → RankICIR=0.61
+
+Agent iteration 2:
+  call assay_batch([&quot;ts_corr(close,volume,20)&quot;, &quot;cs_rank(ts_std(close,20))&quot;, ...10 more])
+  → sorted results, top factor: RankICIR=0.74, redundancy=0.31
+
+Agent iteration 3:
+  call assay_library_correlation(factor_ids=[...top 5 new + 5 existing...])
+  → &quot;new factor B is 0.82 correlated with existing factor X — skip saving&quot;
+
+Agent iteration 4:
+  call assay_library_save(report=best_report)
+  call assay_library_prune(redundancy_threshold=0.7, dry_run=True)
+  → &quot;14 factors would be removed; proceed?&quot;
+</code></pre>
+<hr />
+<h2 id="7-cross-cutting-concerns">7. Cross-Cutting Concerns</h2>
+<blockquote>
+<p><strong>Status:</strong> §7.1 auth is ✅ implemented (optional API-key, <code>ASSAY_API_KEYS</code>; open if
+unset). §7.2 rate limiting and §7.3 observability are 📋 planned (no slowapi/Prometheus/
+OTel wired yet). §7.4 documents the config mechanism in place today.</p>
+</blockquote>
+<h3 id="7-1-authentication-optional-api-key">7.1  Authentication ✅ (optional API key)</h3>
+<pre><code class="language-python"># API key for REST + MCP
+# Session cookie for WebUI (issued after API key auth)
+
+class APIKeyAuth:
+    def __init__(self, keys: set[str]):
+        self._keys = keys
+
+    def __call__(self, x_api_key: str = Header(...)):
+        if x_api_key not in self._keys:
+            raise HTTPException(status_code=401, detail=&quot;Invalid API key&quot;)
+        return x_api_key
+
+# Configured in config.toml
+# [auth]
+# api_keys = [&quot;sk-assay-abc123&quot;, &quot;sk-assay-def456&quot;]
+</code></pre>
+<h3 id="7-2-rate-limiting">7.2  Rate limiting 📋</h3>
+<pre><code class="language-python"># Per API key, per surface
+# REST: 60 evaluate/min, 10 batch/min
+# MCP:  120 tool calls/min (agents need higher throughput)
+
+from slowapi import Limiter
+limiter = Limiter(key_func=get_api_key)
+
+@router.post(&quot;/evaluate&quot;)
+@limiter.limit(&quot;60/minute&quot;)
+async def evaluate_factor(...): ...
+</code></pre>
+<h3 id="7-3-observability">7.3  Observability 📋</h3>
+<pre><code>Metrics (Prometheus):
+  assay_evaluate_duration_ms        histogram  [surface, universe, cache_hit]
+  assay_batch_size                  histogram  [surface]
+  assay_cache_hit_rate              gauge      [level: l1|l2]
+  assay_library_size                gauge
+  assay_active_sessions             gauge
+
+Traces (OpenTelemetry):
+  span: assay.evaluate → assay.engine.parse → assay.cache.get → assay.operator.execute → assay.ic.compute
+
+Logs:
+  structured JSON, level=INFO for every evaluate call
+  fields: factor_id, expr_hash, universe, elapsed_ms, cache_hit, rank_icir, surface
+</code></pre>
+<h3 id="7-4-configuration-today-env-vars-env">7.4  Configuration ✅ (today: env vars + <code>.env</code>)</h3>
+<p><strong>What exists today.</strong> Configuration is environment-variable based, loaded by
+<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/config.py" target="_blank" rel="noopener noreferrer"><code>AssayConfig.from_env()</code></a>. At import the package also reads a
+project-root <code>.env</code> file with <code>setdefault</code> semantics, so the real shell environment always
+wins. There is <strong>no</strong> <code>~/.assay/config.toml</code> yet. Required and optional variables (see
+<a href="https://github.com/QFinVerse/Assay/blob/main/.env.example" target="_blank" rel="noopener noreferrer"><code>.env.example</code></a>):</p>
+<pre><code class="language-bash"># Required — MASSIVE credentials
+MASSIVE_API_KEY=...                       # REST bearer token (api.massive.com)
+MASSIVE_S3_ACCESS_KEY_ID=...              # flat-files S3 access key id
+MASSIVE_S3_SECRET_ACCESS_KEY=...          # flat-files S3 secret
+
+# Optional — sensible defaults
+MASSIVE_S3_ENDPOINT=https://files.massive.com
+MASSIVE_S3_BUCKET=flatfiles
+MASSIVE_REST_BASE_URL=https://api.massive.com
+ASSAY_DATA_DIR=./data                     # parquet store root; market defaults to &quot;US&quot;
+</code></pre>
+<pre><code class="language-python">from assay.config import AssayConfig
+config = AssayConfig.from_env()           # -&gt; AssayConfig(massive=..., data_dir=Path, market=&quot;US&quot;)
+</code></pre>
+<p><strong>Planned — unified <code>~/.assay/config.toml</code> 📋.</strong> The service and surfaces now exist and
+are configured today via <code>AssayConfig</code> fields + env vars; the <em>single TOML file</em> that would
+subsume them is still the planned packaging. The <code>MASSIVE_*</code> secrets stay in the
+environment; the rest would move into structured sections:</p>
+<pre><code class="language-toml"># ~/.assay/config.toml   📋 PLANNED packaging (the layers below already exist in code)
+
+[data]
+path       = &quot;~/.assay/data&quot;
+market     = &quot;US&quot;
+provider   = &quot;massive&quot;
+
+[cache]                                    # 🔶 session + L2 disk cache exist; L1 arena 📋
+l1_memory_gb = 4.0
+l2_path      = &quot;~/.assay/cache&quot;
+l2_max_gb    = 20.0
+
+[api]                                      # ✅ REST layer built (serve-api); these keys map to AssayConfig
+host = &quot;0.0.0.0&quot;
+port = 8000
+
+[mcp]                                      # ✅ MCP layer built (serve-mcp)
+transport = &quot;stdio&quot;
+
+[auth]                                     # ✅ optional API-key auth (env ASSAY_API_KEYS today)
+api_keys = [&quot;sk-assay-changeme&quot;]
+
+[engine]
+n_workers        = 8
+default_universe = &quot;NASDAQ100&quot;
+default_period   = [&quot;2020-01-01&quot;, &quot;2024-12-31&quot;]
+</code></pre>
+<hr />
+<h2 id="8-deployment">8. Deployment</h2>
+<blockquote>
+<p><strong>Status: 🔶 Mostly implemented.</strong> The REST API and MCP server now run via
+<code>python -m assay.cli serve-api</code> and <code>serve-mcp</code> (§8.1a). Still not present: the
+single <code>assay server</code> umbrella command, <code>assay data sync</code> (use <code>prepare-nasdaq100</code>),
+the WebUI image, and the <code>pip install assay-engine</code> PyPI package (install from source).
+The Docker Compose stack (§8.3) references those not-yet-published images.</p>
+</blockquote>
+<h3 id="8-1a-local-development-today">8.1a  Local development today ✅</h3>
+<p>The shipped entry point is the data/engine CLI (<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/cli.py" target="_blank" rel="noopener noreferrer"><code>src/assay/cli.py</code></a>),
+invoked as <code>python -m assay.cli</code>. There is no console-script <code>assay</code> yet and no
+<code>pip install assay-engine</code> package on PyPI — install from source.</p>
+<pre><code class="language-bash"># Install from source (editable)
+pip install -e .                          # uses pyproject.toml
+# Provide MASSIVE_* creds + ASSAY_DATA_DIR via ~/.bashrc or a project .env (§7.4)
+
+# Prepare the NASDAQ-100 dataset (universe + corp-actions + prices) for a range
+python -m assay.cli prepare-nasdaq100 --start 2023-01-01 --end 2023-12-31
+
+# Inspect what's been ingested
+python -m assay.cli status
+
+# Read a PIT panel and print a summary (split-adjusted)
+python -m assay.cli verify --start 2023-06-01 --end 2023-06-30 --adj split
+
+# Parse / evaluate a single factor over the PIT panel
+python -m assay.cli parse 'cs_rank(ts_corr(close, volume, 20))'
+python -m assay.cli eval  'ts_returns(close, 20)' \
+    --index NASDAQ100 --start 2023-01-01 --end 2023-12-31 --as-of 2023-12-31
+
+# Full scored FactorReport via the SDK, batch from a file, library, and the servers
+python -m assay.cli run   'cs_rank(-1 * ts_returns(close, 5))' --start 2023-01-01 --end 2023-12-31
+python -m assay.cli batch factors.txt --start 2023-01-01 --end 2023-12-31 --output results.parquet
+python -m assay.cli library list --sort rank_icir --limit 20
+python -m assay.cli serve-api --host 0.0.0.0 --port 8000      # FastAPI (REST + SSE)
+python -m assay.cli serve-mcp --transport sse --port 8001     # MCP server
+</code></pre>
+<h3 id="8-1b-planned-researcher-workflow">8.1b  Planned researcher workflow 📋</h3>
+<p>Once the SDK/service/surfaces land, the intended one-liner experience is:</p>
+<pre><code class="language-bash">pip install assay-engine            # 📋 not yet published
+assay init                          # 📋 creates ~/.assay/config.toml and data dirs
+assay data sync --market US --start 2018-01-01    # 📋 unified data CLI
+assay server start                  # 📋 REST :8000, WebUI :3000, MCP stdio
+
+python
+&gt;&gt;&gt; import assay; assay.init()      # 📋 planned SDK
+&gt;&gt;&gt; assay.backtest(&quot;ts_returns(close, 20)&quot;, universe=&quot;NASDAQ100&quot;)
+</code></pre>
+<h3 id="8-2-service-topology">8.2  Service topology 📋</h3>
+<pre><code>Researcher laptop / server (planned):
+
+  ┌─────────────────────────────────────────────────┐
+  │  assay server                                   │
+  │                                                 │
+  │  :8000  FastAPI (REST API)                      │
+  │  :3000  Vite (WebUI dev) / Nginx (production)  │
+  │  stdio  MCP server (spawned by agent host)      │
+  │                                                 │
+  │  All three share one AssayService process       │
+  │  (single cache, single DataStore connection)    │
+  └─────────────────────────────────────────────────┘
+</code></pre>
+<h3 id="8-3-docker-compose">8.3  Docker Compose 📋</h3>
+<p>The three images below (<code>assay-api</code>, <code>assay-ui</code>, <code>assay-mcp</code>) reference apps that are not
+built yet (<code>assay.api.app</code>, the UI bundle, <code>assay.mcp.server</code>). This is the target stack.</p>
+<pre><code class="language-yaml"># docker-compose.yml   📋 PLANNED
+
+services:
+  assay-api:
+    image: assay-engine:0.1
+    command: uvicorn assay.api.app:app --host 0.0.0.0 --port 8000
+    ports: [&quot;8000:8000&quot;]
+    volumes:
+      - ./data:/data
+      - ./cache:/cache
+    environment:
+      ASSAY_DATA_PATH: /data
+      ASSAY_CACHE_PATH: /cache
+
+  assay-ui:
+    image: assay-ui:0.1
+    ports: [&quot;3000:80&quot;]
+    environment:
+      VITE_API_BASE: http://assay-api:8000
+
+  assay-mcp:
+    image: assay-engine:0.1
+    command: python -m assay.mcp.server --transport sse --port 8001
+    ports: [&quot;8001:8001&quot;]
+    volumes:
+      - ./data:/data
+      - ./cache:/cache
+</code></pre>
+<h3 id="8-4-package-layout">8.4  Package layout</h3>
+<p>The package lives under <code>src/assay/</code> (src-layout, see <a href="https://github.com/QFinVerse/Assay/blob/main/pyproject.toml" target="_blank" rel="noopener noreferrer"><code>pyproject.toml</code></a>).
+✅ = on disk today, 📋 = planned module.</p>
+<pre><code>src/assay/
+├── __init__.py            ✅ exports AssayConfig, MassiveConfig (SDK facade 📋)
+├── config.py              ✅ AssayConfig, MassiveConfig, from_env() + .env loader
+├── cli.py                 ✅ data + parse/eval CLI (python -m assay.cli)
+├── data/                  ✅ data layer
+│   ├── schemas.py         ✅ price_raw / adj_events / universe_snapshots schemas + paths
+│   ├── calendar.py        ✅ NYSE trading calendar
+│   ├── pipeline.py        ✅ prepare_nasdaq100() orchestrator
+│   ├── massive/           ✅ FlatFilesClient (S3) + REST client
+│   ├── universe/          ✅ NASDAQ-100 PIT membership (ticker-change history)
+│   ├── ingest/            ✅ prices / corporate_actions / universe ingesters
+│   └── store/             ✅ DataStore (PIT reads) + adjust.py (forward_adjust)
+├── engine/                ✅ factor execution engine
+│   ├── parsing.py         ✅ ExprParser, QlibParser, FuncParser, detect_dialect
+│   ├── ast.py             ✅ FieldNode / LitNode / OpNode, iter_fields/iter_ops
+│   ├── engine.py          ✅ FactorEngine, FactorResult, EvalContext
+│   ├── diagnostics.py     ✅ FactorDiagnostics, CATALOG (ASSAY-* codes), lint()
+│   └── operators/         ✅ registry + time_series / cross_sectional / math / arithmetic
+├── factors/               ✅ alpha101.py (Alpha-101 expression library)
+├── evaluator/             ✅ forward_returns, metrics (IC/RankIC), decay, groups, turnover
+├── library/               ✅ report (FactorReport/FactorSummary/Lineage), store (FactorLibrary), correlation
+├── cache/                 🔶 session (SessionCache/Registry) + l2 (L2FactorCache); L1 Arena/incremental 📋
+├── service.py             ✅ AssayService singleton (facade over engine + evaluator + library + cache)
+├── api/                   ✅ FastAPI app + auth + models + routers (factor/library/session/system)
+│   └── static/            🔶 zero-install vanilla-JS WebUI (index.html, styles.css, js/ + js/pages/) served at /
+└── mcp/                   ✅ MCP server (FastMCP; 11 tools; stdio + SSE)
+
+# __init__.py now also exports the SDK facade: init, backtest, batch_backtest, Session, library, stream
+# cli.py now also has: run, batch, report, library, serve-api, serve-mcp
+# routes/factor.py also exposes POST /v1/factor/lint (data-free AST + diagnostics, for the editor)
+
+assay-ui/                  📋 React/Vite rebuild of the WebUI (documented target — not yet built)
+</code></pre>
+<hr />
+<p><em>— Assay Full-Stack Architecture · AlphaBench Project —</em></p>

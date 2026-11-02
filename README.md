@@ -14,9 +14,12 @@ built-in **Data Manager** (WebUI) or ingested from a local mirror — see the
 
 ## 📚 Documentation
 
-Full design specs and usage guides live in **[docs/](docs/en/README.md)**:
+Full design specs and usage guides live in **[docs/](docs/en/README.md)**, and are served
+as the Doc Hub at **https://assay.qfinverse.com/doc/** (`/doc/` on any deployment; rebuild
+it with `python scripts/build_doc_hub.py` after editing docs):
 
 - **Start here:** [Getting Started](docs/en/guide/getting-started.md)
+- **US data from QFinVerse:** [QFinVerse daily panel](docs/en/guide/qfv-data.md)
 - **Data & correctness:** [Data & Adjustment](docs/en/guide/data-and-adjustment.md)
   ([中文](docs/cn/guide/data-and-adjustment.md)) — the data layer, point-in-time reads, and how
   factors see prices under **splits & dividends**.

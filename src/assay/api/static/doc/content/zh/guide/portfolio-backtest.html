@@ -1,0 +1,93 @@
+<h1 class="doc-title">组合回测</h1>
+<p>将因子信号转化为带有真实交易约束和成本的模拟组合，并得到一份
+<code>PortfolioReport</code>（夏普、回撤、换手率、成本拖累、NAV 序列）。设计规范：
+<a href="/doc/design/portfolio-backtest">portfolio-backtest.md</a>。</p>
+<h2 id="快速开始">快速开始</h2>
+<pre><code class="language-python">import assay
+from assay.portfolio import PortfolioBacktestConfig
+
+cfg = PortfolioBacktestConfig(
+    universe=&quot;NASDAQ100&quot;, period_start=&quot;2025-01-02&quot;, period_end=&quot;2026-06-09&quot;,
+    market=&quot;US&quot;,
+    rebalance_type=&quot;monthly&quot;,        # daily|weekly|monthly|quarterly|threshold|signal
+    weight_method=&quot;signal_prop&quot;,     # equal|signal_prop|quintile|decile|mv|bl|risk_parity
+    long_short=False,
+    max_single_weight=0.05,
+    execution_price=&quot;next_open&quot;,     # next_open|next_close
+)
+pf = assay.backtest_portfolio(&quot;cs_rank(ts_returns(close, 20))&quot;, cfg)
+
+print(pf.total_return, pf.annual_return, pf.sharpe, pf.max_drawdown,
+      pf.annual_turnover, pf.cost_drag, pf.n_rebalances)
+pf.to_dict()   # JSON-safe, agent-ready
+</code></pre>
+<p>CLI：</p>
+<pre><code class="language-bash">python -m assay.cli portfolio 'cs_rank(ts_returns(close, 20))' \
+    --start 2025-01-02 --end 2026-06-09 --rebalance monthly --weight-method signal_prop
+</code></pre>
+<p>REST：<code>POST /v1/portfolio/backtest</code>（见 <a href="/doc/guide/rest-api">REST 指南</a>）。</p>
+<h2 id="多空-美元中性">多空、美元中性</h2>
+<pre><code class="language-python">cfg = PortfolioBacktestConfig(
+    universe=&quot;NASDAQ100&quot;, period_start=&quot;2025-01-02&quot;, period_end=&quot;2026-06-09&quot;,
+    weight_method=&quot;quintile&quot;, long_short=True, net_exposure=0.0,   # dollar-neutral
+    quintile_long_n=1, quintile_short_n=1,
+)
+pf = assay.backtest_portfolio(&quot;cs_rank(ts_corr(close, volume, 20))&quot;, cfg)
+</code></pre>
+<h2 id="权重方法">权重方法</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Method</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>equal</code></td>
+<td>在合格集合上等权</td>
+</tr>
+<tr>
+<td><code>signal_prop</code></td>
+<td>与（归一化后的）信号成比例</td>
+</tr>
+<tr>
+<td><code>quintile</code> / <code>decile</code></td>
+<td>顶部/底部分桶做多/做空</td>
+</tr>
+<tr>
+<td><code>mv</code></td>
+<td>均值-方差，经由 scipy SLSQP + numpy Ledoit-Wolf 收缩（不用 cvxpy/sklearn）</td>
+</tr>
+<tr>
+<td><code>risk_parity</code></td>
+<td>逆波动率 / 等风险贡献（纯多头）</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="关键配置分组">关键配置分组</h2>
+<p><code>rebalance_*</code>（调仓计划 + <code>min_rebalance_interval</code>、<code>execution_offset_days</code>）、权重
+（<code>gross_exposure</code>、<code>net_exposure</code>、<code>signal_transform</code>）、约束（<code>max_single_weight</code>、
+<code>max/min_stock_count</code>、<code>max_turnover_per_period</code>）、执行（<code>slippage_model</code>、<code>slippage_k</code>、
+<code>max_adv_fraction</code>、<code>partial_fill_handling</code>）、基准（<code>benchmark</code>、<code>risk_free_rate</code>）、输出
+（<code>save_trade_log</code>、<code>save_position_log</code>）。<code>PortfolioBacktestConfig.preset('US'|'A'|'HK')</code> 会应用
+市场的成本/限制默认值。完整字段列表见<a href="/doc/design/portfolio-backtest">设计文档</a> §2。</p>
+<h2 id="报告中的指标">报告中的指标</h2>
+<p>收益（total/annual/gross/excess）、风险调整（夏普、索提诺、卡玛、信息比率、
+最大回撤 + 恢复、beta、CAPM alpha、跟踪误差）、换手率与成本（年化换手率、
+成本拖累、平均持有天数），外加 <code>nav_series</code>/<code>nav_dates</code>、<code>monthly_returns</code>、<code>trade_log</code>、
+<code>position_log</code> 以及 <code>a_share_metrics</code>（仅当 <code>market='A'</code> 时）。</p>
+<h2 id="a-股">A 股</h2>
+<p>设置 <code>market=&quot;A&quot;</code>（或 <code>PortfolioBacktestConfig.preset(&quot;A&quot;)</code>）以启用 T+1 结算、涨跌停
+拦截以及印花税/佣金/过户费成本模型。当其输入被提供时，这些会在任何市场的数据上运行
+（价格限制用 <code>prev_close</code>，ST/停牌用 <code>tradable_mask</code>，等等）。在美股数据上，
+依赖数据的过滤器处于惰性状态（不会崩溃）。真正的指数基准需要 Assay 没有的指数价格序列——
+基准使用等权股票池代理。</p>
+<h2 id="当前数据集的注意事项">当前数据集的注意事项</h2>
+<ul>
+<li><strong>未复权拆股。</strong> 如果数据文件夹没有 <code>adj_events</code>，少数真实拆股会表现为
+约 −90% 的单日收益，从而虚增结果。回填公司行动
+（<code>assay.cli corp-actions</code>）以获得干净的数值——见<a href="/doc/guide/data-pipeline">数据管理指南</a>。</li>
+<li><strong><code>rebalance_type='signal'</code></strong> 配合高自相关因子可能永远不会触发（符合规范），
+留下一条全现金的平坦 NAV——请选择日历调仓计划以获得非退化的运行。</li>
+</ul>

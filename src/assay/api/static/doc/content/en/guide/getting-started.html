@@ -1,0 +1,107 @@
+<h1 class="doc-title">Getting Started</h1>
+<p>Assay is a point-in-time-correct, agent-native factor backtesting engine. This guide takes
+you from a clean checkout to your first scored factor and a portfolio backtest.</p>
+<h2 id="1-install">1. Install</h2>
+<p>Src-layout package; install from source (no PyPI release yet):</p>
+<pre><code class="language-bash">git clone &lt;repo&gt; &amp;&amp; cd Assay
+pip install -e .            # core deps
+# optional extras (all already vendored in this environment):
+pip install -e &quot;.[perf,api,mcp]&quot;
+</code></pre>
+<p>Everything runs with <code>PYTHONPATH=src</code> if you haven't <code>pip install -e .</code>'d.</p>
+<h2 id="2-configure-the-data-source-output-dir">2. Configure the data source &amp; output dir</h2>
+<p>Configuration is environment-variable based, loaded by <code>AssayConfig.from_env()</code>. A project
+<code>.env</code> is read at import (shell env always wins). The pipeline reads a <strong>local</strong> MASSIVE
+mirror — no credentials needed. See <a href="https://github.com/QFinVerse/Assay/blob/main/.env.example" target="_blank" rel="noopener noreferrer">.env.example</a>:</p>
+<pre><code class="language-bash">MASSIVE_DATA_DIR=/data/massive_data    # root of the local MASSIVE mirror (source)
+ASSAY_DATA_DIR=data                    # parquet store root (point at any folder)
+</code></pre>
+<blockquote>
+<p>US equities (MASSIVE — NASDAQ-100 / S&amp;P 500) and China A-shares (Tushare — CSI300/500/1000)
+are both wired up. The bundled US data is <strong>OHLCV + transaction count — no <code>vwap</code></strong>.</p>
+</blockquote>
+<h2 id="3-transfer-data">3. Transfer data</h2>
+<p>Transform the local mirror into a point-in-time NASDAQ-100 dataset (universe + corporate
+actions + prices) under the folder <code>ASSAY_DATA_DIR</code> points at. See the
+<a href="/doc/guide/data-pipeline">data pipeline guide</a> for detail.</p>
+<pre><code class="language-bash">python -m assay.cli prepare-nasdaq100 --start 2025-01-01 --end 2026-06-09
+python -m assay.cli status                      # what's ingested
+</code></pre>
+<h2 id="4-evaluate-a-factor">4. Evaluate a factor</h2>
+<p><strong>CLI</strong> — a quick AST + over-the-panel check, then a full scored report:</p>
+<pre><code class="language-bash">python -m assay.cli parse 'cs_rank(ts_corr(close, volume, 20))'      # no data needed
+python -m assay.cli run   'cs_rank(ts_corr(close, volume, 20))' \
+    --start 2025-01-02 --end 2026-06-09
+</code></pre>
+<p><strong>Python SDK</strong> — see the <a href="/doc/guide/python-sdk">SDK guide</a>:</p>
+<pre><code class="language-python">import assay
+report = assay.backtest(
+    &quot;cs_rank(ts_corr(close, volume, 20))&quot;,
+    universe=&quot;NASDAQ100&quot;, period=(&quot;2025-01-02&quot;, &quot;2026-06-09&quot;),
+)
+print(report.rank_ic, report.rank_icir, report.decay_halflife_days, report.failure_mode)
+</code></pre>
+<p>A <code>FactorReport</code> carries <code>ic</code>/<code>rank_ic</code>/<code>icir</code>/<code>rank_icir</code>, <code>ic_by_horizon</code>, decay, turnover,
+redundancy, look-ahead detection, a natural-language <code>suggestion</code>, and structured
+<code>diagnostics</code>. <code>.to_dict()</code> is JSON-safe for agent consumption.</p>
+<h2 id="5-run-a-portfolio-backtest">5. Run a portfolio backtest</h2>
+<pre><code class="language-python">from assay.portfolio import PortfolioBacktestConfig
+cfg = PortfolioBacktestConfig(universe=&quot;NASDAQ100&quot;,
+                              period_start=&quot;2025-01-02&quot;, period_end=&quot;2026-06-09&quot;,
+                              rebalance_type=&quot;monthly&quot;, weight_method=&quot;signal_prop&quot;)
+pf = assay.backtest_portfolio(&quot;cs_rank(ts_returns(close, 20))&quot;, cfg)
+print(pf.sharpe, pf.max_drawdown, pf.annual_turnover, pf.cost_drag)
+</code></pre>
+<p>See the <a href="/doc/guide/portfolio-backtest">portfolio backtest guide</a>.</p>
+<h2 id="6-start-the-surfaces">6. Start the surfaces</h2>
+<pre><code class="language-bash">python -m assay.cli serve-api --port 8000     # REST API + WebUI at http://localhost:8000
+python -m assay.cli serve-mcp                 # MCP server (stdio) for LLM agents
+</code></pre>
+<ul>
+<li><strong>WebUI</strong> — open <code>http://localhost:8000</code> (see the <a href="/doc/guide/webui">WebUI guide</a>).</li>
+<li><strong>REST API</strong> — interactive docs at <code>/docs</code>; see the <a href="/doc/guide/rest-api">REST guide</a>.</li>
+<li><strong>MCP</strong> — 11 agent tools; see the <a href="/doc/guide/mcp-server">MCP guide</a>.</li>
+</ul>
+<h2 id="where-to-go-next">Where to go next</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Guide</th>
+<th>What it covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="/doc/guide/data-pipeline">Data pipeline</a></td>
+<td>MASSIVE loaders, <code>prepare-nasdaq100</code>, data folders, caveats</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/python-sdk">Python SDK</a></td>
+<td><code>backtest</code>, <code>Session</code>, <code>batch_backtest</code>, <code>library</code>, <code>stream</code>, <code>backtest_portfolio</code></td>
+</tr>
+<tr>
+<td><a href="/doc/guide/cli">CLI</a></td>
+<td>every <code>python -m assay.cli</code> subcommand</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/rest-api">REST API</a></td>
+<td><code>/v1/*</code> endpoints, SSE streaming, auth</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/mcp-server">MCP server</a></td>
+<td>agent tools and client setup</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/webui">WebUI</a></td>
+<td>the zero-install web app</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/portfolio-backtest">Portfolio backtest</a></td>
+<td>config, running, metrics, A-share notes</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/performance">Performance</a></td>
+<td>the Alpha-101 cache vs no-cache benchmark</td>
+</tr>
+</tbody>
+</table></div>

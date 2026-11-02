@@ -1,0 +1,206 @@
+<h1 class="doc-title">REST API</h1>
+<p>FastAPI app exposing <code>AssayService</code> over HTTP, with SSE streaming for evaluation. Run it:</p>
+<pre><code class="language-bash">python -m assay.cli serve-api --port 8000      # or: uvicorn assay.api.app:app --port 8000
+</code></pre>
+<ul>
+<li>Base: <code>http://localhost:8000</code> · all data routes under <code>/v1</code></li>
+<li>Interactive docs (Swagger): <code>http://localhost:8000/docs</code></li>
+<li>The WebUI is served at <code>/</code> (see the <a href="/doc/guide/webui">WebUI guide</a>).</li>
+</ul>
+<h2 id="auth">Auth</h2>
+<p>Optional API-key auth. Set <code>ASSAY_API_KEYS</code> (comma-separated) to require an <code>X-API-Key</code> header;
+<strong>unset = open</strong> (works out of the box). Same-origin WebUI needs no key.</p>
+<h2 id="endpoints">Endpoints</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/health</code></td>
+<td>Liveness</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/factor/evaluate</code></td>
+<td>Evaluate one factor — JSON report, or SSE stream when <code>stream:true</code></td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/factor/batch</code></td>
+<td>Batch evaluate → <code>{total, elapsed_ms, reports}</code></td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/factor/lint</code></td>
+<td>Parse-only: <code>{dialect, canonical, fields, operators, ast, diagnostics}</code> (no data)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/library/factors</code></td>
+<td>List with filters (<code>min_rank_icir</code>, <code>source</code>, <code>sort_by</code>, <code>limit</code>, ...)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/library/factors/{id}</code></td>
+<td>Full <code>FactorReport</code></td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/library/factors</code></td>
+<td>Save a report</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/v1/library/factors</code></td>
+<td>Delete by <code>{factor_ids: [...]}</code></td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/library/correlation-matrix</code></td>
+<td>Pairwise correlation for <code>factor_ids</code></td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/library/ic-heatmap</code> · <code>/embedding</code> · <code>/lineage</code></td>
+<td>RankIC-over-time, 2-D similarity map, derivation DAG</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/library/factors/bulk</code></td>
+<td>Bulk-evaluate + save expressions</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/library/prune</code></td>
+<td>Identify/remove redundant factors</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/combination/methods</code></td>
+<td>List combination schemes (learned models flagged available)</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/combination</code></td>
+<td>Combine factors, score train/val/test → composite + model</td>
+</tr>
+<tr>
+<td><code>POST/GET/DELETE</code></td>
+<td><code>/v1/combination/saved</code></td>
+<td>Save / list / delete saved combination runs</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/combination/saved/{id}</code></td>
+<td>Reload one saved run (the fitted model)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/market/bars</code></td>
+<td>OHLCV bars for one symbol (<code>freq</code>, <code>adj</code>)</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/market/factor-series</code></td>
+<td>One factor's value for one symbol over time</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/session/create</code> · <code>DELETE /v1/session/{id}</code></td>
+<td>Create / release a panel-cached session</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/portfolio/backtest</code></td>
+<td>Run a portfolio backtest → <code>PortfolioReport</code></td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/system/status</code> · <code>/universes</code> · <code>/data-calendar</code></td>
+<td>Engine/data/cache status, universes, coverage</td>
+</tr>
+<tr>
+<td>—</td>
+<td><strong>Data manager</strong> (<code>/v1/admin/*</code>, operator)</td>
+<td>see below</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="data-manager-admin-endpoints">Data-manager (admin) endpoints</h3>
+<p>Operator surface behind the WebUI <em>Data</em> tab (hidden from the OpenAPI schema, but live):</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET/PUT</code></td>
+<td><code>/v1/admin/config</code></td>
+<td>Read (masked) / update dirs, credentials, system settings</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/admin/data/status</code> · <code>/usage</code></td>
+<td>RAW↔ASSAY sync snapshot · per-market disk sizes (RAW + ASSAY)</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/admin/data/test</code></td>
+<td>Test a provider connection (<code>{provider: massive|tushare}</code>)</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/admin/data/jobs</code></td>
+<td>Queue a job (<code>mode: init|update|ingest</code>); <code>GET</code> list; <code>GET /{id}</code> one</td>
+</tr>
+<tr>
+<td><code>GET/PUT</code></td>
+<td><code>/v1/admin/schedule</code></td>
+<td>Auto-update schedule (per market: enabled + daily time)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/admin/cache/status</code> · <code>/entries</code> · <code>POST /rebuild</code></td>
+<td>Hot-cache status / contents / rebuild</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="evaluate-blocking">Evaluate — blocking</h2>
+<pre><code class="language-bash">curl -s -X POST http://localhost:8000/v1/factor/evaluate \
+  -H 'Content-Type: application/json' \
+  -d '{&quot;expr&quot;:&quot;ts_corr(close, volume, 20)&quot;,&quot;universe&quot;:&quot;NASDAQ100&quot;,
+       &quot;period&quot;:[&quot;2025-01-02&quot;,&quot;2026-06-09&quot;],&quot;horizons&quot;:[1,5,10,20]}'
+# -&gt; { ...FactorReport }
+</code></pre>
+<h2 id="evaluate-sse-stream">Evaluate — SSE stream</h2>
+<p>Set <code>&quot;stream&quot;: true</code>; the response is <code>text/event-stream</code> with frames:</p>
+<pre><code>event: eval.started   data: {&quot;factor_id&quot;: &quot;...&quot;, &quot;expr&quot;: &quot;...&quot;}
+event: eval.ic_series data: {&quot;ic&quot;: [...], &quot;rank_ic&quot;: [...], &quot;dates&quot;: [...]}
+event: eval.decay     data: {&quot;ic_by_horizon&quot;: {...}, &quot;halflife&quot;: 12}
+event: eval.groups    data: {&quot;quintile_returns&quot;: [...]}
+event: eval.complete  data: { ...full FactorReport }
+</code></pre>
+<p>All data is NaN-safe JSON (NaN/Inf → null), so <code>JSON.parse</code> never fails. <code>EventSource</code> can't
+POST — consume the stream with <code>fetch</code> + a <code>ReadableStream</code> reader (the WebUI does this).</p>
+<h2 id="portfolio-backtest">Portfolio backtest</h2>
+<pre><code class="language-bash">curl -s -X POST http://localhost:8000/v1/portfolio/backtest \
+  -H 'Content-Type: application/json' \
+  -d '{&quot;expr&quot;:&quot;cs_rank(ts_returns(close, 20))&quot;,
+       &quot;config&quot;:{&quot;universe&quot;:&quot;NASDAQ100&quot;,&quot;period_start&quot;:&quot;2025-01-02&quot;,&quot;period_end&quot;:&quot;2026-06-09&quot;,
+                 &quot;rebalance_type&quot;:&quot;monthly&quot;,&quot;weight_method&quot;:&quot;signal_prop&quot;}}'
+</code></pre>
+<h2 id="error-schema">Error schema</h2>
+<p>Errors mirror the engine diagnostics (<code>assay.engine.diagnostics</code>): stable <code>code</code>
+(<code>ASSAY-P###/E###/O###</code>), <code>failure_mode</code> (<code>SYNTAX_ERROR · LOOKAHEAD · CONSTANT · ALL_NAN · RUNTIME_ERROR</code>), <code>severity</code>, <code>stage</code>, <code>message</code>, <code>location</code>, <code>suggestion</code>. A request that needs
+ingested data returns <strong>503</strong> when the store is empty.</p>
+<p>Full contract: <a href="/doc/design/architecture">architecture.md</a> §4.</p>

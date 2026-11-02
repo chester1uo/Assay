@@ -1,0 +1,401 @@
+<h1 class="doc-title">分钟级（日内）回测 — 工程设计（最终版）</h1>
+<p>状态：FINAL（对抗性评审后）
+作者：factor-platform
+范围：在保持日频路径数值不变的前提下，为 Assay 增加分钟/日内回测。</p>
+<hr />
+<h2 id="1-概述与目标">1. 概述与目标</h2>
+<p>Assay 目前是一个<strong>纯日频</strong>的因子回测引擎。面板是 <code>(T 个日期 × N 只标的)</code> 矩阵，其时间轴是一个 Python <code>datetime.date</code>。每次读取都经由 <code>DataStore.get_panel(...)</code> 并带一个 <code>as_of_date</code>，是点对点（PIT）正确的（只使用在 <code>as_of</code> 当天可知的行；公司行为在读取时应用），表达式引擎对因子求值，评估器计算前瞻收益 / IC / 衰减 / 换手率，组合回测器则按成本/执行模型进行再平衡。</p>
+<p>我们使用位于 <code>/data/massive_data/us_stocks_sip/minute_aggs_v1/{YYYY}/{MM}/{YYYY-MM-DD}.parquet</code> 的本地 1m 镜像（列为 <code>ticker, volume, open, close, high, low, window_start[ns,UTC], transactions</code>；<code>window_start</code> = bar 起始时刻；约 390 个 RTH bar/天；约 147 万行/天；总计约 54 GB）来新增<strong>分钟级</strong>回测。</p>
+<h3 id="目标">目标</h3>
+<ol>
+<li><strong>分钟粒度上的 PIT 正确性</strong> — 无日内前视。一个价格 bar 只有在其<em>收盘</em>（<code>window_start + step_seconds</code>）时才可知。日粒度事件（拆股、分红、指数成分）只有在该<strong>交易时段收盘</strong>时才可知，绝不在时段中途的某个 <code>as_of</code> 可知。</li>
+<li><strong>在明确容差内保持日频路径不变</strong> — 现有的 API/SDK/CLI/MCP 及日频黄金基准数值，对于任何不重写共享内核的里程碑都保持不变；唯一重写共享内核的里程碑（M4）携带明确的 <code>rtol/atol</code> 并有意识地重新认证夹具（见 §10）。所有日频<em>恒等标识</em>（<code>config_hash</code>、<code>factor_id</code>、报告 JSON 键）在字节层面稳定。</li>
+<li><strong>复用现有设计</strong> — parquet 存储、读取时复权、行索引引擎、纯 numpy 评估器、基于索引的回测器在时间轴上是值不透明的。我们拓宽时间<em>类型</em>（Date → Datetime）并增加一个时段维度；我们<strong>不</strong>分叉数值计算。</li>
+<li><strong>扩展到 54 GB</strong> — 按日分区 IO、谓词下推、惰性读取时向更粗 bar 重采样、按时段分块 + 流式求值，以及一个真正（全新）的内存预算子系统。</li>
+</ol>
+<h3 id="综合决策">综合决策</h3>
+<p>以<strong>统一时间戳轴</strong>作为主干（一套引擎/存储/评估器/组合；<code>freq</code> 是<em>数据</em>而非分叉的代码路径），并嫁接显式的 <strong><code>Frequency</code> 值对象</strong>（将每个粒度常量集中，使得任何层都不硬编码 252/390）、惰性的<strong>读取时 1m→5m/15m 重采样</strong>、<strong>按时段的物理分区 + 行组剪枝</strong>，以及一个<strong>强制的内存预算子系统</strong>。我们<strong>拒绝</strong>并行的 <code>DataStore</code> 类（它会复制 PIT/公司行为逻辑，那是最容易发生静默偏离的危险之处）——一套存储在少数几个命名清晰的地方按 <code>freq</code> 分支。</p>
+<hr />
+<h2 id="2-数据模型与存储">2. 数据模型与存储</h2>
+<h3 id="2-1-frequency-值对象-src-assay-data-frequency-py-新增">2.1 <code>Frequency</code> 值对象 — <code>src/assay/data/frequency.py</code>（新增）</h3>
+<pre><code class="language-python">@dataclass(frozen=True)
+class Frequency:
+    code: str            # &quot;1d&quot; | &quot;1m&quot; | &quot;5m&quot; | &quot;15m&quot;
+    base_unit: str       # &quot;day&quot; | &quot;minute&quot;
+    multiple: int        # 1, 5, 15
+    is_intraday: bool
+    time_col: str        # &quot;date&quot; | &quot;ts&quot;
+    partition_grain: str # &quot;month&quot; | &quot;day&quot;
+
+    @property
+    def step_seconds(self) -&gt; int: ...          # 0(daily)/60/300/900
+    @property
+    def nominal_bars_per_day(self) -&gt; int: ...  # 1/390/78/26 — sizing &amp; default-horizon HINTS ONLY
+    def polars_every(self) -&gt; str: ...          # &quot;5m&quot;/&quot;15m&quot; for group_by_dynamic
+
+DAILY     = Frequency(&quot;1d&quot;, &quot;day&quot;,    1,  False, &quot;date&quot;, &quot;month&quot;)
+MINUTE_1  = Frequency(&quot;1m&quot;, &quot;minute&quot;, 1,  True,  &quot;ts&quot;,   &quot;day&quot;)
+MINUTE_5  = Frequency(&quot;5m&quot;, &quot;minute&quot;, 5,  True,  &quot;ts&quot;,   &quot;day&quot;)
+MINUTE_15 = Frequency(&quot;15m&quot;,&quot;minute&quot;, 15, True,  &quot;ts&quot;,   &quot;day&quot;)
+
+def parse_frequency(code: str | Frequency | None) -&gt; Frequency: ...  # None/&quot;1d&quot;/&quot;daily&quot;-&gt;DAILY; else map; ValueError otherwise
+</code></pre>
+<p><code>nominal_bars_per_day</code> <strong>仅</strong>用于容量估算和默认前瞻期提示。每一个承载正确性的计数（分段、调度、年化）都从日历（§3）导出<strong>每个时段</strong>的 bar 数，因此半日交易/夏令时永远不会移动边界。</p>
+<h3 id="2-2-schema-src-assay-data-schemas-py">2.2 Schema — <code>src/assay/data/schemas.py</code></h3>
+<p>日频 <code>PRICE_RAW_SCHEMA</code>（第 35–46 行）<strong>保持不动</strong>（任何改动都会强制日频存储重建，因为 <code>upsert_parquet</code> 在 schema 不匹配时抛异常）。新增一个并行的分钟 schema：</p>
+<pre><code class="language-python">PRICE_RAW_MINUTE_SCHEMA: dict[str, pl.DataType] = {
+    &quot;ts&quot;:           pl.Datetime(&quot;ns&quot;, &quot;UTC&quot;),  # event_time = bar OPEN (window_start), stored UTC (DST-unambiguous)
+    &quot;session_id&quot;:   pl.Int32,                   # ET trading date YYYYMMDD; segmentation + corp-action join key
+    &quot;symbol&quot;:       pl.Utf8,
+    &quot;open&quot;:         pl.Float32,
+    &quot;high&quot;:         pl.Float32,
+    &quot;low&quot;:          pl.Float32,
+    &quot;close&quot;:        pl.Float32,                  # unadjusted
+    &quot;volume&quot;:       pl.Float32,
+    &quot;transactions&quot;: pl.Int64,
+    &quot;as_of_ts&quot;:     pl.Datetime(&quot;ns&quot;, &quot;UTC&quot;),    # knowledge_time = bar CLOSE = ts + step_seconds — THE PIT line
+    &quot;session_close_ts&quot;: pl.Datetime(&quot;ns&quot;,&quot;UTC&quot;), # ET session close as UTC; the EOD-knowability instant for day-grained events (§4.4)
+    &quot;session_type&quot;: pl.UInt8,                    # 0=RTH, 1=pre, 2=post
+    &quot;source_id&quot;:    pl.Utf8,                     # provenance: per-day flat-file key
+}
+</code></pre>
+<ul>
+<li><code>ts</code>/<code>as_of_ts</code>/<code>session_close_ts</code> 在<strong>磁盘上是带时区的 UTC</strong>；ET 转换只在导出以及呈现给引擎的面板轴时发生。</li>
+<li><code>session_id</code>（Int32 <code>YYYYMMDD</code>）是廉价的分段键，作为 <code>(T,)</code> 向量带入引擎，也是与日粒度存储连接的键。<strong>不</strong>存储 <code>date: pl.Date</code>；它仅在读取时为公司行为连接而导出。</li>
+<li><code>session_close_ts</code> <strong>按每个 bar 存储</strong>，正是为了让日粒度事件的可知性切割（§4.4）成为一次纯列比较，而无需每次读取都调用日历。</li>
+<li><code>adj_events</code> 和 <code>universe_snapshots</code> 的 schema <strong>保持不变</strong>。</li>
+</ul>
+<h3 id="2-3-分区布局">2.3 分区布局</h3>
+<p>日频 <code>price_partition_path</code>（schemas.py:74）<strong>保持不变</strong>（零迁移）。为分钟增加一个感知频率的路径和一个<strong>按日</strong>的分区：</p>
+<pre><code class="language-python">def price_partition_path(data_dir, market, year, month, *, freq=DAILY, day=None) -&gt; Path:
+    if not freq.is_intraday:                      # EXISTING daily path, byte-identical (no &quot;freq=&quot; level)
+        return data_dir/&quot;price_raw&quot;/f&quot;market={market}&quot;/f&quot;year={year:04d}&quot;/f&quot;month={month:02d}&quot;/&quot;price_raw.parquet&quot;
+    return (data_dir/&quot;price_raw_minute&quot;/f&quot;market={market}&quot;/f&quot;year={year:04d}&quot;
+            /f&quot;month={month:02d}&quot;/f&quot;day={day:02d}&quot;/&quot;price_raw_minute.parquet&quot;)
+</code></pre>
+<p>只物化<strong>规范的 1m 存储</strong>；5m/15m 是<strong>惰性的读取时重采样</strong>（§4.3）。每个日文件以 <code>pl.write_parquet(..., row_group_size=R)</code> 写入，其中 <strong>R 被调优到让每个行组容纳一整块连续的完整标的</strong>（文件预先按 <code>[&quot;symbol&quot;,&quot;ts&quot;]</code> 排序），因此对 10,144 个标的中 100 个的 <code>is_in</code> 查询可以借助 <code>symbol</code> 的行组统计进行剪枝，而不必扫描每个行组。R 是<em>经验验证</em>（§8.1）的，而非假定。压缩：zstd。</p>
+<h3 id="2-4-minute_aggs-的摄取">2.4 <code>minute_aggs</code> 的摄取</h3>
+<p><code>MassiveConfig</code>（<code>src/assay/config.py</code>）：<code>minute_aggs_subdir: str = &quot;us_stocks_sip/minute_aggs_v1&quot;</code> + <code>minute_aggs_dir</code> 属性。</p>
+<p><code>LocalFlatFiles</code>（<code>src/assay/data/massive/flatfiles.py</code>）按 <code>freq</code> 参数化：</p>
+<pre><code class="language-python">class LocalFlatFiles:
+    def __init__(self, config, freq: Frequency = DAILY):
+        self.root = config.minute_aggs_dir if freq.is_intraday else config.day_aggs_dir
+    def list_aggs(self, start, end) -&gt; list[AggFile]: ...      # generalizes list_day_aggs (file-listing handles holidays)
+    def read_minute_agg(self, date, symbols=None) -&gt; pl.DataFrame | None:
+        # reuse existing window_start-&gt;ET conversion but DROP the trailing .dt.date(); keep tz-aware ts
+</code></pre>
+<p>规范化器 + 摄取器（<code>src/assay/data/ingest/prices.py</code>）：</p>
+<pre><code class="language-python">def normalize_minute_agg(df, source_id, freq, session) -&gt; pl.DataFrame:
+    # session_id, session_type from ET wall-clock vs calendar open/close;
+    # as_of_ts = ts + freq.step_seconds  (BAR CLOSE) — the single PIT-critical line;
+    # session_close_ts = session.close (UTC)         — the EOD-knowability instant.
+    ...
+
+class MinutePriceIngester:                 # per-DAY atomic write, NOT month-wide upsert
+    def run(self, start, end, symbols=None) -&gt; dict:
+        for f in self.client.list_aggs(start, end):
+            norm = normalize_minute_agg(self.client.read_minute_agg(f.date, symbols),
+                                        f.key, self.freq, session_open_close(f.date))
+            path = price_partition_path(self.config.data_dir, self.config.market,
+                                        f.date.year, f.date.month, freq=MINUTE_1, day=f.date.day)
+            write_parquet_atomic(norm.sort([&quot;symbol&quot;,&quot;ts&quot;]), path)   # idempotent: re-ingest overwrites the day
+</code></pre>
+<p><strong>不</strong>使用 <code>upsert_parquet</code>（一个月约 3000 万行；读-改-写代价过高）。文件内去重按 <code>[&quot;ts&quot;,&quot;symbol&quot;]</code>（绝不用 <code>[&quot;date&quot;,&quot;symbol&quot;]</code>，那会把 390 个 bar 折叠成一行）。盘前/盘后 bar 通过 <code>session_type</code> 标记并保留在磁盘上，但<strong>在读取时默认排除</strong>。一个摄取期断言检查导出的 RTH bar 数等于 <code>bars_per_session(day)</code>（可捕获日历/数据漂移）。</p>
+<hr />
+<h2 id="3-时间轴与日历">3. 时间轴与日历</h2>
+<h3 id="3-1-bar-网格">3.1 Bar 网格</h3>
+<p>日内面板的时间轴 <code>T</code> 是存在的 bar 时间戳的有序集合，呈现为名为 <code>ts</code> 的 <code>pl.Datetime(&quot;ns&quot;,&quot;America/New_York&quot;)</code>。日频是 <code>time_col==&quot;date&quot;</code>（<code>pl.Date</code>）的特例。引擎的轴构建（<code>np.unique</code>/<code>np.searchsorted</code>，engine.py:112–115）对 <code>datetime64[ns]</code> 是 dtype 无关的——已验证，零内核改动。</p>
+<h3 id="3-2-日历新增-src-assay-data-calendar-py">3.2 日历新增 — <code>src/assay/data/calendar.py</code></h3>
+<p>保留 <code>trading_days</code>/<code>is_trading_day</code>。新增（全部包装 <code>exchange_calendars</code> XNYS，已感知夏令时/半日交易）：</p>
+<pre><code class="language-python">def session_open_close(day, calendar=&quot;XNYS&quot;) -&gt; tuple[datetime, datetime]: ...  # ET; half-days -&gt; 13:00 close
+def session_bars(day, *, freq=MINUTE_1, include_extended=False) -&gt; list[datetime]: ...  # authoritative bar starts; half-day -&gt; ~210/42/14
+def bars_per_session(day, *, freq=MINUTE_1, include_extended=False) -&gt; int: ...
+def session_type(ts_et, day) -&gt; int: ...           # 0/1/2
+def session_ids(time_index_et) -&gt; np.ndarray: ...  # (T,) Int32 YYYYMMDD — the engine segment vector
+def session_count(start, end) -&gt; int: ...          # distinct trading sessions in span
+</code></pre>
+<p>半日交易、盘前/盘后以及夏令时全部由 <code>session_open_close</code> + UTC↔ET 转换自然得出；没有任何地方假定 390。</p>
+<h3 id="3-3-periods_per_year-年化">3.3 <code>periods_per_year</code>（年化）</h3>
+<pre><code class="language-python">def periods_per_year(start, end, *, freq) -&gt; float:
+    sessions = trading_days(start, end)
+    total_bars = sum(bars_per_session(d, freq=freq) for d in sessions)
+    span_years = max((end - start).days, 1) / 365.25     # ACTUAL calendar span, not 252-nominal
+    return total_bars / span_years
+</code></pre>
+<p>分母是<strong>实际的日历跨度</strong>（无 252 硬编码），且与所测的分子在单位上一致（解决了 §3.3 中的 252 硬编码问题）。这个 <code>&quot;bar&quot;</code> 基准是<strong>可选加入</strong>的；<strong>默认</strong>年化把逐 bar 的 NAV 聚合为每个时段一个点，并使用惯用的 <code>ppy=252</code>（§7.1），其中 252 被记录为一个日频约定并被限定在该路径中。</p>
+<hr />
+<h2 id="4-日内点对点语义">4. 日内点对点语义</h2>
+<p>日频 PIT 保证是结构性的：每次存储读取都过滤 <code>as_of_date &lt;= as_of</code>（datastore.py:95,106），且 <code>_as_date</code> 截断 datetime（datastore.py:33–38）。我们拓宽时间类型，增加一个<strong>逐 bar 的知识时刻</strong>，并为日粒度存储增加一个<strong>日终可知性切割</strong>。</p>
+<h3 id="4-1-逐-bar-的知识时刻">4.1 逐 bar 的知识时刻</h3>
+<p>摄取时设置 <code>as_of_ts = ts + freq.step_seconds</code>（bar 收盘）。10:30 的 bar 在 10:31 变得可知；<code>as_of=10:30:30</code> 排除它，<code>as_of=10:31:00</code> 包含它。<strong>这一行就是整个日内价格无前视的保证</strong>，并有专门的排除测试（§11）。一个摄取断言对每一行强制 <code>as_of_ts &gt; ts</code>。</p>
+<h3 id="4-2-get_panel-拓宽-日内-as_of-必须支配-end">4.2 <code>get_panel</code> 拓宽 — <code>日内 as_of 必须支配 end</code></h3>
+<pre><code class="language-python">def _as_time(value, *, freq):
+    return _as_date(value) if not freq.is_intraday else _parse_et_datetime(value)  # daily byte-identical
+</code></pre>
+<p><code>DataStore.get_panel(..., *, freq=DAILY)</code>：</p>
+<ul>
+<li>
+<p><strong>日频分支不变</strong> — 过滤 <code>date</code>、<code>as_of_date</code>；返回 <code>[&quot;date&quot;,&quot;symbol&quot;,*fields]</code>。</p>
+</li>
+<li>
+<p><strong>分钟分支</strong>：解析 ISO datetime；然后<strong>钳制有效 end</strong>：</p>
+<pre><code class="language-python">effective_end = min(end, as_of)        # RESOLVES the &quot;adjustment basis = end &gt; as_of&quot; finding
+if as_of &lt; end: log/optionally raise   # no bar later than as_of may be returned OR used as the adjustment basis
+</code></pre>
+<p>过滤条件变为 <code>pl.col(&quot;ts&quot;).is_between(start, effective_end)</code>、<code>pl.col(&quot;as_of_ts&quot;) &lt;= as_of</code>、<code>session_type == 0</code>（除非包含扩展时段）。前向复权基准朝 <code>effective_end</code> 计算，绝不用 <code>end</code>。返回 <code>[&quot;ts&quot;,&quot;session_id&quot;,&quot;symbol&quot;,*fields]</code>。</p>
+<p><strong>不变量（新增，在代码与测试中陈述）：</strong> <code>effective_end = min(end, as_of)</code>；带 <code>end &gt; as_of</code> 的读取返回与带 <code>end == as_of</code> 的读取<em>完全相同</em>的复权值。测试对此进行断言。</p>
+</li>
+</ul>
+<p>日频的 10 个日历日分红引入期（<code>_DIV_LOOKBACK_DAYS</code>，datastore.py:30,144）在<strong>分钟场景下被替换</strong>为只读取<strong>前一时段最后一个 RTH bar</strong>（对 <code>start</code> 之前的那个时段调用 <code>session_open_close</code>）。这个引入 bar <strong>只在 <code>forward_adjust</code> 内部</strong>被消费以提供 <code>close_prev</code>；它<strong>绝不会作为因子行呈现</strong>（因此它不能作为某个窗口的种子——见 §5.2 / §8.2）。</p>
+<h3 id="4-3-重采样保持-pit-惰性-以时段为锚-日历完整">4.3 重采样保持 PIT — 惰性、以时段为锚、日历完整</h3>
+<p>1m→5m/15m 发生在 <strong><code>DataStore</code> 内部，在 <code>.collect()</code> 之前被推入 LazyFrame</strong>，因此引擎只会看到粗粒度面板，并且（依 §8）1m frame <strong>绝不会被完整物化</strong>：</p>
+<pre><code class="language-python">(lf.filter(pl.col(&quot;as_of_ts&quot;) &lt;= as_of)                      # PIT cut first
+   .group_by_dynamic(&quot;ts&quot;, every=freq.polars_every(),
+                     closed=&quot;left&quot;, label=&quot;left&quot;,
+                     group_by=[&quot;symbol&quot;,&quot;session_id&quot;],         # anchor WITHIN a session — never straddle the open / mix pre-market
+                     start_by=&quot;datapoint&quot;)                      # first bin starts at the session's first RTH bar
+   .agg(open=first, high=max, low=min, close=last,
+        volume=sum, transactions=sum,
+        as_of_ts=max(&quot;as_of_ts&quot;),
+        n_constituents=count())
+   .join(expected_bin_counts(freq, sessions), on=[&quot;session_id&quot;,&quot;ts&quot;])  # calendar-expected count per SPECIFIC bin
+   .filter(pl.col(&quot;n_constituents&quot;) == pl.col(&quot;n_expected&quot;))   # emit ONLY calendar-complete bins; drops partial frontier bin entirely
+   .collect())
+</code></pre>
+<p>PIT 规则（解决了“部分 bar 完整性”和“对齐到时段开盘”两个问题）：</p>
+<ul>
+<li>分组<strong>在 <code>session_id</code> 内以 <code>start_by=&quot;datapoint&quot;</code> 为锚</strong>，因此粗 bar 是 <code>[09:30,09:35),...</code>，绝不跨越开盘或混入盘前 bar。</li>
+<li>只有当<strong>其日历预期的全部 1m 构成 bar 在 <code>as_of</code> 时都可知</strong>时才发出一个粗 bar——完整性是针对<em>该特定 bin</em> 的 <code>n_expected</code> 检查的（来自粗频率下的 <code>session_bars</code>，因此真正偏短的末尾/半日 bin 有正确的更小预期计数），绝不用名义的 5/15。粗 bin 中途的 <code>as_of</code> 会丢弃整个 bin（无部分收盘），保证粗 <code>close</code> 是确定且可复现的。</li>
+<li>粗 <code>as_of_ts = max(构成 bar 的 as_of_ts) = bin_end</code>；仅对完整 bin 断言等于 <code>bin_end</code>。</li>
+</ul>
+<h3 id="4-4-公司行为与股票池-日终可知性切割-解决了那个-critical-前视问题">4.4 公司行为与股票池 — 日终可知性切割（解决了那个 CRITICAL 前视问题）</h3>
+<p>日粒度事件（<code>adj_events</code>、<code>universe_snapshots</code>）只有在发布<strong>时段收盘</strong>时才可知，<em>绝不</em>在时段中途的 <code>as_of</code> 可知。我们<strong>不</strong>把日内 <code>as_of</code> 强制降到它的日期。相反，我们针对日终可知性时刻进行过滤：</p>
+<pre><code class="language-python"># adj_events / get_universe, intraday:
+known = ((pl.col(&quot;as_of_date&quot;) &lt;  as_of.date())                                  # earlier session: fully knowable
+       | ((pl.col(&quot;as_of_date&quot;) == as_of.date()) &amp; (as_of &gt;= session_close(as_of.date()))))  # same session: only after close
+events = df.filter(known)
+</code></pre>
+<p>等价地：为日粒度行导出 <code>as_of_known_ts = session_close(as_of_date)</code> 并过滤 <code>as_of_known_ts &lt;= as_of</code>。日频退化为现有的 <code>as_of_date &lt;= as_of</code>（日频 <code>as_of</code> <em>就是</em>日终）。</p>
+<p>结果：一个 <code>as_of_date == D</code> 的拆股/分红/成分变更在 <code>D 10:00</code> 的分钟读取中<strong>不可见</strong>，而在 <code>D 16:00</code> <strong>可见</strong>。对拆股和分红比率都有专门的测试。</p>
+<p>复权数学（<code>src/assay/data/store/adjust.py</code>）变为感知时段（解决了日粒度 bisect 缺陷）：</p>
+<ul>
+<li>构建每标的的<strong>唯一时段数组</strong>（排序的 <code>session_id</code>），对<em>该数组</em>（而非逐 bar 数组）<code>bisect</code> <code>ex_date</code> 的时段，在<strong>除权时段的第一个 bar</strong> 处切割，把 <code>close_prev</code> 设为<strong>前一时段最后一个 RTH bar</strong>。</li>
+<li>用<strong>前一时段是否存在</strong>的检查替换 <code>_MAX_PRIOR_GAP_DAYS</code>。</li>
+<li>逐时段因子（<code>split_factor * div_factor</code>）通过一个 <code>session_id</code>→因子的连接<strong>广播到该时段的所有 bar</strong>（向量化重写见 §7-perf / §8）。日频退化为今天的行为（一个时段 = 一行），因此日频代码路径完全相同。</li>
+</ul>
+<p>日内合格性 = <code>membership-known-by(as_of) AND finite-bar</code>。一个日内首次上市或停牌的标的会以 NaN bar 呈现（而非静默缺失的行——那会移动横截面）；一条备注 + 测试覆盖此情形。</p>
+<hr />
+<h2 id="5-引擎改动">5. 引擎改动</h2>
+<p>核心数学是行索引且值不透明的。三处附加的、按频率门控的改动，加上两处性能重写。<strong>强制门（落在 M3，在任何表面暴露分钟之前）：</strong> 若 <code>freq.is_intraday and session_ids is None</code>，<code>FactorEngine.__init__</code> <strong>抛异常</strong>——日内面板在没有分段的情况下无法求值。</p>
+<h3 id="5-1-时间轴名称-dtype-那一个硬性数据损坏缺陷">5.1 时间轴名称/dtype（那一个硬性数据损坏缺陷）</h3>
+<p><code>FactorResult.to_frame</code>（engine.py:79–93）把时间列硬转为 <code>pl.Date</code>（第 86 行），把每天约 390 个 bar 折叠成重复的 <code>(date,symbol)</code> 行。修复：记录源 dtype + 时间列名并原样发出：</p>
+<pre><code class="language-python">class FactorEngine:
+    def __init__(self, panel, group_data=None, *, time_col=&quot;date&quot;, session_ids=None, freq=DAILY):
+        ...
+        self._time_col, self._time_dtype = time_col, panel.schema[time_col]   # Date | Datetime
+        self._session_ids, self._freq = session_ids, freq
+        if freq.is_intraday and session_ids is None:
+            raise ValueError(&quot;intraday engine requires a session_ids segment vector&quot;)
+</code></pre>
+<p><code>to_frame</code> 发出转为 <code>self._time_dtype</code> 的 <code>self._time_col</code>（日频→<code>date:Date</code> 不变；分钟→<code>ts:Datetime</code>）。<code>EvalContext</code> 增加 <code>session_ids</code>。</p>
+<h3 id="5-2-隔夜跳空-时段边界处理-与结转协调一致">5.2 隔夜跳空 / 时段边界处理，与结转协调一致</h3>
+<p><code>operators/_base.windows(x, d, session_ids=None)</code>：给定 <code>session_ids</code> 时，行 <code>t</code> 处的窗口仅当 <code>rows_since_session_start[t] &gt;= d-1</code> 才有效（与预热同一 NaN 机制，_base.py:33–35）。<code>ts_delay/ts_delta/ts_returns/ts_log_returns</code>（time_series.py:18–44）：跨越时段边界的移位得到 NaN。<strong><code>ts_ema</code>/<code>ts_dema</code> 在每个时段开始处重置 <code>prev = NaN</code></strong>（当前内核在 time_series.py:121–122 <em>跨 NaN 跳空结转 <code>prev</code></em>——跨隔夜边界那就是回看，一个正确性漏洞）。</p>
+<p><strong>结转协调（解决了“缓冲区重新引入泄漏”问题）：</strong> 对于按时段分块的求值（§8.2），来自前一时段的 <code>max(window)-1</code> 个 bar 的结转缓冲区<strong>携带其真实的 <code>session_ids</code></strong>，且分段（NaN 填充 / EMA 重置）在<strong>拼接 缓冲区+分块 之后</strong>才应用，因此一个被缓冲的前一时段 bar 恰好是一个不同的分段，与整面板情形完全一致。分红引入 bar（§4.2）被完全排除在引擎面板之外。一个<strong>分块 vs 整面板黄金测试</strong>断言因子值在字节层面相同。</p>
+<p><strong>跨时段 vs 时段内窗口（解决了那个 CRITICAL 全 NaN 问题）：</strong> 分段<strong>仅是时段内窗口</strong>的策略。在逐时段分段下，一个多日窗口（例如 <code>'20d'</code> = 7800 bar &gt; 一个 390-bar 时段）会在结构上全为 NaN。因此每个带窗口的算子接受一个显式的 <code>segment: &quot;session&quot; | &quot;continuous&quot;</code> 模式：</p>
+<ul>
+<li><strong><code>segment=&quot;session&quot;</code></strong>（窗口 <code>&lt; bars_per_session</code> 时的默认）：在时段开始处 NaN 填充；窗口是时段局部的。</li>
+<li><strong><code>segment=&quot;continuous&quot;</code></strong>（当降级后的窗口 <code>&gt;= bars_per_session</code>，例如多日窗口时自动选中）：窗口通过结转缓冲区合法地跨越前面的时段；流式内核（§8.2）在分块边界间对状态做检查点。这里的时段内渗透是刻意的，因为前瞻期本就是明确的多日。</li>
+</ul>
+<p>这是根据解析后（经 <code>Nd</code> 降级）的窗口长度<strong>逐算子决定</strong>的，因此 <code>ts_mean(close,'20d')</code> 在多日分钟面板上<strong>不会</strong>全为 NaN（由测试断言）。预热成本（每个连续序列的前 <code>d-1</code> 个 bar）被记录在案。</p>
+<p><strong>跨时段的 EMA（解决了“长 EMA 无意义”问题）：</strong> bar 级的 <code>ts_ema(x,d)</code> 只对时段内的 <code>d</code>（逐时段重置）有意义。对于真正的<strong>多日</strong>平滑，我们提供 <code>ts_ema_daily(x, d_days)</code>：在<strong>按时段聚合</strong>的序列（每时段最后一个 RTH bar）上用一个以日为单位的时间常数计算 EMA，然后按 <code>session_id</code> 广播回各个 bar。当 <code>segment_overnight=True</code> 且 <code>d &gt;= bars_per_session</code> 时，bar 级 <code>ts_ema</code> <strong>抛异常</strong>，引导调用者转向 <code>ts_ema_daily</code>；<code>segment_overnight=False</code> 仍然可用，但被记录为跨跳空结转状态。</p>
+<h3 id="5-3-窗口单位-运行时感知时段-而非解析期标量-解决了半日交易问题">5.3 窗口单位 — 运行时感知时段，而非解析期标量（解决了半日交易问题）</h3>
+<p><code>_coerce_window</code>（parsing.py:354）和日频整数路径保持不动。<code>'Nd'</code> 约定<strong>不</strong>在解析期被烘焙成单一的 <code>LitNode(N*390)</code>。相反，<code>'Nd'</code> 字面量降级为一个 <code>DayWindowNode(N)</code>，引擎针对 <code>session_ids</code> <strong>逐行解析</strong>它：“回看到 <code>N</code> 个时段边界之前的那个 bar。”这需要一个接受逐行跨度的窗口算子变体（<code>segment=&quot;continuous&quot;</code> 路径本就按时段行走）。对于无需精确跨度的常见情形，使用名义的 <code>N * nominal_bars_per_day</code> 作为近似值，<strong>并附带一条量化半日/夏令时误差的日志备注</strong>——我们<strong>不</strong>声称“永不移动”。<code>adv{d}</code>（parsing.py:301–303）和裸 <code>returns</code>→<code>ts_returns(close,1)</code>（parsing.py:346–347）绑定到 <code>'{d}d'</code>/<code>'1d'</code>，使 Alpha-101 保持日语义；在没有日内上下文时，<code>d</code> 后缀等于一个原始整数（日频不变）。</p>
+<p><strong>极值位置 / rank 的输出单位（解决了静默单位变更问题）：</strong> <code>ts_argmax</code>/<code>ts_argmin</code> 返回“距今多少个 bar”，<code>ts_rank</code> 是窗口内的分位。对于以日为单位的窗口，这些被明确记录为 <strong>bar 计数</strong>；注册表的 <code>output_range</code> 与诊断标签更新为标注“bars”，而当调用者想要日单位时，一个 <code>*_days</code> 辅助函数除以 <code>bars_per_day</code>。这些被加入 Alpha-101 一致性测试，以免下游阈值被静默地重新缩放约 390 倍。</p>
+<p><strong>时段开盘处的 returns（解决了那个次要问题）：</strong> 裸 <code>returns</code> → <code>ts_returns(close,1)</code> 在分段下于每个时段的第一个 bar 为 NaN（正确的无隔夜收益行为）。这被记录在案；09:30 的横截面对于收益衍生因子是已知退化的。为想要日等价收益而非依赖 bar 级 <code>ts_returns</code> 的调用者，提供了一个感知时段的 <code>overnight_return</code> 算子（前一时段收盘→开盘）。</p>
+<h3 id="5-4-截面算子-向量化-cs_rank-真正的-alpha-101-热点">5.4 截面算子 — 向量化 <code>cs_rank</code>（真正的 Alpha-101 热点）</h3>
+<p><code>cs_rank</code>（cross_sectional.py）是 <code>np.vstack([_rank01_row(x[t]) for t in range(T)])</code>——一个逐行 Python 循环带一个内层平局 while 循环；<code>rank</code> 是最常见的 Alpha-101 算子，在 <code>T≈98k</code> 时占主导。通过在 <code>axis=1</code> 上双 <code>argsort</code> 并带 NaN 掩码和平均平局处理（<code>scipy.stats.rankdata</code> 语义）来向量化，若 <code>scipy</code> 缺失则回退到逐行路径。<code>_group_apply</code> 的 <code>rank</code> 分支同理。<strong>这是一个共享内核</strong>——日频容差/门控决策见 §10。</p>
+<h3 id="5-5-诊断">5.5 诊断</h3>
+<p><code>diagnostics.output_diagnostics</code> 的阈值（<code>warmup_frac</code>、<code>min_coverage</code>、252 行假设）按 <code>freq</code> 参数化；<code>n_dates</code> → <code>n_periods</code>（附加式；日频保留 <code>n_dates</code>）。AST、解析器文法、注册表、算术/数学内核：<strong>零改动</strong>。</p>
+<hr />
+<h2 id="6-分钟前瞻期的前瞻收益与评估">6. 分钟前瞻期的前瞻收益与评估</h2>
+<p><code>metrics.py</code> 的 IC/RankIC、<code>decay.py</code>、<code>turnover.py</code>、<code>groups.py</code> 是逐行数学——<strong>零代码改动</strong>。单位存在于调用边界（<code>service.py</code>）。<code>forward_returns.py</code> 有两处改动。</p>
+<h3 id="6-1-forward_returns-bar-三元组掩码-显式策略枚举-解决了掩码绕过问题">6.1 <code>forward_returns</code> — bar 三元组掩码 + 显式策略枚举（解决了掩码绕过问题）</h3>
+<pre><code class="language-python">def forward_returns(close, open_, horizons, execution=&quot;next_open&quot;, *,
+                    session_ids=None, entry_lag=1,
+                    cross_session: str = &quot;mask_any_crossing&quot;):  # | &quot;allow_whole_day&quot;
+</code></pre>
+<p>掩码基于<strong>每行的实际三 bar 三元组</strong>——信号 <code>t</code>、进场 <code>t+entry_lag</code>、出场 <code>t+entry_lag+h</code>——使用 <code>session_ids</code>，绝不基于 <code>h == nominal_bars_per_day</code> 的比较：</p>
+<ul>
+<li><strong><code>mask_any_crossing</code></strong>（默认）：仅当 <code>session_id[t+entry_lag] == session_id[t+entry_lag+h]</code> 时才有效（信号→进场的跨越被记录在案；对于日等价进场约定，即 <code>entry_lag = bars_to_next_session_open</code>，信号→进场的跨越是刻意的且不被掩码，但出场必须与进场同一时段）。</li>
+<li><strong><code>allow_whole_day</code></strong>：整日前瞻期由<strong>时段计数</strong>定义——通过 <code>session_ids</code> 得 <code>session_index(exit) == session_index(entry) + k</code>——因此半日交易是正确的（绝不用 bar 计数相等）。</li>
+</ul>
+<p><code>entry_lag</code> 泛化了硬编码的 <code>t+1</code> 跳过（第 90 行；默认 1 = 日频）。陈旧的 <code>execution==&quot;vwap&quot;</code> <code>ValueError</code>（第 63–67 行）随着日内 bar 的存在，变成一个真正的逐 bar 典型价 <code>(h+l+c)/3</code>（或按成交笔数加权）分支。掩码发生在函数<strong>内部</strong>，因此不会被遗忘。</p>
+<h3 id="6-2-服务边界处的单位">6.2 服务边界处的单位</h3>
+<ul>
+<li><code>decay_halflife</code> 以前瞻期单位（分钟时为 bar）返回半衰期。服务存储 <code>decay_halflife</code> + <code>granularity</code>（带标签），<strong>并且</strong>存储一个导出的 <code>decay_halflife_days</code>（<code>÷ bars_per_day</code>，被记录为可能对小值取整的近似）。</li>
+<li><code>turnover</code> 滞后在日频默认为 1；分钟使用 <code>lag = bars_per_day</code>（每日一次的换手；<code>lag=1</code> 是无意义的分钟自相关）。</li>
+<li>分钟默认前瞻期 <code>default_horizons_minute = (1, 5, 30, 390)</code>，位于 <code>AssayConfig</code>。</li>
+<li>时段前瞻收益的备忘键（service.py:180）变为 <code>f&quot;fwd::{freq.code}::{execution}&quot;</code>，因此一个共享时段绝不会为分钟请求提供日频矩阵（有断言测试）。</li>
+</ul>
+<hr />
+<h2 id="7-日内组合回测">7. 日内组合回测</h2>
+<p>所有数值阶段（<code>accounting.py</code>、<code>weights.py</code>、<code>constraints.py</code>、<code>signal.py</code>、<code>execution.py</code>、<code>costs.py</code>）都是粒度中立的并被复用。改动集中在年化、调度、单位、标签。</p>
+<h3 id="7-1-年化-默认-聚合到日频">7.1 年化（默认 = 聚合到日频）</h3>
+<p><code>_PPY = 252</code> 存在于<strong>两处</strong>（metrics.py:34、backtester.py:72）。用一个由配置导出的、穿入 <code>compute_metrics</code> 的 <code>periods_per_year</code> 替换二者；每个度量函数都已接受一个 <code>ppy</code>/<code>periods_per_year</code> 参数。<strong>日内默认：</strong> <code>compute_metrics</code> 先把逐 bar 的 NAV 聚合为每个 <code>session_id</code> 一个点（在每个时段内复利），然后以 <code>ppy=252</code> 年化——避免了 <code>sqrt(390)</code> 的微观结构偏差，并复用了经过验证的 252 路径。<code>annualization_basis: &quot;daily&quot;|&quot;bar&quot;</code> 默认为 <code>&quot;daily&quot;</code>；<code>&quot;bar&quot;</code> 使用 §3.3。无风险利率的去年化（backtester.py:495）使用相同的逐期除数。</p>
+<h3 id="7-2-再平衡调度器-rebalance-py">7.2 再平衡调度器（<code>rebalance.py</code>）</h3>
+<p><code>_REBALANCE_TYPES</code>（config.py:40）以日历字段为键。增加日内族 + 分派 + <strong>枚举成员 + 校验器更新</strong>（视为一次<em>破坏性枚举扩展</em>，见 §10）：<code>every_n_bars</code>（在行索引上跨步）、<code>at_open</code>/<code>at_close</code>（每时段第一个/最后一个 RTH bar——为分钟<strong>重定义 <code>daily</code></strong> 为每时段一次，而非每行）、<code>at_time HH:MM</code>（每时段的 ET 挂钟 bar）。分组器以 <code>session_id</code> 为键；周/月按每个 bar 的<strong>时段日期</strong>分组，因此 390 个 bar 不会折叠。</p>
+<h3 id="7-3-执行-成本-账务-带显式优先级的双偏移字段-解决了偏移问题">7.3 执行、成本、账务 — 带显式优先级的双偏移字段（解决了偏移问题）</h3>
+<ul>
+<li>在 <code>execution_offset_days</code>（config.py:83，范围 [1,3]，config.py:206 的校验器保留）旁增加 <code>execution_offset_bars</code>（面向日内，日频中立默认值）。<strong>优先级：</strong> 当 <code>bar_interval != &quot;day&quot;</code> 时 <code>execution_offset_bars</code> 权威；否则 <code>execution_offset_days</code> 权威。校验器更新为仅在日内路径上对 bar 字段做范围检查。无前视不变量（<code>offset &gt;= 1</code> 个 bar）得以保留。</li>
+<li><code>cov_window</code>/<code>adv_window</code>（config.py:94,136）接受一个 <code>'Nd'</code> 单位，在消费时转换为 bar；<strong>风险感知的权重方法在按时段聚合的收益上运行</strong>（限定 Ledoit-Wolf 的 <code>O(W)</code> 循环和 SLSQP QP）。为使持久化载荷的 <code>from_dict</code> 仍然有效，这些字段保持为 <strong>int</strong>（bar 计数），可选的字符串形式在 <code>__post_init__</code> 中解析；磁盘上的类型不变。</li>
+<li><code>_exec_price_matrix</code>（backtester.py:417–423）：<code>vwap</code>/<code>arrival</code> 使用真实的逐 bar 价格；<code>next_open</code> 是下一个 <em>bar</em> 的开盘价。</li>
+<li>ADV/容量基准 = 每时段的日成交量，使得参与率上限保持校准。</li>
+<li><code>output_frequency</code> 增加一个由分钟到日频的降采样；<code>_sample_series</code>（backtester.py:616–653）按 <code>session_id</code> 对分钟 NAV 分组。<code>n_trading_days</code> 报告<strong>不同的时段数</strong>；增加 <code>n_bars</code>。</li>
+<li><code>accounting.py</code> 的逐行循环（accounting.py:141）和 <code>_benchmark_nav</code> 循环（backtester.py:498,505）被向量化（再平衡之间的累积乘积 NAV），因此它们不会遍历 98k 个 bar。</li>
+</ul>
+<hr />
+<h2 id="8-规模与性能">8. 规模与性能</h2>
+<p>修正后的内存计算：一个 <code>(T,N)</code> 字段透视在 <code>98k×100×8</code> 约为 <strong>78 MB</strong>（而非 8 GB）。<strong>窗口张量</strong>与<strong>并发的内存中副本</strong>才是真正的风险。</p>
+<h3 id="8-1-io">8.1 IO</h3>
+<p>按日分区 + 一个感知频率的枚举器（通过 <code>trading_days</code> 得逐日文件，跳过节假日）。把<strong>所有</strong>过滤器推入 <code>pl.scan_parquet</code>（symbol <code>is_in</code>、<code>ts</code> 范围、<code>as_of_ts &lt;= as_of</code>、<code>session_type==0</code>）。分红引入读取<strong>一个</strong>前一时段文件。<strong>经验验证剪枝：</strong> <code>scripts/bench_alpha101.py</code> 的分钟变体测量一次 100 标的读取的 读取行数 vs 返回行数，是固定 <code>row_group_size</code> 的门。量化 252 文件/年扫描的固定开销；如果多月读取在打开/stat 开销上代价过高，评估更粗（周级）的物理分区。</p>
+<h3 id="8-2-内存-窗口张量-分块求值器">8.2 内存 — 窗口张量 + 分块求值器</h3>
+<p><code>windows()</code> 返回一个 <code>(T,N,d)</code> 的 <code>sliding_window_view</code>，在归约将其物化之前是零拷贝的。在 <code>T=98k,N=100,d=390</code> 时那对一个算子约为 30 GB；<code>'20d'</code>（7800）约 600 GB。修复：</p>
+<ol>
+<li><strong>流式/累积内核</strong>（M4）：<code>ts_mean/sum/std/cov/corr</code> → 累积和 / Welford 滚动；<code>ts_min/max/argmax/argmin</code> → 单调双端队列；<code>ts_rank</code> → 滚动次序统计；<code>ts_decay_linear</code> → 增量加权和。绝不物化 <code>(T,N,d)</code>。</li>
+<li><strong>按时段分块的求值器（已明确规定，解决了规定不足问题）：</strong> <strong>仅沿 axis-0（时间）分块</strong>——截面算子（<code>cs_rank</code>、<code>cs_demean</code>、中性化）每行都需要完整横截面，但它们逐行独立于 T，因此分块不影响它们（显式陈述）。<code>max_window</code> 从<strong>解析后的 AST</strong>（以 bar 计，经 <code>Nd</code> 降级后）计算；要求 <code>chunk_sessions × bars &gt;= max_window</code>，否则<strong>回退到整面板</strong>。对于 <code>segment=&quot;continuous&quot;</code> 窗口，流式内核通过带时段标签的结转缓冲区（§5.2）<strong>在分块边界间检查点/恢复状态</strong>。测试：分钟数据上跨越分块边界的 <code>'20d'</code> 窗口等于未分块结果。</li>
+<li><strong>Float32 — 默认仅磁盘（解决了矛盾）：</strong> Float32 在磁盘上省磁盘，而非省 RAM，因为每个透视/内核都硬编码 float64（engine.py:131–132、session.py:58–59、_base.py:30、l2.py:130/139）。因此我们对默认路径<strong>放弃 float32-in-RAM 的说法</strong>。一个真正的 float32 计算路径是<em>单独的、可选加入的</em>工作（把 <code>windows()/_matrix()/_panel_to_matrices</code>/流式内核按 dtype 参数化并重新验证 NaN/ddof/精度）——不作为“免费、门控”出售。</li>
+</ol>
+<p><strong>消除三重内存副本（解决了 双/三重拷贝 问题）：</strong> 今天一次时段运行持有 长格式面板 + <code>FactorEngine._matrix_cache</code>（engine.py:119,133）+ 一份<em>第二独立</em>的 <code>SessionCache._panel_to_matrices</code> 透视（session.py:111,49–61），在任何张量之前约为 1 GB+。修复：<code>SessionCache</code> <strong>按引用借用引擎的 <code>_matrix_cache</code></strong> 而非重新透视，且引擎在矩阵缓存后丢弃 <code>self._panel</code>。真实的每时段占用被陈述为 <code>n_fields × T × N × 8 × ~1.x</code> + 长格式 frame，而 <code>batch()</code> 的 ThreadPoolExecutor 并发会将其倍增——计入内存预算（§8.4）。</p>
+<h3 id="8-3-缓存">8.3 缓存</h3>
+<ul>
+<li><code>SessionCache</code> 在 <code>time_col</code> 上透视（默认 <code>date</code>；分钟为 <code>ts</code>）——修复了在 <code>date</code> 上 <code>np.unique</code> 折叠 390 个 bar 的问题（session.py:49–56）。</li>
+<li><code>L2FactorCache</code> 键（l2.py:78–105）当前以日期串 <code>period</code> + 股票池/复权/市场为键——<strong>无当日时刻、无 <code>as_of</code></strong>。两次跨相同日历日期但不同日内窗口/<code>as_of</code> 的日内运行会碰撞，为一个 16:00 请求提供一个 14:00 矩阵。<strong>修复（解决了 L2 键问题）：</strong> 以完整的日内区间 <code>(start_ts, end_ts)</code> 和 <code>as_of_ts</code> 扩展原像；对日频这些退化为现有的日期串，因此<strong>日频键在字节层面不变</strong>。命名空间 <code>assay-l2-v1</code>→<code>v2</code> 升级。增加一个<strong>真正的按字节计的 LRU</strong>（今天只有 <code>clear()</code>，l2.py:178）。<strong>只有在键携带 as_of 轴且 LRU 存在之后</strong>，L2 才接入 <code>evaluate()</code>。</li>
+<li><strong>缓存键基数（解决了爆炸问题）：</strong> 日内 <code>as_of</code> 是逐 bar 的（约 390/天），使 L2 条目和 SessionRegistry 时段成倍增加。策略：<strong>默认仅在时段收盘 <code>as_of</code> 处缓存</strong>（或把 <code>as_of</code> 量化到一个粗桶），限定键空间；<code>SessionRegistry</code> 获得一个<strong>带 LRU 逐出的 字节/大小上限</strong>以及一个记录在案的分钟预期时段预算（今天过期是手动的，session.py:236）。容量算术连同 <code>as_of</code> 和 <code>freq</code> 乘子一并重做。</li>
+</ul>
+<h3 id="8-4-内存预算子系统-全新-独立的里程碑-解决了那个-空气产品-critical">8.4 内存预算子系统（全新——独立的里程碑，解决了那个“空气产品”CRITICAL）</h3>
+<p><code>l1_memory_gb=4.0</code>/<code>l2_max_gb=20.0</code>（config.py:120–121）目前<strong>无处</strong>被读取。守卫从零构建：</p>
+<ul>
+<li><strong>(a) 预检估算</strong>：由分区文件大小 × 标的/行组剪枝比 × <code>freq.step</code> × dtype 得出——独立于 <code>.collect()</code>。</li>
+<li><strong>(b) 在 <code>DataStore.get_panel</code> 于 <code>.collect()</code> 之前强制</strong>（datastore.py:99）：若估算 &gt; 预算，抛出一个可操作的错误（建议更粗的 <code>freq</code> / 更短的窗口 / 分块模式）或自动切换到分块/流式路径。</li>
+<li><strong>(c)</strong> <code>L2FactorCache</code> 中按字节计的 LRU + <code>SessionRegistry</code> 中带逐出的每时段字节上限。</li>
+<li><strong>(d)</strong> 为分钟重新调优 <code>l1_memory_gb</code>/<code>l2_max_gb</code> 默认值（原为 10k 行日频面板设定），由基准测试喂养。</li>
+</ul>
+<h3 id="8-5-挂钟门">8.5 挂钟门</h3>
+<p><code>scripts/bench_alpha101.py</code> 的分钟变体是一个性能门（目标在流式内核落地后设定，§12）。流式内核 + 向量化 <code>cs_rank</code> + 5m 默认，使得 1 年 NASDAQ-100 单因子求值可行。</p>
+<hr />
+<h2 id="9-api-sdk-cli-config-表面">9. API / SDK / CLI / config 表面</h2>
+<p>一个可选的 <code>frequency</code>（别名 <code>freq</code>/<code>granularity</code>，默认 <code>&quot;1d&quot;</code>）贯穿各处；<strong>省略它即复现今天的行为</strong>——由一个表面契约测试（如下）验证，而非仅仅断言。编辑集横跨约 15 个文件；其中三个承载行为并有各自的测试。</p>
+<ul>
+<li><strong><code>AssayConfig</code></strong>：<code>default_frequency=&quot;1d&quot;</code>、<code>default_horizons_minute=(1,5,30,390)</code>、<code>annualization_basis=&quot;daily&quot;</code>；<code>MassiveConfig.minute_aggs_subdir</code>/<code>minute_aggs_dir</code>。</li>
+<li><strong><code>DataStore.get_panel(fields, symbols, start, end, as_of, adj, *, freq=DAILY)</code></strong> — 分钟接受 ISO datetime；<code>effective_end=min(end,as_of)</code>（§4.2）。</li>
+<li><strong><code>FactorEngine.__init__(panel, group_data=None, *, time_col=&quot;date&quot;, session_ids=None, freq=DAILY)</code></strong>；<code>from_store(..., freq=&quot;1d&quot;)</code> 构建时段向量并路由 存储/schema/布局；日内无时段向量时抛异常。</li>
+<li><strong><code>forward_returns(..., *, session_ids=None, entry_lag=1, cross_session=&quot;mask_any_crossing&quot;)</code></strong>。</li>
+<li><strong><code>AssayService.evaluate/batch/create_session/correlation_matrix(..., frequency=&quot;1d&quot;)</code></strong>。非透传之处被列为带测试的显式子任务：<strong>(1)</strong> 折入 freq 的<strong>时段备忘键</strong>（断言日频+分钟在一个时段中不碰撞）；<strong>(2)</strong> <code>_resolve</code>（service.py:106–123）按 freq 分支处理<strong>区间/as_of 解析 以及 前瞻期/换手滞后/组收益前瞻期默认值</strong>；<strong>(3)</strong> 每个表面的 <code>service_kwargs()</code> 对 <code>frequency</code> 做 drop-None。</li>
+<li><strong><code>as_of</code>/区间解析（解决了重载问题）：</strong> 在 <strong>CLI</strong> 中，当 <code>--frequency</code> 为日内时用 <code>datetime.fromisoformat</code> 解析 <code>--start/--end/--as-of</code>（接受日期<em>或</em> datetime）；日频时保留 <code>_date</code>（对 datetime 抛异常）。在<strong>服务边界，若在 <code>freq=&quot;1d&quot;</code> 下提供了日内时间分量则抛异常</strong>（否则会静默截断）。REST 字段描述/校验在日内时接受 ISO datetime。测试：<code>datetime as_of + freq=1d</code> 被拒绝；<code>datetime as_of + freq=1m</code> 被采纳。</li>
+<li><strong>组合 config</strong>：<code>bar_interval</code>/<code>annualization_basis</code>；日内 <code>rebalance_type</code> 值；<code>execution_offset_bars</code>（优先级 §7.3）；日内 <code>output_frequency</code>。</li>
+<li><strong>REST</strong>（<code>api/models.py</code>、<code>routes/portfolio.py:79</code>）：可选 <code>frequency</code>；<code>service_kwargs()</code> drop-None 转发它；<code>build_config</code> 拒绝未知的日内枚举值并给出可操作消息，指明所需的 <code>schema_version</code>（§10）。</li>
+<li><strong>CLI</strong>（<code>cli.py</code>）：<code>--frequency</code>；日内模式下 ISO-datetime 解析；<code>--horizons</code> 接受 <code>Nd</code>/<code>Nm</code>；新增 <code>assay ingest-minute</code>。</li>
+<li><strong>MCP</strong>（<code>mcp/server.py</code>）：evaluate/batch/correlation 上的 <code>frequency</code>（默认 <code>&quot;day&quot;</code>）；<code>assay_system_status</code> 报告解析后的频率 + 分钟默认值。</li>
+<li><strong>表面契约测试：</strong> 以省略 <code>frequency</code> 的方式调用每个 REST/CLI/MCP/SDK 入口，断言解析后的服务 kwargs 与改动前完全相同。</li>
+</ul>
+<hr />
+<h2 id="10-向后兼容与迁移">10. 向后兼容与迁移</h2>
+<p>零日频迁移；结构性的，而非愿景性的。</p>
+<ul>
+<li>
+<p><strong>存储</strong>：日频 <code>PRICE_RAW_SCHEMA</code>、<code>price_partition_path</code>（月）、<code>adj_events</code>、<code>universe_snapshots</code> 保持不动。分钟是一个<strong>新存储</strong>（<code>price_raw_minute</code>）；无重建。</p>
+</li>
+<li>
+<p><strong>读取</strong>：<code>_as_date</code> 对 <code>freq=DAILY</code> 仍然截断 datetime；日频 <code>get_panel</code> 返回完全相同的 <code>date</code>/<code>pl.Date</code> frame。</p>
+</li>
+<li>
+<p><strong>引擎</strong>：对共享代码的编辑仅有 <code>to_frame</code> 转回记录的 dtype（对日频是空操作）以及新的 <code>time_col</code>/<code>session_ids</code>/<code>freq</code> 参数默认为今天的行为。分段路径以 <code>session_ids is not None</code> 门控 → 日频字节层面相同。</p>
+</li>
+<li>
+<p><strong><code>config_hash</code>/<code>run_id</code>（解决了那个 CRITICAL）：</strong> <code>config_hash()</code> 对 <code>json.dumps(self.to_dict())</code> 求哈希，而 <code>to_dict()</code> 是一个被 <code>from_dict</code>、REST <code>build_config</code>、报告和 WebUI 消费的普通 <code>asdict()</code>。我们<strong>不触碰 <code>to_dict()</code></strong>。相反，引入一个冻结的 <code>_HASH_FIELDS_V1</code> 白名单（今天存在的字段），并<strong>仅在 <code>bar_interval==&quot;day&quot;</code> 时对这些字段</strong>计算 <code>config_hash()</code>；新的日内字段被完全排除在日频原像之外。一个回归测试断言默认 US config 的 <code>config_hash()</code> 与已提交的改动前值<strong>字节层面相同</strong>。在 M0/M6 决定（不是开放问题）。</p>
+</li>
+<li>
+<p><strong><code>compute_factor_id</code>（解决了那个 major）：</strong> 签名变为 <code>compute_factor_id(expr_canonical, granularity=&quot;1d&quot;)</code>，带<strong>承载分量的条件</strong>：<code>return hash(expr) if granularity==&quot;1d&quot; else hash(f&quot;{expr}::{granularity}&quot;)</code>。两个日频调用点（service.py:313,374）都传入解析后的频率。一个测试固定 <code>compute_factor_id(expr) == compute_factor_id(expr,&quot;1d&quot;) == &lt;已提交的遗留摘要&gt;</code>，因此 <code>library.save()</code>（store.py:84）绝不会为现有的日频 <code>.json</code> 文件重新设键。</p>
+</li>
+<li>
+<p><strong>枚举扩展的 schema 版本化（解决了那个跨版本 major）：</strong> <code>from_dict</code> 忽略未知键（保护新代码读取旧载荷），但旧代码拒绝新枚举值（<code>rebalance_type=&quot;at_open&quot;</code> 使 <code>_enum</code> 失败）。因此枚举扩展是一次<strong>破坏性 schema 变更</strong>：把 <code>schema_version</code> 升级并放入 <code>config.to_dict()</code> 和报告 JSON；旧读者<strong>响亮地</strong>失败并给出指明所需版本的消息。<code>build_config</code>/<code>from_dict</code> 拒绝未知日内枚举并给出可操作错误。</p>
+</li>
+<li>
+<p><strong>共享内核重写 vs “字节层面相同”（解决了那个 major）：</strong> M4 的流式 <code>ts_*</code> 和 §5.4 的 <code>cs_rank</code> 向量化是<strong>共享</strong>内核；累积和滚动方差/协方差与窗口化计算<strong>不是</strong>位相同的，且向量化的平局处理可能有差异。我们通过<strong>把流式内核门控在 <code>freq.is_intraday</code> 之后并为日频保留物化路径</strong>来解决（因此日频保持字节层面相同）——除非有意识地决定为日频大 <code>d</code> 采用流式，这时<strong>有意识地</strong>在明确的 <code>rtol/atol</code> 下重新认证黄金夹具。本文档的“字节层面相同”承诺，<strong>仅对任何改变共享日频内核的里程碑降级为“在明确容差内”</strong>，且逐算子门控被显式陈述。<code>cs_rank</code> 用平均平局/NaN 一致性测试对照当前实现验证；若仍有任何偏离，则以日内门控发布。</p>
+</li>
+<li>
+<p><strong>报告 JSON 字段别名（解决了那个 minor）：</strong> 新的带标签字段（<code>granularity</code>、<code>decay_halflife</code>、<code>n_periods</code>、<code>turnover</code>）是附加式的。对<strong>分钟</strong>报告，<code>n_dates</code> = <strong>不同时段计数</strong>（与其名称匹配），<code>decay_halflife_days</code> 被记录为导出/近似；WebUI/agent 在 <code>granularity!=&quot;1d&quot;</code> 时读取带标签字段。一个序列化测试断言对 <code>granularity=&quot;1d&quot;</code>，JSON 键/值与改动前字节层面相同。</p>
+</li>
+<li>
+<p><strong>L2 命名空间</strong>升级仅影响（当前未使用的）L2 缓存；日频键字节层面不变（§8.3）。</p>
+</li>
+</ul>
+<hr />
+<h2 id="11-分阶段实施计划">11. 分阶段实施计划</h2>
+<p><strong>框架（解决了增量性问题）：</strong> 每个里程碑都是<strong>日频安全的</strong>（改动按 freq 门控）。<strong>分钟路径在 M3+M5 落地前是静默错误的</strong>，因此公共表面（REST/CLI/MCP/SDK）上的 <code>frequency != &quot;1d&quot;</code> 在 M5 完成前抛 <code>NotImplementedError</code>；§5.1 的日内需要时段向量守卫落在 M3。下列每个里程碑都可独立发布<strong>且</strong>可独立测试。</p>
+<p><strong>M0 — <code>Frequency</code> + config + 日历 + 恒等守卫（无行为变更）。</strong>
+<code>frequency.py</code>；<code>MassiveConfig.minute_aggs_dir</code>；<code>AssayConfig</code> 分钟默认值；日历辅助函数（<code>session_open_close</code>、<code>session_bars</code>、<code>bars_per_session</code>、<code>session_ids</code>、<code>session_type</code>、<code>session_count</code>）；<strong><code>config_hash</code> <code>_HASH_FIELDS_V1</code> 白名单</strong> + 回归测试；<code>compute_factor_id(expr, granularity=&quot;1d&quot;)</code> + 遗留摘要固定；<code>schema_version</code> 字段。
+测试：半日 bar 计数、夏令时边界、<code>config_hash</code>/<code>factor_id</code> 对照已提交摘要的字节稳定性。</p>
+<p><strong>M1 — 分钟摄取 + 分钟存储 schema/布局。</strong>
+<code>PRICE_RAW_MINUTE_SCHEMA</code>（含 <code>session_close_ts</code>）、<code>price_partition_path(freq=...)</code>、按 freq 参数化的 <code>read_minute_agg</code>、<code>MinutePriceIngester</code>（按日原子写、调优的 <code>row_group_size</code>）、<code>assay ingest-minute</code>。
+测试：往返（<code>as_of_ts=ts+step</code>、<code>session_close_ts</code>、<code>session_type</code>、盘前/盘后排除计数）、幂等再摄取、行组剪枝比。</p>
+<p><strong>M2 — <code>DataStore</code> 中的日内 PIT 读取路径。</strong>
+<code>_as_time</code>、带 <code>effective_end=min(end,as_of)</code> 的 <code>get_panel(freq=...)</code> 分钟分支、按日文件枚举器、前一时段分红引入（排除在面板外）、<strong><code>adj_events</code>/<code>get_universe</code> 的日终可知性切割</strong>、感知时段的 <code>forward_adjust</code>（向量化的 <code>session_id</code>→因子广播，无逐 bar Python 列表）。
+测试：日内 <code>as_of</code> 排除（10:30:30 排除 10:31）；<strong><code>as_of_date==D</code> 的拆股在 D 10:00 不可见、在 D 16:00 可见</strong>；<code>end&gt;as_of</code> ⇒ 与 <code>end==as_of</code> 相同的值；日频黄金不变。</p>
+<p><strong>M3 — 引擎日内语义（门控分钟暴露）。</strong>
+<code>to_frame</code> dtype 修复；<code>time_col</code>/<code>session_ids</code>/<code>freq</code> 管线 + 日内需要时段向量守卫；带 <code>segment=&quot;session&quot;|&quot;continuous&quot;</code> 自动选择的分段 <code>windows</code>/<code>ts_*</code>；<code>ts_ema</code>/<code>ts_dema</code> 逐时段重置 + <code>ts_ema_daily</code>；运行时 <code>'Nd'</code>/<code>DayWindowNode</code> 降级；极值位置/rank 单位重标；向量化 <code>cs_rank</code>（门控到日内，或依 §10 为日频容差认证）。
+测试：隔夜跳空 NaN；EMA 时段独立；<code>ts_mean(close,'20d')</code> 在多日分钟面板上<strong>不</strong>全 NaN；分块==整面板黄金；所有 <code>ts_*</code> 在日频上字节层面相同。</p>
+<p><strong>M4 — 流式窗口内核 + 内存预算子系统（§8.4）。</strong>
+带跨块状态检查点的流式 <code>ts_mean/sum/std/min/max/argmax/argmin/rank/decay_linear/cov/corr</code>；按时段分块的求值器（AST 最大窗口、axis-0 分块、整面板回退）；<strong>预检大小估算 + <code>get_panel</code> 预算守卫 + L2/SessionRegistry LRU</strong>；重新调优的预算；基准门。
+测试：流式==物化黄金（日频在容差内 / 日内）；<code>'20d'</code> 跨块边界 == 未分块；峰值 RAM 断言；预算守卫以可操作消息抛异常。</p>
+<p><strong>M5 — 分钟前瞻期的评估器（解锁公共分钟表面）。</strong>
+<code>forward_returns</code> bar 前瞻期 + bar 三元组掩码 + <code>cross_session</code> 枚举 + <code>entry_lag</code> + 真实 <code>vwap</code>；服务单位转换 + 折入 freq 的备忘键；分钟前瞻期默认值；解除 <code>NotImplementedError</code> 表面门。
+测试：跨时段收益被掩码；<code>allow_whole_day</code> 按时段计数（半日正确）；半衰期单位转换；日频评估器不变。</p>
+<p><strong>M6 — 日内组合。</strong>
+<code>periods_per_year</code> + 日聚合默认；日内再平衡类型 + 分派 + 校验器 + <code>schema_version</code>；<code>execution_offset_bars</code> 优先级；以 bar 为单位的 cov/adv 窗口；日内执行价格；由分钟到日频输出；<code>n_bars</code>/<code>granularity</code>；向量化账务遍历。
+测试：日聚合下 Sharpe/波动稳定；<code>at_open</code>/<code>every_n_bars</code>；<code>offset&gt;=1</code>；默认日频 config 的 <code>config_hash</code> 字节稳定；日频组合黄金不变。</p>
+<p><strong>M7 — 表面 + 缓存 + 库 + L2 接线。</strong>
+REST/CLI/MCP/SDK 上的 <code>frequency</code>，带 ISO-datetime 解析 + 日频截断拒绝；<code>SessionCache</code> 时间轴泛化 + <strong>借用引擎矩阵</strong>；<strong>L2 键携带 <code>(start_ts,end_ts,as_of_ts)</code> + 命名空间升级 + LRU，然后接入 <code>evaluate()</code></strong>，带仅时段收盘 <code>as_of</code> 缓存策略；<code>factor_id</code>/报告 <code>granularity</code> 共存。
+测试：表面契约（省略 frequency ⇒ 相同 kwargs）；日频+分钟报告共存；L2 无日频/分钟且无 as_of 别名；<code>granularity=&quot;1d&quot;</code> 时报告 JSON 字节层面相同。</p>
+<hr />
+<h2 id="12-开放问题与残余风险">12. 开放问题与残余风险</h2>
+<p><strong>首要残余风险。</strong> (1) <code>as_of_ts = bar close</code> 和日终可知性切割就是整个日内 PIT 故事——一行写错就静默地重新引入前视；M2 中的专门排除测试 + 摄取不变量 <code>as_of_ts &gt; ts</code>。(2) 流式内核（M4）必须在明确容差内匹配物化的 NaN/<code>ddof</code>/平局语义；为日频安全而门控到日内。(3) 运行时 <code>'Nd'</code> 降级除非使用精确的逐行时段行走，否则是相对名义 bar 计数的<em>近似</em>——半日/夏令时误差被记录而非隐藏。</p>
+<p><strong>开放问题（非阻塞）。</strong> 哪个 bar 标记时段 NAV 用于聚合（16:00 RTH vs 竞价代理）？是否要暴露逐 bar（<code>&quot;bar&quot;</code>）年化。分钟尺度上的 <code>adv{d}</code>——<code>d</code> 个时段的加总 bar 成交量 vs 一个日聚合的伴随成交量字段。M4 基准目标数值。扩展时段研究模式及其与 <code>bars_per_session</code>/年化的交互。日频大 <code>d</code> 是否应采用流式内核（容差认证）或保持物化。</p>
+<hr />
+<h2 id="已解决的评审问题">已解决的评审问题</h2>
+<ul>
+<li><strong>公司行为/股票池日内 as_of 强制（critical）：</strong> §4.4 — 无日期强制；经存储的 <code>session_close_ts</code> 做日终可知性切割（<code>as_of_date &lt; as_of.date()</code> 或 同日在 <code>session_close</code> 之后）；拆股时段中途不可见测试。</li>
+<li><strong>前向复权基准 = end &gt; as_of（major）：</strong> §4.2 — <code>effective_end = min(end, as_of)</code> 同时钳制 bar 过滤器与复权基准；不变量 + 测试。</li>
+<li><strong>重采样部分 bar 完整性（major）：</strong> §4.3 — 完整性针对每个特定 bin 的日历预期构成集检查；部分前沿 bin 被整体丢弃；粗 <code>as_of_ts = bin_end</code>。</li>
+<li><strong><code>forward_returns</code> 掩码绕过（major）：</strong> §6.1 — 通过 <code>session_ids</code> 对 信号/进场/出场 bar 三元组掩码；显式 <code>cross_session</code> 枚举；整日由时段计数定义。</li>
+<li><strong>生存者/股票池日内（minor）：</strong> §4.4 — 同一日终可知性规则；日内上市/停牌以 NaN 呈现；测试有备注。</li>
+<li><strong>结转重新引入泄漏（minor）：</strong> §5.2 — 缓冲区携带真实 <code>session_ids</code>；分段在 缓冲区+分块 拼接后应用；分红引入排除在面板外；分块==整面板黄金。</li>
+<li><strong>内存预算守卫是空气产品（critical）：</strong> §8.4 — 全新子系统：预检估算、在 <code>get_panel</code> 强制、L2 + SessionRegistry 中按字节计的 LRU、重新调优预算、其自身里程碑（M4）。</li>
+<li><strong>双/三重内存副本（major）：</strong> §8.2 — <code>SessionCache</code> 借用引擎矩阵；引擎在缓存后丢弃 <code>self._panel</code>；真实占用连同 <code>batch()</code> 并发一并陈述。</li>
+<li><strong>Float32-in-RAM 矛盾（major）：</strong> §8.2 — 降级为仅磁盘的收益；float32 计算路径是单独可选加入，而非“免费/门控”。</li>
+<li><strong><code>forward_adjust</code> 大规模下的逐标的 Python 循环（major）：</strong> §4.4 — 向量化的逐时段因子 <code>session_id</code>→因子 连接/广播；针对唯一时段数组 bisect；无逐 bar <code>.to_list()</code>/DataFrame 重建。</li>
+<li><strong>重采样先收集完整 1m（major）：</strong> §4.3 — 重采样被推入 LazyFrame，以粗粒度收集；峰值 RAM 有界，而非完整 1m 切片。</li>
+<li><strong>L2 键遗漏日内窗口/as_of（major）：</strong> §8.3 — 原像扩展 <code>(start_ts,end_ts,as_of_ts)</code>（日频退化不变）；L2 仅在此 + LRU 之后接线。</li>
+<li><strong>缓存键基数爆炸（major）：</strong> §8.3 — 仅时段收盘 as_of 缓存（或量化）；SessionRegistry 字节上限 + LRU；算术重做。</li>
+<li><strong>流式内核承载分量却被推迟（major）：</strong> §11 — 分钟暴露门控在 M3+M5 之后；预算守卫（M4）抛异常而非 OOM；分块路径限定 RAM。</li>
+<li><strong>分块求值器规定不足（minor）：</strong> §8.2 — 仅 axis-0；cs 算子不受影响；AST 最大窗口；整面板回退；跨块状态检查点。</li>
+<li><strong>行组剪枝未验证（minor）：</strong> §8.1 — 调优的 <code>row_group_size</code>，经基准经验验证；252 文件开销量化。</li>
+<li><strong>分段下窗口 NaN = 多日全 NaN（critical）：</strong> §5.2 — <code>segment=&quot;session&quot;|&quot;continuous&quot;</code>；多日窗口经结转跨时段；<code>ts_mean(close,'20d')</code> 非全 NaN 测试。</li>
+<li><strong><code>'Nd'</code> 降级 vs 半日（major）：</strong> §5.3 — 运行时 <code>DayWindowNode</code> 针对 <code>session_ids</code> 逐行解析；名义仅作为记录的近似使用；放弃“永不移动”的说法。</li>
+<li><strong>重采样对齐到时段开盘（major）：</strong> §4.3 — <code>group_by_dynamic</code> 在 <code>session_id</code> 内以锚（<code>start_by=&quot;datapoint&quot;</code>）；首/末/半日 bin 由完整性测试覆盖。</li>
+<li><strong>长 EMA 日内无意义（major）：</strong> §5.2 — <code>ts_ema_daily</code>（在按时段聚合序列上以日为时间常数）；bar 级 <code>ts_ema</code> 在 <code>d &gt;= bars_per_session</code> 时抛异常。</li>
+<li><strong>极值位置/rank 单位变更（major）：</strong> §5.3 — 记录为 bar 计数；注册表/诊断重标；<code>*_days</code> 辅助函数；一致性测试。</li>
+<li><strong><code>returns</code> 在时段开盘处 NaN（minor）：</strong> §5.3 — 记录在案；提供 <code>overnight_return</code> 算子。</li>
+<li><strong><code>periods_per_year</code> 硬编码 252（minor）：</strong> §3.3 — 年数由实际日历跨度得出；252 限定在日聚合约定中。</li>
+<li><strong><code>config_hash</code>/<code>run_id</code> 稳定性（critical）：</strong> §10 — <code>to_dict()</code> 不动；冻结的 <code>_HASH_FIELDS_V1</code> 白名单在日频时排除日内字段；字节稳定回归测试；在 M0 决定。</li>
+<li><strong><code>compute_factor_id</code> 签名（major）：</strong> §10 — <code>(expr, granularity=&quot;1d&quot;)</code>，带显式的 <code>&quot;1d&quot;</code> 保留遗留 条件；遗留摘要固定；无日频文件重设键。</li>
+<li><strong>日频“字节层面相同” vs M4 共享内核重写（major）：</strong> §10 — 流式/<code>cs_rank</code> 门控到日内（日频字节层面相同）或有意识地容差认证；承诺仅在共享日频内核改变处降级为“在容差内”。</li>
+<li><strong>跨版本 config 序列化 / 枚举扩展（major）：</strong> §10 — config + 报告 JSON 中的 <code>schema_version</code>；旧读者响亮失败；日内枚举被拒绝并给出可操作错误。</li>
+<li><strong><code>as_of</code> 日频 vs 日内重载（major）：</strong> §9 — 感知 freq 的 CLI/REST 解析；服务在 <code>freq=1d</code> 下拒绝 datetime as_of；两向都测试。</li>
+<li><strong>表面波及范围 vs “一个 kwarg”（major）：</strong> §9 — 枚举非透传之处（折入 freq 的备忘键、<code>_resolve</code> 默认值、每表面 drop-None），带表面契约测试。</li>
+<li><strong>分阶段增量性（major）：</strong> §11 — “始终日频安全；仅在标记里程碑分钟可用”；M5 前 <code>NotImplementedError</code> 表面门；M3 中的引擎守卫。</li>
+<li><strong>FactorReport 日单位别名（minor）：</strong> §10 — 分钟 <code>n_dates</code> = 不同时段计数；消费者读取带标签字段；日频 JSON 字节层面相同。</li>
+<li><strong><code>execution_offset_days</code> 双字段（minor）：</strong> §7.3 — 显式优先级（日内 <code>bars</code> 胜出）、日频中立默认、排除在哈希外；cov/adv 保持 int 以使 <code>from_dict</code> 有效。</li>
+</ul>
+<h2 id="推荐的首个里程碑">推荐的首个里程碑</h2>
+<p><strong>先构建 M0。</strong> 它是最小的、自包含的、有真实价值且零行为变更的增量：<code>Frequency</code> 值对象、日历辅助函数（<code>session_open_close</code>/<code>session_bars</code>/<code>bars_per_session</code>/<code>session_ids</code>）、config 管线，以及——关键地——两个<strong>恒等守卫</strong>（<code>config_hash</code> <code>_HASH_FIELDS_V1</code> 白名单 和 带遗留摘要固定的 <code>compute_factor_id(expr, granularity=&quot;1d&quot;)</code>）加上 <code>schema_version</code> 字段。它完全在默认值之后发布，不触碰任何 读取/求值/组合 数值，完全可单元测试（半日计数、夏令时偏移、对照已提交摘要的字节稳定 <code>config_hash</code>/<code>factor_id</code>），并且<strong>在任何分钟代码存在之前就为三个 CRITICAL 向后兼容发现去风险</strong>——因此每个后续里程碑都建立在一个冻结的、已验证的日频恒等契约之上。</p>

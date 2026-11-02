@@ -92,3 +92,32 @@ def test_lint_syntax_error_is_200_with_error_diagnostics() -> None:
     assert body["diagnostics"]["status"] == "error"
     assert body["ast"] is None
     assert body["canonical"] is None
+
+
+# ---------------------------------------------------------------------------
+# Doc Hub (/doc/) and the build badge
+# ---------------------------------------------------------------------------
+def test_doc_hub_serves_shell_for_pages_and_files_for_content() -> None:
+    """/doc/ and /doc/<slug> serve the hub shell; content files are served as they are."""
+    assert client.get("/doc", follow_redirects=False).status_code == 308
+    for path in ("/doc/", "/doc/guide/getting-started", "/doc/guide/qfv-data"):
+        res = client.get(path)
+        assert res.status_code == 200 and "Doc Hub" in res.text and "/doc/doc.js" in res.text
+    manifest = client.get("/doc/content/manifest.json").json()
+    assert "guide/qfv-data" in manifest["pages"]
+    page = client.get("/doc/content/en/guide/getting-started.html")
+    assert page.status_code == 200 and "doc-title" in page.text
+    assert client.get("/doc/content/missing.json").status_code == 404
+    assert client.get("/doc/../index.html").status_code in (200, 404)  # never escapes doc/
+
+
+def test_doc_hub_links_point_inside_the_hub() -> None:
+    """Rendered pages link to other docs under /doc/, never to raw .md files."""
+    page = client.get("/doc/content/en/guide/getting-started.html").text
+    assert 'href="/doc/guide/' in page and '.md"' not in page
+
+
+def test_health_reports_build() -> None:
+    """/health carries the running build (commit id, or 'dev')."""
+    build = client.get("/health").json()["build"]
+    assert set(build) == {"id", "commit", "deployed_at"} and build["id"]

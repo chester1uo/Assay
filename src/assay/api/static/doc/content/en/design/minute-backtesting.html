@@ -1,0 +1,401 @@
+<h1 class="doc-title">Minute-Level (Intraday) Backtesting — Engineering Design (FINAL)</h1>
+<p>Status: FINAL (post adversarial review)
+Author: factor-platform
+Scope: add minute/intraday backtesting to Assay while keeping the daily path numerically unchanged.</p>
+<hr />
+<h2 id="1-overview-goals">1. Overview &amp; goals</h2>
+<p>Assay today is a <strong>daily-only</strong> factor backtesting engine. Panels are <code>(T dates × N symbols)</code> matrices whose time axis is a Python <code>datetime.date</code>. Every read goes through <code>DataStore.get_panel(...)</code> with an <code>as_of_date</code>, is point-in-time (PIT) correct (only rows knowable on <code>as_of</code> are used; corporate actions applied at read time), an expression engine evaluates factors, an evaluator computes forward returns / IC / decay / turnover, and a portfolio backtester rebalances with cost/execution models.</p>
+<p>We add <strong>minute-level</strong> backtesting using the local 1m mirror at <code>/data/massive_data/us_stocks_sip/minute_aggs_v1/{YYYY}/{MM}/{YYYY-MM-DD}.parquet</code> (columns <code>ticker, volume, open, close, high, low, window_start[ns,UTC], transactions</code>; <code>window_start</code> = bar START; ~390 RTH bars/day; ~1.47M rows/day; ~54 GB total).</p>
+<h3 id="goals">Goals</h3>
+<ol>
+<li><strong>PIT correctness at minute granularity</strong> — no intraday look-ahead. A price bar is knowable only at its <em>close</em> (<code>window_start + step_seconds</code>). Day-grained events (splits, dividends, index membership) are knowable only at that <strong>session's close</strong>, never at a mid-session <code>as_of</code>.</li>
+<li><strong>Daily path preserved within a stated tolerance</strong> — existing API/SDK/CLI/MCP and daily golden numbers are unchanged for every milestone that does not rewrite shared kernels; the one milestone that rewrites shared kernels (M4) carries an explicit <code>rtol/atol</code> and consciously re-blessed fixtures (see §10). All daily <em>identities</em> (<code>config_hash</code>, <code>factor_id</code>, report JSON keys) are byte-stable.</li>
+<li><strong>Reuse the existing design</strong> — parquet stores, read-time adjustment, the row-indexed engine, the pure-numpy evaluator, the index-based backtester are value-opaque on the time axis. We widen the time <em>type</em> (Date → Datetime) and add a session dimension; we do <strong>not</strong> fork the numerics.</li>
+<li><strong>Scale to 54 GB</strong> — day-partitioned IO, predicate pushdown, lazy read-time resampling to coarser bars, session-chunked + streaming evaluation, and a real (net-new) memory-budget subsystem.</li>
+</ol>
+<h3 id="synthesis-decision">Synthesis decision</h3>
+<p><strong>Unified Timestamp Axis</strong> as the spine (one engine/store/evaluator/portfolio; <code>freq</code> is <em>data</em>, not a forked code path), grafted with the explicit <strong><code>Frequency</code> value object</strong> (centralizes every granularity constant so no layer hard-codes 252/390), lazy <strong>read-time 1m→5m/15m resampling</strong>, <strong>per-session physical partitions + row-group pruning</strong>, and an <strong>enforced memory-budget subsystem</strong>. We <strong>reject</strong> a parallel <code>DataStore</code> class (it duplicates the PIT/corp-action logic, the most dangerous place for silent divergence) — one store branches on <code>freq</code> in a few well-named spots.</p>
+<hr />
+<h2 id="2-data-model-storage">2. Data model &amp; storage</h2>
+<h3 id="2-1-the-frequency-value-object-src-assay-data-frequency-py-new">2.1 The <code>Frequency</code> value object — <code>src/assay/data/frequency.py</code> (new)</h3>
+<pre><code class="language-python">@dataclass(frozen=True)
+class Frequency:
+    code: str            # &quot;1d&quot; | &quot;1m&quot; | &quot;5m&quot; | &quot;15m&quot;
+    base_unit: str       # &quot;day&quot; | &quot;minute&quot;
+    multiple: int        # 1, 5, 15
+    is_intraday: bool
+    time_col: str        # &quot;date&quot; | &quot;ts&quot;
+    partition_grain: str # &quot;month&quot; | &quot;day&quot;
+
+    @property
+    def step_seconds(self) -&gt; int: ...          # 0(daily)/60/300/900
+    @property
+    def nominal_bars_per_day(self) -&gt; int: ...  # 1/390/78/26 — sizing &amp; default-horizon HINTS ONLY
+    def polars_every(self) -&gt; str: ...          # &quot;5m&quot;/&quot;15m&quot; for group_by_dynamic
+
+DAILY     = Frequency(&quot;1d&quot;, &quot;day&quot;,    1,  False, &quot;date&quot;, &quot;month&quot;)
+MINUTE_1  = Frequency(&quot;1m&quot;, &quot;minute&quot;, 1,  True,  &quot;ts&quot;,   &quot;day&quot;)
+MINUTE_5  = Frequency(&quot;5m&quot;, &quot;minute&quot;, 5,  True,  &quot;ts&quot;,   &quot;day&quot;)
+MINUTE_15 = Frequency(&quot;15m&quot;,&quot;minute&quot;, 15, True,  &quot;ts&quot;,   &quot;day&quot;)
+
+def parse_frequency(code: str | Frequency | None) -&gt; Frequency: ...  # None/&quot;1d&quot;/&quot;daily&quot;-&gt;DAILY; else map; ValueError otherwise
+</code></pre>
+<p><code>nominal_bars_per_day</code> is used <strong>only</strong> for sizing and default-horizon hints. Every correctness-bearing count (segmentation, scheduling, annualization) derives bars <strong>per session</strong> from the calendar (§3), so half-days/DST never shift boundaries.</p>
+<h3 id="2-2-schemas-src-assay-data-schemas-py">2.2 Schemas — <code>src/assay/data/schemas.py</code></h3>
+<p>Daily <code>PRICE_RAW_SCHEMA</code> (lines 35–46) is <strong>untouched</strong> (any change forces a daily-store rebuild because <code>upsert_parquet</code> raises on schema mismatch). Add a parallel minute schema:</p>
+<pre><code class="language-python">PRICE_RAW_MINUTE_SCHEMA: dict[str, pl.DataType] = {
+    &quot;ts&quot;:           pl.Datetime(&quot;ns&quot;, &quot;UTC&quot;),  # event_time = bar OPEN (window_start), stored UTC (DST-unambiguous)
+    &quot;session_id&quot;:   pl.Int32,                   # ET trading date YYYYMMDD; segmentation + corp-action join key
+    &quot;symbol&quot;:       pl.Utf8,
+    &quot;open&quot;:         pl.Float32,
+    &quot;high&quot;:         pl.Float32,
+    &quot;low&quot;:          pl.Float32,
+    &quot;close&quot;:        pl.Float32,                  # unadjusted
+    &quot;volume&quot;:       pl.Float32,
+    &quot;transactions&quot;: pl.Int64,
+    &quot;as_of_ts&quot;:     pl.Datetime(&quot;ns&quot;, &quot;UTC&quot;),    # knowledge_time = bar CLOSE = ts + step_seconds — THE PIT line
+    &quot;session_close_ts&quot;: pl.Datetime(&quot;ns&quot;,&quot;UTC&quot;), # ET session close as UTC; the EOD-knowability instant for day-grained events (§4.4)
+    &quot;session_type&quot;: pl.UInt8,                    # 0=RTH, 1=pre, 2=post
+    &quot;source_id&quot;:    pl.Utf8,                     # provenance: per-day flat-file key
+}
+</code></pre>
+<ul>
+<li><code>ts</code>/<code>as_of_ts</code>/<code>session_close_ts</code> are <strong>UTC tz-aware on disk</strong>; ET conversion happens only for derivation and for the panel axis surfaced to the engine.</li>
+<li><code>session_id</code> (Int32 <code>YYYYMMDD</code>) is the cheap segmentation key carried into the engine as a <code>(T,)</code> vector and the join key to day-grained stores. A <code>date: pl.Date</code> is <em>not</em> stored; it is derived on read only for the corp-action join.</li>
+<li><code>session_close_ts</code> is <strong>stored per bar</strong> specifically so the day-grained-event knowability cut (§4.4) is a pure column comparison with no per-read calendar call.</li>
+<li><code>adj_events</code> and <code>universe_snapshots</code> schemas are <strong>unchanged</strong>.</li>
+</ul>
+<h3 id="2-3-partition-layout">2.3 Partition layout</h3>
+<p>Daily <code>price_partition_path</code> (schemas.py:74) is <strong>unchanged</strong> (zero migration). Add a frequency-aware path and a <strong>day-level</strong> partition for minute:</p>
+<pre><code class="language-python">def price_partition_path(data_dir, market, year, month, *, freq=DAILY, day=None) -&gt; Path:
+    if not freq.is_intraday:                      # EXISTING daily path, byte-identical (no &quot;freq=&quot; level)
+        return data_dir/&quot;price_raw&quot;/f&quot;market={market}&quot;/f&quot;year={year:04d}&quot;/f&quot;month={month:02d}&quot;/&quot;price_raw.parquet&quot;
+    return (data_dir/&quot;price_raw_minute&quot;/f&quot;market={market}&quot;/f&quot;year={year:04d}&quot;
+            /f&quot;month={month:02d}&quot;/f&quot;day={day:02d}&quot;/&quot;price_raw_minute.parquet&quot;)
+</code></pre>
+<p>Only the <strong>canonical 1m store</strong> is materialized; 5m/15m are <strong>lazy read-time resamples</strong> (§4.3). Each day file is written with <code>pl.write_parquet(..., row_group_size=R)</code> where <strong>R is tuned so each row group holds a contiguous block of whole symbols</strong> (file pre-sorted by <code>[&quot;symbol&quot;,&quot;ts&quot;]</code>), so a 100-of-10,144-symbol <code>is_in</code> prunes by row-group statistics on <code>symbol</code> instead of scanning every group. R is <em>verified empirically</em> (§8.1), not assumed. Compression: zstd.</p>
+<h3 id="2-4-ingestion-of-minute_aggs">2.4 Ingestion of <code>minute_aggs</code></h3>
+<p><code>MassiveConfig</code> (<code>src/assay/config.py</code>): <code>minute_aggs_subdir: str = &quot;us_stocks_sip/minute_aggs_v1&quot;</code> + <code>minute_aggs_dir</code> property.</p>
+<p><code>LocalFlatFiles</code> (<code>src/assay/data/massive/flatfiles.py</code>) parameterized by <code>freq</code>:</p>
+<pre><code class="language-python">class LocalFlatFiles:
+    def __init__(self, config, freq: Frequency = DAILY):
+        self.root = config.minute_aggs_dir if freq.is_intraday else config.day_aggs_dir
+    def list_aggs(self, start, end) -&gt; list[AggFile]: ...      # generalizes list_day_aggs (file-listing handles holidays)
+    def read_minute_agg(self, date, symbols=None) -&gt; pl.DataFrame | None:
+        # reuse existing window_start-&gt;ET conversion but DROP the trailing .dt.date(); keep tz-aware ts
+</code></pre>
+<p>Normalizer + ingester (<code>src/assay/data/ingest/prices.py</code>):</p>
+<pre><code class="language-python">def normalize_minute_agg(df, source_id, freq, session) -&gt; pl.DataFrame:
+    # session_id, session_type from ET wall-clock vs calendar open/close;
+    # as_of_ts = ts + freq.step_seconds  (BAR CLOSE) — the single PIT-critical line;
+    # session_close_ts = session.close (UTC)         — the EOD-knowability instant.
+    ...
+
+class MinutePriceIngester:                 # per-DAY atomic write, NOT month-wide upsert
+    def run(self, start, end, symbols=None) -&gt; dict:
+        for f in self.client.list_aggs(start, end):
+            norm = normalize_minute_agg(self.client.read_minute_agg(f.date, symbols),
+                                        f.key, self.freq, session_open_close(f.date))
+            path = price_partition_path(self.config.data_dir, self.config.market,
+                                        f.date.year, f.date.month, freq=MINUTE_1, day=f.date.day)
+            write_parquet_atomic(norm.sort([&quot;symbol&quot;,&quot;ts&quot;]), path)   # idempotent: re-ingest overwrites the day
+</code></pre>
+<p><code>upsert_parquet</code> is <strong>not</strong> used (a month is ~30M rows; read-modify-write is prohibitive). Dedup within a file is on <code>[&quot;ts&quot;,&quot;symbol&quot;]</code> (never <code>[&quot;date&quot;,&quot;symbol&quot;]</code>, which would collapse 390 bars to one row). Pre/post-market bars are tagged via <code>session_type</code> and kept on disk but <strong>excluded by default at read</strong>. An ingest-time assertion checks the derived RTH bar count equals <code>bars_per_session(day)</code> (catches calendar/data drift).</p>
+<hr />
+<h2 id="3-time-axis-calendar">3. Time axis &amp; calendar</h2>
+<h3 id="3-1-bar-grid">3.1 Bar grid</h3>
+<p>The intraday panel time axis <code>T</code> is the ordered set of bar timestamps present, surfaced as <code>pl.Datetime(&quot;ns&quot;,&quot;America/New_York&quot;)</code> named <code>ts</code>. Daily is the special case <code>time_col==&quot;date&quot;</code> (<code>pl.Date</code>). The engine's axis construction (<code>np.unique</code>/<code>np.searchsorted</code>, engine.py:112–115) is dtype-agnostic over <code>datetime64[ns]</code> — verified, zero kernel change.</p>
+<h3 id="3-2-calendar-additions-src-assay-data-calendar-py">3.2 Calendar additions — <code>src/assay/data/calendar.py</code></h3>
+<p><code>trading_days</code>/<code>is_trading_day</code> are kept. Add (all wrapping <code>exchange_calendars</code> XNYS, already DST/half-day aware):</p>
+<pre><code class="language-python">def session_open_close(day, calendar=&quot;XNYS&quot;) -&gt; tuple[datetime, datetime]: ...  # ET; half-days -&gt; 13:00 close
+def session_bars(day, *, freq=MINUTE_1, include_extended=False) -&gt; list[datetime]: ...  # authoritative bar starts; half-day -&gt; ~210/42/14
+def bars_per_session(day, *, freq=MINUTE_1, include_extended=False) -&gt; int: ...
+def session_type(ts_et, day) -&gt; int: ...           # 0/1/2
+def session_ids(time_index_et) -&gt; np.ndarray: ...  # (T,) Int32 YYYYMMDD — the engine segment vector
+def session_count(start, end) -&gt; int: ...          # distinct trading sessions in span
+</code></pre>
+<p>Half-days, pre/post-market, and DST all fall out of <code>session_open_close</code> + the UTC↔ET conversion; nothing assumes 390.</p>
+<h3 id="3-3-periods_per_year-annualization">3.3 <code>periods_per_year</code> (annualization)</h3>
+<pre><code class="language-python">def periods_per_year(start, end, *, freq) -&gt; float:
+    sessions = trading_days(start, end)
+    total_bars = sum(bars_per_session(d, freq=freq) for d in sessions)
+    span_years = max((end - start).days, 1) / 365.25     # ACTUAL calendar span, not 252-nominal
+    return total_bars / span_years
+</code></pre>
+<p>The denominator is the <strong>actual calendar span</strong> (no 252 hard-code), and is consistent in units with the measured numerator (resolves the §3.3 252-hard-code finding). This <code>&quot;bar&quot;</code> basis is <strong>opt-in</strong>; the <strong>default</strong> annualization aggregates per-bar NAV to one point per session and uses the conventional <code>ppy=252</code> (§7.1), where 252 is documented as a daily convention and confined to that path.</p>
+<hr />
+<h2 id="4-point-in-time-semantics-intraday">4. Point-in-time semantics intraday</h2>
+<p>The daily PIT guarantee is structural: every store read filters <code>as_of_date &lt;= as_of</code> (datastore.py:95,106) and <code>_as_date</code> truncates datetimes (datastore.py:33–38). We widen the time type, add a <strong>per-bar knowledge time</strong>, and add an <strong>EOD-knowability cut for day-grained stores</strong>.</p>
+<h3 id="4-1-per-bar-knowledge-time">4.1 Per-bar knowledge time</h3>
+<p>Ingest sets <code>as_of_ts = ts + freq.step_seconds</code> (bar close). The 10:30 bar becomes knowable at 10:31; <code>as_of=10:30:30</code> excludes it, <code>as_of=10:31:00</code> includes it. <strong>This single line is the entire intraday price no-look-ahead guarantee</strong> and gets a dedicated exclusion test (§11). An ingest assert enforces <code>as_of_ts &gt; ts</code> on every row.</p>
+<h3 id="4-2-get_panel-widening-intraday-as_of-must-dominate-end">4.2 <code>get_panel</code> widening — <code>intraday as_of must dominate end</code></h3>
+<pre><code class="language-python">def _as_time(value, *, freq):
+    return _as_date(value) if not freq.is_intraday else _parse_et_datetime(value)  # daily byte-identical
+</code></pre>
+<p><code>DataStore.get_panel(..., *, freq=DAILY)</code>:</p>
+<ul>
+<li>
+<p><strong>daily branch unchanged</strong> — filters <code>date</code>, <code>as_of_date</code>; returns <code>[&quot;date&quot;,&quot;symbol&quot;,*fields]</code>.</p>
+</li>
+<li>
+<p><strong>minute branch</strong>: parse ISO datetimes; then <strong>clamp the effective end</strong>:</p>
+<pre><code class="language-python">effective_end = min(end, as_of)        # RESOLVES the &quot;adjustment basis = end &gt; as_of&quot; finding
+if as_of &lt; end: log/optionally raise   # no bar later than as_of may be returned OR used as the adjustment basis
+</code></pre>
+<p>Filters become <code>pl.col(&quot;ts&quot;).is_between(start, effective_end)</code>, <code>pl.col(&quot;as_of_ts&quot;) &lt;= as_of</code>, <code>session_type == 0</code> (unless extended). The forward-adjust basis is computed toward <code>effective_end</code>, never <code>end</code>. Returns <code>[&quot;ts&quot;,&quot;session_id&quot;,&quot;symbol&quot;,*fields]</code>.</p>
+<p><strong>Invariant (new, stated in code &amp; test):</strong> <code>effective_end = min(end, as_of)</code>; a read with <code>end &gt; as_of</code> returns <em>identical</em> adjusted values to a read with <code>end == as_of</code>. Test asserts this.</p>
+</li>
+</ul>
+<p>The daily 10-calendar-day dividend lead-in (<code>_DIV_LOOKBACK_DAYS</code>, datastore.py:30,144) is <strong>replaced for minute</strong> by reading only the <strong>prior session's last RTH bar</strong> (via <code>session_open_close</code> on the session before <code>start</code>). This lead-in bar is consumed <strong>only inside <code>forward_adjust</code></strong> to supply <code>close_prev</code>; it is <strong>never surfaced as a factor row</strong> (so it cannot seed a window — see §5.2 / §8.2).</p>
+<h3 id="4-3-resampling-preserves-pit-lazy-session-anchored-calendar-complete">4.3 Resampling preserves PIT — lazy, session-anchored, calendar-complete</h3>
+<p>1m→5m/15m happens <strong>inside <code>DataStore</code>, pushed into the LazyFrame before <code>.collect()</code></strong> so the engine only ever sees the coarse panel and (per §8) the 1m frame is <strong>never fully materialized</strong>:</p>
+<pre><code class="language-python">(lf.filter(pl.col(&quot;as_of_ts&quot;) &lt;= as_of)                      # PIT cut first
+   .group_by_dynamic(&quot;ts&quot;, every=freq.polars_every(),
+                     closed=&quot;left&quot;, label=&quot;left&quot;,
+                     group_by=[&quot;symbol&quot;,&quot;session_id&quot;],         # anchor WITHIN a session — never straddle the open / mix pre-market
+                     start_by=&quot;datapoint&quot;)                      # first bin starts at the session's first RTH bar
+   .agg(open=first, high=max, low=min, close=last,
+        volume=sum, transactions=sum,
+        as_of_ts=max(&quot;as_of_ts&quot;),
+        n_constituents=count())
+   .join(expected_bin_counts(freq, sessions), on=[&quot;session_id&quot;,&quot;ts&quot;])  # calendar-expected count per SPECIFIC bin
+   .filter(pl.col(&quot;n_constituents&quot;) == pl.col(&quot;n_expected&quot;))   # emit ONLY calendar-complete bins; drops partial frontier bin entirely
+   .collect())
+</code></pre>
+<p>PIT rules (resolves the &quot;partial-bar completeness&quot; and &quot;alignment to session open&quot; findings):</p>
+<ul>
+<li>Grouping is <strong>anchored within <code>session_id</code></strong> with <code>start_by=&quot;datapoint&quot;</code>, so coarse bars are <code>[09:30,09:35),...</code> and never straddle the open or mix in pre-market bars.</li>
+<li>A coarse bar is emitted <strong>only if all its calendar-expected 1m constituents are knowable by <code>as_of</code></strong> — completeness is checked against <code>n_expected</code> for <em>that specific bin</em> (from <code>session_bars</code> at the coarse freq, so the genuinely-short final/half-day bin has the correct smaller expected count), never a nominal 5/15. A mid-coarse-bin <code>as_of</code> drops the whole bin (no partial close), guaranteeing the coarse <code>close</code> is deterministic and reproducible.</li>
+<li>The coarse <code>as_of_ts = max(constituent as_of_ts) = bin_end</code>; asserted equal to <code>bin_end</code> only for complete bins.</li>
+</ul>
+<h3 id="4-4-corp-actions-universe-eod-knowability-cut-resolves-the-critical-look-ahead">4.4 Corp actions &amp; universe — EOD-knowability cut (resolves the CRITICAL look-ahead)</h3>
+<p>Day-grained events (<code>adj_events</code>, <code>universe_snapshots</code>) are knowable only at the publishing <strong>session's close</strong>, <em>not</em> at a mid-session <code>as_of</code>. We do <strong>NOT</strong> coerce an intraday <code>as_of</code> down to its date. Instead we filter against the EOD-knowability instant:</p>
+<pre><code class="language-python"># adj_events / get_universe, intraday:
+known = ((pl.col(&quot;as_of_date&quot;) &lt;  as_of.date())                                  # earlier session: fully knowable
+       | ((pl.col(&quot;as_of_date&quot;) == as_of.date()) &amp; (as_of &gt;= session_close(as_of.date()))))  # same session: only after close
+events = df.filter(known)
+</code></pre>
+<p>Equivalently: derive <code>as_of_known_ts = session_close(as_of_date)</code> for day-grained rows and filter <code>as_of_known_ts &lt;= as_of</code>. Daily collapses to the existing <code>as_of_date &lt;= as_of</code> (a daily <code>as_of</code> <em>is</em> end-of-day).</p>
+<p>Consequence: a split/dividend/membership change with <code>as_of_date == D</code> is <strong>invisible</strong> to a minute read at <code>D 10:00</code> and <strong>visible</strong> at <code>D 16:00</code>. Dedicated tests for both a split and the dividend ratio.</p>
+<p>The adjustment math (<code>src/assay/data/store/adjust.py</code>) becomes session-aware (resolves the daily-grain bisect bug):</p>
+<ul>
+<li>Build a per-symbol <strong>unique-session array</strong> (sorted <code>session_id</code>s), <code>bisect</code> <code>ex_date</code>'s session against <em>that</em> (not the per-bar array), cut at the <strong>first bar of the ex-date session</strong>, set <code>close_prev</code> = the <strong>last RTH bar of the prior session</strong>.</li>
+<li>Replace <code>_MAX_PRIOR_GAP_DAYS</code> with a <strong>prior-session-existence</strong> check.</li>
+<li>The per-session factor (<code>split_factor * div_factor</code>) is <strong>broadcast across all bars of the session</strong> via a <code>session_id</code>→factor join (see §7-perf / §8 for the vectorized rewrite). Daily degenerates to today's behavior (one session = one row), so the daily code path is identical.</li>
+</ul>
+<p>Intraday eligibility = <code>membership-known-by(as_of) AND finite-bar</code>. A symbol that first-lists or is halted intraday surfaces as NaN bars (not silently absent rows that shift the cross-section); a note + test cover this.</p>
+<hr />
+<h2 id="5-engine-changes">5. Engine changes</h2>
+<p>Core math is row-indexed and value-opaque. Three additive frequency-gated changes plus two perf rewrites. <strong>Enforcement gate (lands in M3, before any surface exposes minute):</strong> <code>FactorEngine.__init__</code> <strong>raises</strong> if <code>freq.is_intraday and session_ids is None</code> — an intraday panel cannot be evaluated without segmentation.</p>
+<h3 id="5-1-time-axis-name-dtype-the-one-hard-corruption-bug">5.1 Time-axis name/dtype (the one hard corruption bug)</h3>
+<p><code>FactorResult.to_frame</code> (engine.py:79–93) hard-casts the time column to <code>pl.Date</code> (line 86), collapsing ~390 bars/day into duplicate <code>(date,symbol)</code> rows. Fix: record source dtype + time-col name and emit them back:</p>
+<pre><code class="language-python">class FactorEngine:
+    def __init__(self, panel, group_data=None, *, time_col=&quot;date&quot;, session_ids=None, freq=DAILY):
+        ...
+        self._time_col, self._time_dtype = time_col, panel.schema[time_col]   # Date | Datetime
+        self._session_ids, self._freq = session_ids, freq
+        if freq.is_intraday and session_ids is None:
+            raise ValueError(&quot;intraday engine requires a session_ids segment vector&quot;)
+</code></pre>
+<p><code>to_frame</code> emits <code>self._time_col</code> cast to <code>self._time_dtype</code> (daily→<code>date:Date</code> unchanged; minute→<code>ts:Datetime</code>). <code>EvalContext</code> gains <code>session_ids</code>.</p>
+<h3 id="5-2-overnight-gap-session-boundary-handling-reconciled-with-carry-over">5.2 Overnight-gap / session-boundary handling, reconciled with carry-over</h3>
+<p><code>operators/_base.windows(x, d, session_ids=None)</code>: when given <code>session_ids</code>, a window at row <code>t</code> is valid only if <code>rows_since_session_start[t] &gt;= d-1</code> (same NaN mechanism as warm-up, _base.py:33–35). <code>ts_delay/ts_delta/ts_returns/ts_log_returns</code> (time_series.py:18–44): a shift crossing a session boundary yields NaN. <strong><code>ts_ema</code>/<code>ts_dema</code> reseed <code>prev = NaN</code> at each session start</strong> (the current kernel at time_series.py:121–122 <em>carries <code>prev</code> across NaN gaps</em> — across the overnight boundary that is look-back, a correctness hole).</p>
+<p><strong>Carry-over reconciliation (resolves the &quot;buffer reintroduces leakage&quot; finding):</strong> for session-chunked evaluation (§8.2), the <code>max(window)-1</code>-bar carry-over buffer from the prior session <strong>carries its true <code>session_ids</code></strong>, and segmentation (NaN-pad / EMA reseed) is applied <strong>after concatenating buffer+chunk</strong>, so a buffered prior-session bar is a different segment exactly as in the whole-panel case. The dividend lead-in bar (§4.2) is excluded from the engine panel entirely. A <strong>chunked-vs-whole-panel golden test</strong> asserts byte-identical factor values.</p>
+<p><strong>Cross-session vs sub-session windows (resolves the CRITICAL all-NaN finding):</strong> segmentation is the policy <strong>only for sub-session windows</strong>. A multi-day window (e.g. <code>'20d'</code> = 7800 bars &gt; a 390-bar session) under per-session segmentation would be structurally all-NaN. So each windowed operator takes an explicit <code>segment: &quot;session&quot; | &quot;continuous&quot;</code> mode:</p>
+<ul>
+<li><strong><code>segment=&quot;session&quot;</code></strong> (default for windows <code>&lt; bars_per_session</code>): NaN-pad at session start; window is session-local.</li>
+<li><strong><code>segment=&quot;continuous&quot;</code></strong> (auto-selected when the lowered window <code>&gt;= bars_per_session</code>, e.g. multi-day windows): the window legitimately spans prior sessions via the carry-over buffer; the streaming kernels (§8.2) checkpoint state across chunk boundaries. Sub-session bleed is intentional here because the horizon is explicitly multi-day.</li>
+</ul>
+<p>This is decided per operator from the resolved (post-<code>Nd</code>-lowering) window length, so <code>ts_mean(close,'20d')</code> is <strong>not</strong> all-NaN on a multi-day minute panel (asserted by test). Warm-up cost (first <code>d-1</code> bars per continuous series) is documented.</p>
+<p><strong>EMA across sessions (resolves the &quot;long EMA meaningless&quot; finding):</strong> bar-level <code>ts_ema(x,d)</code> is meaningful only for sub-session <code>d</code> (per-session reset). For a genuine <strong>multi-day</strong> smoother we provide <code>ts_ema_daily(x, d_days)</code>: compute the EMA on the <strong>session-aggregated</strong> series (last-RTH-bar per session) with a day time-constant, then broadcast back to bars by <code>session_id</code>. Bar-level <code>ts_ema</code> <strong>raises</strong> when <code>d &gt;= bars_per_session</code> under <code>segment_overnight=True</code>, steering callers to <code>ts_ema_daily</code>; <code>segment_overnight=False</code> remains available but documented as carrying state across gaps.</p>
+<h3 id="5-3-window-units-runtime-session-aware-not-a-parse-time-scalar-resolves-the-half-day-finding">5.3 Window units — runtime session-aware, not a parse-time scalar (resolves the half-day finding)</h3>
+<p><code>_coerce_window</code> (parsing.py:354) and the daily integer path are untouched. The <code>'Nd'</code> convention is <strong>not</strong> baked to a single <code>LitNode(N*390)</code> at parse time. Instead a <code>'Nd'</code> literal lowers to a <code>DayWindowNode(N)</code> that the engine resolves <strong>per row</strong> against <code>session_ids</code>: &quot;look back to the bar <code>N</code> session-boundaries earlier.&quot; This requires a window-operator variant accepting a per-row span (the <code>segment=&quot;continuous&quot;</code> path already walks by session). For the common case where an exact span is unnecessary, the nominal <code>N * nominal_bars_per_day</code> is used as an approximation <strong>with a logged note quantifying the half-day/DST error</strong> — we do <strong>not</strong> claim &quot;never shifts.&quot; <code>adv{d}</code> (parsing.py:301–303) and bare <code>returns</code>→<code>ts_returns(close,1)</code> (parsing.py:346–347) bind to <code>'{d}d'</code>/<code>'1d'</code> so Alpha-101 keeps day semantics; with no intraday context the <code>d</code> suffix equals a raw int (daily unchanged).</p>
+<p><strong>Arg-extreme / rank output units (resolves the silent unit-change finding):</strong> <code>ts_argmax</code>/<code>ts_argmin</code> return &quot;bars since,&quot; and <code>ts_rank</code> is a within-bar-window percentile. For a day-denominated window these are explicitly documented as <strong>bar counts</strong>; the registry <code>output_range</code> and diagnostics labels are updated to say &quot;bars,&quot; and a <code>*_days</code> helper divides by <code>bars_per_day</code> when a caller wants day units. Added to the Alpha-101 parity tests so downstream thresholds aren't silently rescaled ~390×.</p>
+<p><strong>Returns at session open (resolves the minor finding):</strong> bare <code>returns</code> → <code>ts_returns(close,1)</code> is NaN at the first bar of every session under segmentation (correct no-overnight-return behavior). This is documented; the 09:30 cross-section is known-degraded for returns-derived factors. A session-aware <code>overnight_return</code> operator (prior-session-close→open) is offered for callers who want a daily-equivalent return rather than relying on bar-level <code>ts_returns</code>.</p>
+<h3 id="5-4-cross-sectional-ops-vectorize-cs_rank-the-real-alpha-101-hotspot">5.4 Cross-sectional ops — vectorize <code>cs_rank</code> (the real Alpha-101 hotspot)</h3>
+<p><code>cs_rank</code> (cross_sectional.py) is <code>np.vstack([_rank01_row(x[t]) for t in range(T)])</code> — a per-row Python loop with an inner tie while-loop; <code>rank</code> is the most common Alpha-101 op and dominant at <code>T≈98k</code>. Vectorize via double-<code>argsort</code> over <code>axis=1</code> with NaN masking and average-tie handling (<code>scipy.stats.rankdata</code> semantics), falling back to the per-row path if <code>scipy</code> is absent. Same for the <code>rank</code> branch of <code>_group_apply</code>. <strong>This is a shared kernel</strong> — see §10 for the daily tolerance/gating decision.</p>
+<h3 id="5-5-diagnostics">5.5 Diagnostics</h3>
+<p><code>diagnostics.output_diagnostics</code> thresholds (<code>warmup_frac</code>, <code>min_coverage</code>, 252-row assumptions) are parameterized by <code>freq</code>; <code>n_dates</code> → <code>n_periods</code> (additive; daily keeps <code>n_dates</code>). AST, parser grammar, registry, arithmetic/math kernels: <strong>zero change</strong>.</p>
+<hr />
+<h2 id="6-forward-returns-evaluation-at-minute-horizons">6. Forward returns &amp; evaluation at minute horizons</h2>
+<p><code>metrics.py</code> IC/RankIC, <code>decay.py</code>, <code>turnover.py</code>, <code>groups.py</code> are per-row math — <strong>zero code change</strong>. Units live at the call boundary (<code>service.py</code>). Two changes in <code>forward_returns.py</code>.</p>
+<h3 id="6-1-forward_returns-bar-triple-masking-explicit-policy-enum-resolves-the-masking-bypass-finding">6.1 <code>forward_returns</code> — bar triple masking + explicit policy enum (resolves the masking-bypass finding)</h3>
+<pre><code class="language-python">def forward_returns(close, open_, horizons, execution=&quot;next_open&quot;, *,
+                    session_ids=None, entry_lag=1,
+                    cross_session: str = &quot;mask_any_crossing&quot;):  # | &quot;allow_whole_day&quot;
+</code></pre>
+<p>Masking is keyed on the <strong>actual three-bar triple per row</strong> — signal <code>t</code>, entry <code>t+entry_lag</code>, exit <code>t+entry_lag+h</code> — using <code>session_ids</code>, never on a <code>h == nominal_bars_per_day</code> comparison:</p>
+<ul>
+<li><strong><code>mask_any_crossing</code></strong> (default): valid only if <code>session_id[t+entry_lag] == session_id[t+entry_lag+h]</code> (and the signal→entry crossing is documented; for the day-equivalent-entry convention where <code>entry_lag = bars_to_next_session_open</code> the signal→entry crossing is intentional and not masked, but exit must share the entry's session).</li>
+<li><strong><code>allow_whole_day</code></strong>: whole-day horizons are defined by <strong>session count</strong> — <code>session_index(exit) == session_index(entry) + k</code> via <code>session_ids</code> — so half-days are correct (never by bar-count equality).</li>
+</ul>
+<p><code>entry_lag</code> generalizes the hard-coded <code>t+1</code> skip (line 90; default 1 = daily). The stale <code>execution==&quot;vwap&quot;</code> <code>ValueError</code> (lines 63–67) becomes a real per-bar typical-price <code>(h+l+c)/3</code> (or transactions-weighted) branch now that intraday bars exist. Masking happens <strong>inside</strong> the function so it cannot be forgotten.</p>
+<h3 id="6-2-units-at-the-service-boundary">6.2 Units at the service boundary</h3>
+<ul>
+<li><code>decay_halflife</code> returns half-life in horizon units (bars for minute). Service stores <code>decay_halflife</code> + <code>granularity</code> (tagged) and <strong>also</strong> a derived <code>decay_halflife_days</code> (<code>÷ bars_per_day</code>, documented as an approximation that can round small values).</li>
+<li><code>turnover</code> lag defaults to 1 daily; minute uses <code>lag = bars_per_day</code> (once-per-day churn; <code>lag=1</code> is meaningless minute autocorrelation).</li>
+<li>Minute default horizons <code>default_horizons_minute = (1, 5, 30, 390)</code> in <code>AssayConfig</code>.</li>
+<li>The session forward-return memo key (service.py:180) becomes <code>f&quot;fwd::{freq.code}::{execution}&quot;</code> so a shared session never serves a daily matrix for a minute request (assertion test).</li>
+</ul>
+<hr />
+<h2 id="7-portfolio-backtest-intraday">7. Portfolio backtest intraday</h2>
+<p>All numeric stages (<code>accounting.py</code>, <code>weights.py</code>, <code>constraints.py</code>, <code>signal.py</code>, <code>execution.py</code>, <code>costs.py</code>) are granularity-neutral and reused. Changes concentrate in annualization, scheduling, units, labels.</p>
+<h3 id="7-1-annualization-default-aggregate-to-daily">7.1 Annualization (default = aggregate to daily)</h3>
+<p><code>_PPY = 252</code> exists in <strong>two</strong> places (metrics.py:34, backtester.py:72). Replace both with a config-derived <code>periods_per_year</code> threaded into <code>compute_metrics</code>; every metric fn already accepts a <code>ppy</code>/<code>periods_per_year</code> param. <strong>Default for intraday:</strong> <code>compute_metrics</code> first aggregates per-bar NAV to one point per <code>session_id</code> (compounding within each session), then annualizes with <code>ppy=252</code> — avoiding the <code>sqrt(390)</code> microstructure bias and reusing the proven 252 path. <code>annualization_basis: &quot;daily&quot;|&quot;bar&quot;</code> defaults to <code>&quot;daily&quot;</code>; <code>&quot;bar&quot;</code> uses §3.3. Risk-free de-annualization (backtester.py:495) uses the same per-period divisor.</p>
+<h3 id="7-2-rebalance-scheduler-rebalance-py">7.2 Rebalance scheduler (<code>rebalance.py</code>)</h3>
+<p><code>_REBALANCE_TYPES</code> (config.py:40) keys on calendar fields. Add intraday families + dispatch + <strong>enum members + validator update</strong> (treated as a <em>breaking enum expansion</em>, see §10): <code>every_n_bars</code> (stride over row index), <code>at_open</code>/<code>at_close</code> (first/last RTH bar per session — <strong>redefines <code>daily</code> for minute</strong> to once-per-session, not every row), <code>at_time HH:MM</code> (ET wall-clock bar per session). Grouper keys on <code>session_id</code>; weekly/monthly group on each bar's <strong>session date</strong> so 390 bars don't collapse.</p>
+<h3 id="7-3-execution-costs-accounting-dual-offset-field-with-explicit-precedence-resolves-the-offset-finding">7.3 Execution, costs, accounting — dual offset field with explicit precedence (resolves the offset finding)</h3>
+<ul>
+<li>Add <code>execution_offset_bars</code> (intraday-facing, daily-neutral default) alongside <code>execution_offset_days</code> (config.py:83, range [1,3], validator at config.py:206 kept). <strong>Precedence:</strong> <code>execution_offset_bars</code> is authoritative when <code>bar_interval != &quot;day&quot;</code>; otherwise <code>execution_offset_days</code> is authoritative. Validator updated to range-check the bar field only on the intraday path. The no-look-ahead invariant (<code>offset &gt;= 1</code> bar) is preserved.</li>
+<li><code>cov_window</code>/<code>adv_window</code> (config.py:94,136) accept a <code>'Nd'</code> unit converted to bars at consumption; <strong>risk-aware weight methods run on session-aggregated returns</strong> (bounds the Ledoit-Wolf <code>O(W)</code> loop and SLSQP QP). To keep <code>from_dict</code> of persisted payloads valid, these stay <strong>int</strong> (bar counts) with an optional string form parsed in <code>__post_init__</code>; the on-disk type is unchanged.</li>
+<li><code>_exec_price_matrix</code> (backtester.py:417–423): <code>vwap</code>/<code>arrival</code> use genuine per-bar prices; <code>next_open</code> is the next <em>bar</em> open.</li>
+<li>ADV/capacity baseline = per-session daily volume so participation caps stay calibrated.</li>
+<li><code>output_frequency</code> gains a daily-from-minute downsample; <code>_sample_series</code> (backtester.py:616–653) groups minute NAV by <code>session_id</code>. <code>n_trading_days</code> reports <strong>distinct sessions</strong>; add <code>n_bars</code>.</li>
+<li>The <code>accounting.py</code> per-row loop (accounting.py:141) and <code>_benchmark_nav</code> loops (backtester.py:498,505) are vectorized (cumulative-product NAV between rebalances) so they don't walk 98k bars.</li>
+</ul>
+<hr />
+<h2 id="8-scale-performance">8. Scale &amp; performance</h2>
+<p>Corrected memory math: one <code>(T,N)</code> field pivot at <code>98k×100×8</code> ≈ <strong>78 MB</strong> (not 8 GB). The <strong>window tensor</strong> and <strong>concurrent in-memory copies</strong> are the real risks.</p>
+<h3 id="8-1-io">8.1 IO</h3>
+<p>Day-level partitions + a freq-aware enumerator (per-day files via <code>trading_days</code>, skipping holidays). Push <strong>all</strong> filters into <code>pl.scan_parquet</code> (symbol <code>is_in</code>, <code>ts</code> range, <code>as_of_ts &lt;= as_of</code>, <code>session_type==0</code>). Dividend lead-in reads <strong>one</strong> prior-session file. <strong>Verify pruning empirically:</strong> <code>scripts/bench_alpha101.py</code> minute variant measures rows-read vs rows-returned for a 100-symbol read and is the gate that fixes <code>row_group_size</code>. Quantify the 252-files/year scan fixed cost; if a multi-month read pays too much open/stat overhead, evaluate a coarser (weekly) physical partition.</p>
+<h3 id="8-2-memory-the-window-tensor-chunked-evaluator">8.2 Memory — the window tensor + chunked evaluator</h3>
+<p><code>windows()</code> returns a <code>(T,N,d)</code> <code>sliding_window_view</code>, zero-copy until a reduction materializes it. At <code>T=98k,N=100,d=390</code> that is ~30 GB for one op; <code>'20d'</code> (7800) ~600 GB. Fixes:</p>
+<ol>
+<li><strong>Streaming/cumulative kernels</strong> (M4): <code>ts_mean/sum/std/cov/corr</code> → cumulative-sum / Welford rolling; <code>ts_min/max/argmax/argmin</code> → monotonic-deque; <code>ts_rank</code> → rolling order-statistic; <code>ts_decay_linear</code> → incremental weighted sum. Never materialize <code>(T,N,d)</code>.</li>
+<li><strong>Session-chunked evaluator (specified, resolves the under-specification finding):</strong> chunk <strong>along axis-0 (time) only</strong> — cross-sectional ops (<code>cs_rank</code>, <code>cs_demean</code>, neutralization) need the full cross-section per row but are per-row independent of T, so chunking does not affect them (stated explicitly). <code>max_window</code> is computed from the <strong>parsed AST</strong> (in bars, post-<code>Nd</code> lowering); require <code>chunk_sessions × bars &gt;= max_window</code> or <strong>fall back to whole-panel</strong>. For <code>segment=&quot;continuous&quot;</code> windows the streaming kernels <strong>checkpoint/restore state across chunk boundaries</strong> via the session-tagged carry-over buffer (§5.2). Test: a <code>'20d'</code> window on minute data over a chunk-spanning boundary equals the unchunked result.</li>
+<li><strong>Float32 — disk-only by default (resolves the contradiction):</strong> Float32 on disk saves disk, not RAM, because every pivot/kernel hardcodes float64 (engine.py:131–132, session.py:58–59, _base.py:30, l2.py:130/139). We therefore <strong>drop the float32-in-RAM claim</strong> for the default path. A genuine float32 compute path is a <em>separate, opt-in</em> effort (parameterize <code>windows()/_matrix()/_panel_to_matrices</code>/streaming kernels by dtype and re-validate NaN/ddof/precision) — not sold as &quot;free, gated.&quot;</li>
+</ol>
+<p><strong>Eliminate the triple in-memory copy (resolves the double/triple-copy finding):</strong> today a session run holds the long-frame panel + <code>FactorEngine._matrix_cache</code> (engine.py:119,133) + a <em>second independent</em> <code>SessionCache._panel_to_matrices</code> pivot (session.py:111,49–61) ≈ 1 GB+ before any tensor. Fix: <code>SessionCache</code> <strong>borrows the engine's <code>_matrix_cache</code> by reference</strong> instead of re-pivoting, and the engine drops <code>self._panel</code> once matrices are cached. The true per-session footprint is stated as <code>n_fields × T × N × 8 × ~1.x</code> + long frame, and <code>batch()</code>'s ThreadPoolExecutor concurrency multiplies it — accounted against the memory budget (§8.4).</p>
+<h3 id="8-3-caches">8.3 Caches</h3>
+<ul>
+<li><code>SessionCache</code> pivots on <code>time_col</code> (default <code>date</code>; <code>ts</code> for minute) — fixes the <code>np.unique</code> on <code>date</code> collapsing 390 bars (session.py:49–56).</li>
+<li><code>L2FactorCache</code> key (l2.py:78–105) currently keys on date-string <code>period</code> + universe/adj/market — <strong>no time-of-day, no <code>as_of</code></strong>. Two intraday runs over the same calendar dates but different intraday window/<code>as_of</code> would collide and serve a 14:00 matrix for a 16:00 request. <strong>Fix (resolves the L2-key finding):</strong> extend the preimage with the full intraday period <code>(start_ts, end_ts)</code> and <code>as_of_ts</code>; for daily these collapse to the existing date strings so the <strong>daily key is byte-unchanged</strong>. Bump namespace <code>assay-l2-v1</code>→<code>v2</code>. Add a <strong>real byte-accounted LRU</strong> (today only <code>clear()</code>, l2.py:178). <strong>L2 is wired into <code>evaluate()</code> only after</strong> the key carries the as_of axis and the LRU exists.</li>
+<li><strong>Cache-key cardinality (resolves the explosion finding):</strong> intraday <code>as_of</code> is per-bar (~390/day), multiplying L2 entries and SessionRegistry sessions. Policy: <strong>only cache at session-close <code>as_of</code> by default</strong> (or quantize <code>as_of</code> to a coarse bucket), bounding the key space; <code>SessionRegistry</code> gets a <strong>byte/size cap with LRU eviction</strong> and a documented expected-sessions budget for minute (today expiry is manual, session.py:236). Capacity arithmetic redone including the <code>as_of</code> and <code>freq</code> multipliers.</li>
+</ul>
+<h3 id="8-4-memory-budget-subsystem-net-new-its-own-milestone-resolves-the-vaporware-critical">8.4 Memory-budget subsystem (NET-NEW — its own milestone, resolves the &quot;vaporware&quot; CRITICAL)</h3>
+<p><code>l1_memory_gb=4.0</code>/<code>l2_max_gb=20.0</code> (config.py:120–121) are currently read <strong>nowhere</strong>. The guard is built from scratch:</p>
+<ul>
+<li><strong>(a) Pre-flight estimate</strong> from partition file sizes × symbol/row-group pruning ratio × <code>freq.step</code> × dtype — independent of <code>.collect()</code>.</li>
+<li><strong>(b) Enforced at <code>DataStore.get_panel</code> before <code>.collect()</code></strong> (datastore.py:99): if estimate &gt; budget, raise an actionable error (suggest coarser <code>freq</code> / shorter window / chunked mode) or auto-switch to the chunked/streaming path.</li>
+<li><strong>(c)</strong> Byte-accounted LRU in <code>L2FactorCache</code> + per-session byte cap with eviction in <code>SessionRegistry</code>.</li>
+<li><strong>(d)</strong> Re-tune <code>l1_memory_gb</code>/<code>l2_max_gb</code> defaults (sized for 10k-row daily panels) for minute, fed by the bench.</li>
+</ul>
+<h3 id="8-5-wall-clock-gate">8.5 Wall-clock gate</h3>
+<p><code>scripts/bench_alpha101.py</code> minute variant is a perf gate (target set once streaming kernels land, §12). Streaming kernels + vectorized <code>cs_rank</code> + 5m-default make a 1yr NASDAQ-100 single-factor eval tractable.</p>
+<hr />
+<h2 id="9-api-sdk-cli-config-surface">9. API / SDK / CLI / config surface</h2>
+<p>One optional <code>frequency</code> (alias <code>freq</code>/<code>granularity</code>, default <code>&quot;1d&quot;</code>) threaded everywhere; <strong>omitting it reproduces today's behavior</strong> — verified by a surface-contract test (below), not merely asserted. The edit set spans ~15 files; three carry behavior and get their own tests.</p>
+<ul>
+<li><strong><code>AssayConfig</code></strong>: <code>default_frequency=&quot;1d&quot;</code>, <code>default_horizons_minute=(1,5,30,390)</code>, <code>annualization_basis=&quot;daily&quot;</code>; <code>MassiveConfig.minute_aggs_subdir</code>/<code>minute_aggs_dir</code>.</li>
+<li><strong><code>DataStore.get_panel(fields, symbols, start, end, as_of, adj, *, freq=DAILY)</code></strong> — minute accepts ISO datetimes; <code>effective_end=min(end,as_of)</code> (§4.2).</li>
+<li><strong><code>FactorEngine.__init__(panel, group_data=None, *, time_col=&quot;date&quot;, session_ids=None, freq=DAILY)</code></strong>; <code>from_store(..., freq=&quot;1d&quot;)</code> builds the session vector and routes store/schema/layout; intraday-without-session-vector raises.</li>
+<li><strong><code>forward_returns(..., *, session_ids=None, entry_lag=1, cross_session=&quot;mask_any_crossing&quot;)</code></strong>.</li>
+<li><strong><code>AssayService.evaluate/batch/create_session/correlation_matrix(..., frequency=&quot;1d&quot;)</code></strong>. The non-pass-through spots are enumerated as explicit sub-tasks with tests: <strong>(1)</strong> freq-folded <strong>session memo key</strong> (assert daily+minute in one session don't collide); <strong>(2)</strong> <code>_resolve</code> (service.py:106–123) branches on freq for <strong>period/as_of parsing AND horizon/turnover-lag/group-returns-horizon defaults</strong>; <strong>(3)</strong> per-surface <code>service_kwargs()</code> drop-None for <code>frequency</code>.</li>
+<li><strong><code>as_of</code>/period parsing (resolves the overload finding):</strong> in <strong>CLI</strong>, when <code>--frequency</code> is intraday parse <code>--start/--end/--as-of</code> with <code>datetime.fromisoformat</code> (accepts date <em>or</em> datetime); when daily keep <code>_date</code> (which raises on a datetime). At the <strong>service boundary, raise</strong> if an intraday time component is supplied with <code>freq=&quot;1d&quot;</code> (it would silently truncate). REST field descriptions/validation accept ISO datetime when intraday. Tests: <code>datetime as_of + freq=1d</code> rejected; <code>datetime as_of + freq=1m</code> honored.</li>
+<li><strong>Portfolio config</strong>: <code>bar_interval</code>/<code>annualization_basis</code>; intraday <code>rebalance_type</code> values; <code>execution_offset_bars</code> (precedence §7.3); intraday <code>output_frequency</code>.</li>
+<li><strong>REST</strong> (<code>api/models.py</code>, <code>routes/portfolio.py:79</code>): optional <code>frequency</code>; <code>service_kwargs()</code> drop-None forwards it; <code>build_config</code> rejects unknown intraday enum values with an actionable message naming the required <code>schema_version</code> (§10).</li>
+<li><strong>CLI</strong> (<code>cli.py</code>): <code>--frequency</code>; ISO-datetime parsing in intraday mode; <code>--horizons</code> accept <code>Nd</code>/<code>Nm</code>; new <code>assay ingest-minute</code>.</li>
+<li><strong>MCP</strong> (<code>mcp/server.py</code>): <code>frequency</code> (default <code>&quot;day&quot;</code>) on evaluate/batch/correlation; <code>assay_system_status</code> reports resolved frequency + minute defaults.</li>
+<li><strong>Surface-contract test:</strong> call every REST/CLI/MCP/SDK entry with <code>frequency</code> omitted and assert the resolved service kwargs are identical to pre-change.</li>
+</ul>
+<hr />
+<h2 id="10-backward-compatibility-migration">10. Backward compatibility &amp; migration</h2>
+<p>Zero daily migration; structural, not aspirational.</p>
+<ul>
+<li>
+<p><strong>Storage</strong>: daily <code>PRICE_RAW_SCHEMA</code>, <code>price_partition_path</code> (month), <code>adj_events</code>, <code>universe_snapshots</code> untouched. Minute is a <strong>new store</strong> (<code>price_raw_minute</code>); no rebuild.</p>
+</li>
+<li>
+<p><strong>Reads</strong>: <code>_as_date</code> keeps truncating datetimes for <code>freq=DAILY</code>; daily <code>get_panel</code> returns the identical <code>date</code>/<code>pl.Date</code> frame.</p>
+</li>
+<li>
+<p><strong>Engine</strong>: only edits to shared code are <code>to_frame</code> casting back to the recorded dtype (no-op for daily) and new <code>time_col</code>/<code>session_ids</code>/<code>freq</code> params defaulting to today's behavior. Segmented paths gate on <code>session_ids is not None</code> → daily byte-identical.</p>
+</li>
+<li>
+<p><strong><code>config_hash</code>/<code>run_id</code> (resolves the CRITICAL):</strong> <code>config_hash()</code> hashes <code>json.dumps(self.to_dict())</code> and <code>to_dict()</code> is a plain <code>asdict()</code> consumed by <code>from_dict</code>, REST <code>build_config</code>, reports, and the WebUI. We <strong>do NOT touch <code>to_dict()</code></strong>. Instead introduce a frozen <code>_HASH_FIELDS_V1</code> allowlist (the fields that exist today) and compute <code>config_hash()</code> over <strong>only those fields when <code>bar_interval==&quot;day&quot;</code></strong>; new intraday fields are excluded from the daily preimage entirely. A regression test asserts <code>config_hash()</code> of a default US config is <strong>byte-identical to the committed pre-change value</strong>. Decided in M0/M6 (not an open question).</p>
+</li>
+<li>
+<p><strong><code>compute_factor_id</code> (resolves the major):</strong> signature becomes <code>compute_factor_id(expr_canonical, granularity=&quot;1d&quot;)</code> with the <strong>load-bearing conditional</strong>: <code>return hash(expr) if granularity==&quot;1d&quot; else hash(f&quot;{expr}::{granularity}&quot;)</code>. Both daily call sites (service.py:313,374) pass the resolved frequency. A test pins <code>compute_factor_id(expr) == compute_factor_id(expr,&quot;1d&quot;) == &lt;committed legacy digest&gt;</code>, so <code>library.save()</code> (store.py:84) never re-keys existing daily <code>.json</code> files.</p>
+</li>
+<li>
+<p><strong>Schema versioning for enum expansion (resolves the cross-version major):</strong> <code>from_dict</code> ignores unknown keys (protects new code reading old payloads) but old code rejects new enum values (<code>rebalance_type=&quot;at_open&quot;</code> fails <code>_enum</code>). Enum expansion is therefore a <strong>breaking schema change</strong>: bump <code>schema_version</code> into <code>config.to_dict()</code> and the report JSON; old readers fail <strong>loudly</strong> with a message naming the required version. <code>build_config</code>/<code>from_dict</code> reject unknown intraday enums with an actionable error.</p>
+</li>
+<li>
+<p><strong>Shared-kernel rewrite vs &quot;byte-identical&quot; (resolves the major):</strong> M4 streaming <code>ts_*</code> and the §5.4 <code>cs_rank</code> vectorization are <strong>shared</strong> kernels; cumulative-sum rolling variance/cov is <strong>not</strong> bit-identical to the windowed computation, and a vectorized tie-break can differ. We resolve by <strong>gating the streaming kernels behind <code>freq.is_intraday</code> and keeping the materialized path for daily</strong> (so daily stays byte-identical) — except where a deliberate decision is made to adopt streaming for daily large-<code>d</code>, which is done <strong>consciously</strong> with golden fixtures re-blessed under an explicit <code>rtol/atol</code>. The doc's &quot;byte-identical&quot; promise is <strong>downgraded to &quot;within stated tolerance&quot; only for any milestone that changes a shared daily kernel</strong>, and the per-operator gating is stated explicitly. <code>cs_rank</code> is validated against the current implementation with average-tie/NaN parity tests; if any divergence remains it ships gated to intraday.</p>
+</li>
+<li>
+<p><strong>Report JSON field aliasing (resolves the minor):</strong> new tagged fields (<code>granularity</code>, <code>decay_halflife</code>, <code>n_periods</code>, <code>turnover</code>) are additive. For <strong>minute</strong> reports <code>n_dates</code> = <strong>distinct-session count</strong> (matching its name), <code>decay_halflife_days</code> documented as derived/approximate; WebUI/agent read the tagged fields when <code>granularity!=&quot;1d&quot;</code>. A serialization test asserts that for <code>granularity=&quot;1d&quot;</code> the JSON keys/values are byte-identical to pre-change.</p>
+</li>
+<li>
+<p><strong>L2 namespace</strong> bump only affects the (currently unused) L2 cache; daily key byte-unchanged (§8.3).</p>
+</li>
+</ul>
+<hr />
+<h2 id="11-phased-implementation-plan">11. Phased implementation plan</h2>
+<p><strong>Framing (resolves the incrementality finding):</strong> every milestone is <strong>daily-safe</strong> (changes freq-gated). The <strong>minute path is silently-wrong until M3+M5 land</strong>, so <code>frequency != &quot;1d&quot;</code> on the public surfaces (REST/CLI/MCP/SDK) raises <code>NotImplementedError</code> until M5 completes; the §5.1 intraday-requires-session-vector guard lands in M3. Each milestone below is independently shippable <strong>and</strong> independently testable.</p>
+<p><strong>M0 — <code>Frequency</code> + config + calendar + identity guards (no behavior change).</strong>
+<code>frequency.py</code>; <code>MassiveConfig.minute_aggs_dir</code>; <code>AssayConfig</code> minute defaults; calendar helpers (<code>session_open_close</code>, <code>session_bars</code>, <code>bars_per_session</code>, <code>session_ids</code>, <code>session_type</code>, <code>session_count</code>); <strong><code>config_hash</code> <code>_HASH_FIELDS_V1</code> allowlist</strong> + regression test; <code>compute_factor_id(expr, granularity=&quot;1d&quot;)</code> + legacy-digest pin; <code>schema_version</code> field.
+Tests: half-day bar count, DST boundary, <code>config_hash</code>/<code>factor_id</code> byte-stability vs committed digests.</p>
+<p><strong>M1 — Minute ingestion + minute store schema/layout.</strong>
+<code>PRICE_RAW_MINUTE_SCHEMA</code> (incl. <code>session_close_ts</code>), <code>price_partition_path(freq=...)</code>, freq-parameterized <code>read_minute_agg</code>, <code>MinutePriceIngester</code> (per-day atomic write, tuned <code>row_group_size</code>), <code>assay ingest-minute</code>.
+Tests: round-trip (<code>as_of_ts=ts+step</code>, <code>session_close_ts</code>, <code>session_type</code>, pre/post excluded count), idempotent re-ingest, row-group pruning ratio.</p>
+<p><strong>M2 — Intraday PIT read path in <code>DataStore</code>.</strong>
+<code>_as_time</code>, <code>get_panel(freq=...)</code> minute branch with <code>effective_end=min(end,as_of)</code>, day-file enumerator, prior-session dividend lead-in (excluded from panel), <strong>EOD-knowability cut for <code>adj_events</code>/<code>get_universe</code></strong>, session-aware <code>forward_adjust</code> (vectorized <code>session_id</code>→factor broadcast, no per-bar Python list).
+Tests: intraday <code>as_of</code> exclusion (10:30:30 excludes 10:31); <strong>split with <code>as_of_date==D</code> invisible at D 10:00, visible at D 16:00</strong>; <code>end&gt;as_of</code> ⇒ identical values to <code>end==as_of</code>; daily golden unchanged.</p>
+<p><strong>M3 — Engine intraday semantics (gates minute exposure).</strong>
+<code>to_frame</code> dtype fix; <code>time_col</code>/<code>session_ids</code>/<code>freq</code> plumbing + intraday-requires-session-vector guard; segmented <code>windows</code>/<code>ts_*</code> with <code>segment=&quot;session&quot;|&quot;continuous&quot;</code> auto-select; <code>ts_ema</code>/<code>ts_dema</code> per-session reset + <code>ts_ema_daily</code>; runtime <code>'Nd'</code>/<code>DayWindowNode</code> lowering; arg-extreme/rank unit relabel; vectorized <code>cs_rank</code> (gated to intraday or tolerance-blessed for daily per §10).
+Tests: overnight-gap NaN; EMA session-independence; <code>ts_mean(close,'20d')</code> <strong>not</strong> all-NaN on a multi-day minute panel; chunked==whole-panel golden; all <code>ts_*</code> byte-identical on daily.</p>
+<p><strong>M4 — Streaming windowed kernels + memory-budget subsystem (§8.4).</strong>
+Streaming <code>ts_mean/sum/std/min/max/argmax/argmin/rank/decay_linear/cov/corr</code> with cross-chunk state checkpointing; session-chunked evaluator (AST max-window, axis-0 chunking, whole-panel fallback); <strong>pre-flight size estimate + <code>get_panel</code> budget guard + L2/SessionRegistry LRU</strong>; re-tuned budgets; bench gate.
+Tests: streaming==materialized golden (daily within tolerance / intraday); <code>'20d'</code> cross-chunk-boundary == unchunked; peak-RAM assertion; budget-guard raises with actionable message.</p>
+<p><strong>M5 — Evaluator at minute horizons (unlocks public minute surface).</strong>
+<code>forward_returns</code> bar horizons + bar-triple masking + <code>cross_session</code> enum + <code>entry_lag</code> + real <code>vwap</code>; service unit conversion + freq-tagged memo key; minute horizon defaults; lift the <code>NotImplementedError</code> surface gate.
+Tests: cross-session return masked; <code>allow_whole_day</code> by session count (half-day correct); half-life unit conversion; daily evaluator unchanged.</p>
+<p><strong>M6 — Portfolio intraday.</strong>
+<code>periods_per_year</code> + daily-aggregation default; intraday rebalance types + dispatch + validator + <code>schema_version</code>; <code>execution_offset_bars</code> precedence; cov/adv windows in bars; intraday execution prices; daily-from-minute output; <code>n_bars</code>/<code>granularity</code>; vectorized accountant walk.
+Tests: Sharpe/vol stable under daily aggregation; <code>at_open</code>/<code>every_n_bars</code>; <code>offset&gt;=1</code>; <code>config_hash</code> byte-stable for default daily configs; daily portfolio golden unchanged.</p>
+<p><strong>M7 — Surfaces + caches + library + L2 wiring.</strong>
+<code>frequency</code> on REST/CLI/MCP/SDK with ISO-datetime parsing + daily-truncation rejection; <code>SessionCache</code> time-axis generalization + <strong>borrow engine matrices</strong>; <strong>L2 key carries <code>(start_ts,end_ts,as_of_ts)</code> + namespace bump + LRU, then wire into <code>evaluate()</code></strong> with session-close-only <code>as_of</code> caching policy; <code>factor_id</code>/report <code>granularity</code> coexistence.
+Tests: surface-contract (frequency omitted ⇒ identical kwargs); daily+minute reports coexist; L2 no daily/minute and no as_of aliasing; report JSON byte-identical for <code>granularity=&quot;1d&quot;</code>.</p>
+<hr />
+<h2 id="12-open-questions-residual-risks">12. Open questions &amp; residual risks</h2>
+<p><strong>Top residual risks.</strong> (1) <code>as_of_ts = bar close</code> and the EOD-knowability cut are the entire intraday PIT story — a single wrong line silently reintroduces look-ahead; dedicated exclusion tests in M2 + ingest invariant <code>as_of_ts &gt; ts</code>. (2) Streaming kernels (M4) must match materialized NaN/<code>ddof</code>/tie semantics within the stated tolerance; gated to intraday for daily safety. (3) The runtime <code>'Nd'</code> lowering is an <em>approximation</em> off nominal bar counts unless the exact per-row session walk is used — half-day/DST error is logged, not hidden.</p>
+<p><strong>Open questions (non-blocking).</strong> Which bar marks session NAV for aggregation (16:00 RTH vs auction proxy)? Whether to expose per-bar (<code>&quot;bar&quot;</code>) annualization at all. <code>adv{d}</code> at minute scale — <code>d</code> sessions of summed bar volume vs a daily-aggregated companion volume field. The M4 bench target number. Extended-hours research mode and its interaction with <code>bars_per_session</code>/annualization. Whether daily large-<code>d</code> should adopt streaming kernels (tolerance-blessed) or stay materialized.</p>
+<hr />
+<h2 id="resolved-review-issues">Resolved review issues</h2>
+<ul>
+<li><strong>Corp-action/universe intraday as_of coercion (critical):</strong> §4.4 — no date-coercion; EOD-knowability cut (<code>as_of_date &lt; as_of.date()</code> OR same-day-after-<code>session_close</code>) via stored <code>session_close_ts</code>; split-invisible-mid-session test.</li>
+<li><strong>Forward-adjust basis = end &gt; as_of (major):</strong> §4.2 — <code>effective_end = min(end, as_of)</code> clamps both the bar filter and adjustment basis; invariant + test.</li>
+<li><strong>Resample partial-bar completeness (major):</strong> §4.3 — completeness checked against the calendar-expected constituent set for each specific bin; partial frontier bin dropped entirely; coarse <code>as_of_ts = bin_end</code>.</li>
+<li><strong><code>forward_returns</code> masking bypass (major):</strong> §6.1 — masking on the signal/entry/exit bar triple via <code>session_ids</code>; explicit <code>cross_session</code> enum; whole-day defined by session count.</li>
+<li><strong>Survivorship/universe intraday (minor):</strong> §4.4 — same EOD-knowability rule; intraday-listing/halt surfaces as NaN; test noted.</li>
+<li><strong>Carry-over reintroduces leakage (minor):</strong> §5.2 — buffer carries true <code>session_ids</code>; segmentation applied after buffer+chunk concat; dividend lead-in excluded from panel; chunked==whole-panel golden.</li>
+<li><strong>Memory-budget guard is vaporware (critical):</strong> §8.4 — net-new subsystem: pre-flight estimate, enforcement at <code>get_panel</code>, byte-accounted LRU in L2 + SessionRegistry, re-tuned budgets, its own milestone (M4).</li>
+<li><strong>Double/triple in-memory copy (major):</strong> §8.2 — <code>SessionCache</code> borrows engine matrices; engine drops <code>self._panel</code> after caching; true footprint stated incl. <code>batch()</code> concurrency.</li>
+<li><strong>Float32-in-RAM contradiction (major):</strong> §8.2 — downgraded to a disk-only win; float32 compute path is separate opt-in, not &quot;free/gated.&quot;</li>
+<li><strong><code>forward_adjust</code> per-symbol Python loop at scale (major):</strong> §4.4 — vectorized per-session-factor <code>session_id</code>→factor join/broadcast; bisect against unique-session array; no per-bar <code>.to_list()</code>/DataFrame rebuild.</li>
+<li><strong>Resample collects full 1m first (major):</strong> §4.3 — resampling pushed into the LazyFrame, collected at coarse granularity; peak RAM bounded, not the full 1m slice.</li>
+<li><strong>L2 key omits intraday window/as_of (major):</strong> §8.3 — preimage extended with <code>(start_ts,end_ts,as_of_ts)</code> (daily collapses unchanged); L2 wired only after this + LRU.</li>
+<li><strong>Cache-key cardinality explosion (major):</strong> §8.3 — session-close-only as_of caching (or quantization); SessionRegistry byte cap + LRU; redone arithmetic.</li>
+<li><strong>Streaming kernels load-bearing yet deferred (major):</strong> §11 — minute exposure gated behind M3+M5; budget guard (M4) raises rather than OOMs; chunked path bounds RAM.</li>
+<li><strong>Chunked evaluator under-specified (minor):</strong> §8.2 — axis-0 only; cs ops unaffected; AST max-window; whole-panel fallback; cross-chunk state checkpoint.</li>
+<li><strong>Row-group pruning unverified (minor):</strong> §8.1 — tuned <code>row_group_size</code>, empirically verified via bench; 252-file overhead quantified.</li>
+<li><strong>Window NaN under segmentation = all-NaN multi-day (critical):</strong> §5.2 — <code>segment=&quot;session&quot;|&quot;continuous&quot;</code>; multi-day windows span sessions via carry-over; <code>ts_mean(close,'20d')</code> not all-NaN test.</li>
+<li><strong><code>'Nd'</code> lowering vs half-days (major):</strong> §5.3 — runtime <code>DayWindowNode</code> resolved per row against <code>session_ids</code>; nominal used only as a logged approximation; &quot;never shifts&quot; claim dropped.</li>
+<li><strong>Resample alignment to session open (major):</strong> §4.3 — <code>group_by_dynamic</code> anchored within <code>session_id</code> (<code>start_by=&quot;datapoint&quot;</code>); first/last/half-day bins covered by completeness test.</li>
+<li><strong>Long EMA meaningless intraday (major):</strong> §5.2 — <code>ts_ema_daily</code> (day time-constant on session-aggregated series); bar-level <code>ts_ema</code> raises when <code>d &gt;= bars_per_session</code>.</li>
+<li><strong>Arg-extreme/rank unit change (major):</strong> §5.3 — documented as bar counts; registry/diagnostics relabeled; <code>*_days</code> helper; parity tests.</li>
+<li><strong><code>returns</code> NaN at session open (minor):</strong> §5.3 — documented; <code>overnight_return</code> operator offered.</li>
+<li><strong><code>periods_per_year</code> hard-codes 252 (minor):</strong> §3.3 — years from actual calendar span; 252 confined to the daily-aggregation convention.</li>
+<li><strong><code>config_hash</code>/<code>run_id</code> stability (critical):</strong> §10 — <code>to_dict()</code> untouched; frozen <code>_HASH_FIELDS_V1</code> allowlist excludes intraday fields when daily; byte-stability regression test; decided in M0.</li>
+<li><strong><code>compute_factor_id</code> signature (major):</strong> §10 — <code>(expr, granularity=&quot;1d&quot;)</code> with explicit <code>&quot;1d&quot;</code>-preserves-legacy conditional; legacy-digest pin; no daily file re-keying.</li>
+<li><strong>Daily &quot;byte-identical&quot; vs M4 shared-kernel rewrite (major):</strong> §10 — streaming/<code>cs_rank</code> gated to intraday (daily byte-identical) or consciously tolerance-blessed; promise downgraded to &quot;within tolerance&quot; only where a shared daily kernel changes.</li>
+<li><strong>Cross-version config serialization / enum expansion (major):</strong> §10 — <code>schema_version</code> in config + report JSON; old readers fail loudly; intraday enums rejected with actionable error.</li>
+<li><strong><code>as_of</code> overload daily vs intraday (major):</strong> §9 — freq-aware CLI/REST parsing; service rejects datetime as_of with <code>freq=1d</code>; tests both ways.</li>
+<li><strong>Surface blast radius vs &quot;one kwarg&quot; (major):</strong> §9 — non-pass-through spots enumerated (freq-folded memo key, <code>_resolve</code> defaults, per-surface drop-None) with a surface-contract test.</li>
+<li><strong>Phased incrementality (major):</strong> §11 — &quot;daily-safe always; minute-usable only at marked milestone&quot;; <code>NotImplementedError</code> surface gate until M5; engine guard in M3.</li>
+<li><strong>FactorReport day-unit aliasing (minor):</strong> §10 — minute <code>n_dates</code> = distinct-session count; consumers read tagged fields; byte-identical JSON for daily.</li>
+<li><strong><code>execution_offset_days</code> dual field (minor):</strong> §7.3 — explicit precedence (<code>bars</code> wins intraday), daily-neutral default, excluded from hash; cov/adv stay int to keep <code>from_dict</code> valid.</li>
+</ul>
+<h2 id="recommended-first-milestone">Recommended first milestone</h2>
+<p><strong>Build M0 first.</strong> It is the smallest self-contained increment with real value and zero behavior change: the <code>Frequency</code> value object, calendar helpers (<code>session_open_close</code>/<code>session_bars</code>/<code>bars_per_session</code>/<code>session_ids</code>), config plumbing, and — critically — the two <strong>identity guards</strong> (<code>config_hash</code> <code>_HASH_FIELDS_V1</code> allowlist and <code>compute_factor_id(expr, granularity=&quot;1d&quot;)</code> with the legacy-digest pin) plus the <code>schema_version</code> field. It ships entirely behind defaults, touches no read/eval/portfolio numerics, is fully unit-testable (half-day counts, DST offset, byte-stable <code>config_hash</code>/<code>factor_id</code> against committed digests), and <strong>de-risks the three CRITICAL backward-compat findings before any minute code exists</strong> — so every later milestone builds on a frozen, verified daily identity contract.</p>

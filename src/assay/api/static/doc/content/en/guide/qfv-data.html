@@ -1,0 +1,124 @@
+<h1 class="doc-title">US data from QFinVerse</h1>
+<p>On assay.qfinverse.com, US universes read the daily panel store that QFinVerse builds
+from MASSIVE: end-of-day bars from September 2003, splits and dividends, and the
+MASSIVE ticker reference. Assay does not ingest US data itself in this setup.</p>
+<h2 id="setup">Setup</h2>
+<pre><code class="language-bash">export ASSAY_QFV_PANEL_DIR=/srv/qfinverse/data/daily_panel   # the store's root (holds CURRENT)
+assay serve-api
+</code></pre>
+<p>The reader is vendored in <code>src/assay/data/qfv_panel</code> (format <code>qfv-daily-panel/1</code>);
+<code>scripts/sync_qfv_panel.py</code> copies it again from a QFinVerse checkout. QFinVerse
+updates the store every trading day at 21:45 New York time; Assay switches to the new
+version on its next request, and results cached for the old version are not reused.</p>
+<h2 id="universes">Universes</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Universe</th>
+<th>Members</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TOP500</code>, <code>TOP1000</code>, <code>TOP3000</code></td>
+<td>most liquid common stocks on the first trading day of each month</td>
+</tr>
+<tr>
+<td><code>SP500</code>, <code>NASDAQ100</code></td>
+<td>dated index histories, matched to QFinVerse securities</td>
+</tr>
+</tbody>
+</table></div>
+<p>The <code>TOP</code> universes rank by median dollar volume over the previous 63 trading days
+(at least 50 days traded, last close at least $5). ETFs, ADRs, preferreds, warrants,
+units and rights are left out. Membership uses only earlier data and keeps securities
+that later delisted.</p>
+<p>An evaluation covers every security that was a member at any time in the period and
+scores it only on the days it was a member. A universe read from the members on the
+last day would leave out every stock that dropped out; on NASDAQ100 over 2016–2026
+that flips the sign of low-volatility and range factors.</p>
+<h2 id="securities">Securities</h2>
+<p>Bars carry tickers only, so each security has a permanent id:</p>
+<ul>
+<li>a ticker that comes back after more than 63 trading days without a bar is a new
+security; the older one is labelled <code>TICKER~YYYY-MM</code> (for example <code>ABC~2004-03</code>);</li>
+<li>renames are one security when the MASSIVE ticker history or a shared composite FIGI
+says so (<code>FB</code> → <code>META</code>), or when a delisted and a new common stock share a CIK and
+the price carries on within 25% (<code>COH</code> → <code>TPR</code>).</li>
+</ul>
+<p>A ticker in an expression or a chart means the security that held it on the last day
+of the window.</p>
+<h2 id="corporate-actions">Corporate actions</h2>
+<p>Prices are stored as traded and adjusted when read, onto the share basis of the last
+day of the window. Only events with an ex-date inside the window are applied, so a
+backtest that ends in the past never sees a later split.</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>open high low close</code></td>
+<td>split- and dividend-adjusted (total return basis)</td>
+</tr>
+<tr>
+<td><code>volume</code></td>
+<td>split-adjusted</td>
+</tr>
+<tr>
+<td><code>transactions</code></td>
+<td>as reported</td>
+</tr>
+<tr>
+<td><code>dvol</code></td>
+<td>close × volume, as traded</td>
+</tr>
+<tr>
+<td><code>ret</code></td>
+<td>daily total return, the same in every window</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every split is checked against the prices before it is used:</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+<th>Applied</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ok</code></td>
+<td>prices jump by the split ratio on the ex-date</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>moved</code></td>
+<td>the jump is a few days off the vendor's date; the split moves there</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>no_jump</code></td>
+<td>no such jump within 10 trading days: already adjusted, or never happened</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>small</code></td>
+<td>ratio within 10% of 1:1 (stock dividends)</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table></div>
+<p>Dividends are applied as <code>1 − cash / previous close</code>. A dividend is skipped when it
+is not paid in USD, when it is more than half the price (nearly always a unit error),
+or when there is no close in the 15 days before the ex-date.</p>
+<h2 id="speed">Speed</h2>
+<p>Panels are dense float32 arrays by year, memory-mapped. <code>TOP500</code> over 2016–2026 loads
+in about 0.3 s and all of <code>TOP3000</code> over 2010–2026 in about 3 s. Six factors on
+<code>SP500</code> over ten years evaluate in about 11 s, against 54 s on the per-ticker parquet
+store.</p>

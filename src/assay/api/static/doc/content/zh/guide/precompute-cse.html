@@ -1,0 +1,180 @@
+<h1 class="doc-title">预计算与公共子表达式消除（CSE）</h1>
+<p>当你在同一面板上求值<strong>多个</strong>因子——一次扫描、一次库重评分、一次合成搜索——时，
+它们会共享子表达式。<code>Sub(high, low)</code>、
+<code>Mean(volume, 20)</code>、<code>Ref(close, 1)</code> 在<em>成千上万</em>个原本各不相同的因子中反复出现。
+将每个共享子树计算一次并复用其结果，是提升批量吞吐量的最大杠杆。</p>
+<p>Assay 通过两种方式实现，两者都以 AST 稳定的
+<a href="/doc/design/engineering"><code>struct_hash</code></a> 为键：两个结构相同的子树——
+无论由哪种表层语法产生——共享同一个哈希，只计算一次。</p>
+<ol>
+<li><strong>进程内 CSE</strong>——<code>FactorEngine.evaluate_many([...])</code> 在每个表达式之间贯穿
+一个结构哈希备忘录，因此批次中共享的子树恰好只求值一次。零设置，始终正确。</li>
+<li><strong>持久化预计算</strong>——<code>PrecomputeStore</code> 挖掘语料库中最热的子树，
+<strong>为每个资产物化每一个子树</strong>，并将 <code>(T, N)</code> 矩阵存到磁盘。后续批次
+加载这些子树而非重新计算——跨<em>运行</em>和跨<em>进程</em>。</li>
+</ol>
+<p>两者都与逐因子的 <code>evaluate()</code> <strong>逐比特一致</strong>（已验证：<code>max|Δ| = 0</code>，NaN 模式相同）。</p>
+<h3 id="实测">实测</h3>
+<p>来自扫描语料库的 1,200 个因子样本，在 400×150 面板上（结构共享比 2.3×）：</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Path</th>
+<th>Throughput</th>
+<th>Speedup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>naive per-factor <code>evaluate()</code></td>
+<td>5 factors/s</td>
+<td>base</td>
+</tr>
+<tr>
+<td><code>evaluate_many()</code> (in-process CSE)</td>
+<td>6 factors/s</td>
+<td><strong>1.20×</strong></td>
+</tr>
+<tr>
+<td><code>evaluate_many(precompute=…)</code> warm</td>
+<td>6 factors/s</td>
+<td>1.18×</td>
+</tr>
+</tbody>
+</table></div>
+<p>进程内 CSE 的加速<strong>随语料库重叠程度而增长</strong>——一个随机的
+1,200 因子样本比完整的 15k 语料库共享得少，而在后者中最热的子树
+反复出现数千次（<code>sub(high, low)</code> ×4,667）。持久化预计算在对稳定面板做<strong>反复</strong>
+扫描时（构建一次约 1s；跨运行和跨进程复用）以及<em>昂贵</em>子树反复出现时才能回本；
+对于共享子树都很廉价的单次扫描，它大致中性（磁盘加载 ≈ 重新计算）。
+根据工作负载选择工具——见末尾的表格。</p>
+<hr />
+<h2 id="找出公共子表达式">找出公共子表达式</h2>
+<pre><code class="language-bash"># pure analysis — no data needed
+python -m assay.cli precompute top --corpus _assay_sweep/factors_canonical_unique.txt --top-k 15
+</code></pre>
+<pre><code>top 15 common sub-expressions in _assay_sweep/factors_canonical_unique.txt:
+  x4667   nodes=3   score=9334     sub(high, low)
+  x1872   nodes=3   score=3744     ts_delay(close, 1)
+  x1563   nodes=3   score=3126     ts_mean(volume, 20)
+  x1351   nodes=3   score=2702     ts_std(close, 20)
+  ...
+</code></pre>
+<ul>
+<li><strong>count</strong>——在语料库中的总出现次数。</li>
+<li><strong>score</strong>——<code>count × (n_nodes − 1)</code>，即将该子树计算一次并在各处复用所省下的
+算子求值次数（排序键）。</li>
+</ul>
+<p>SDK：<code>service.common_subexpressions(corpus, top_k=100)</code> →
+<code>[{expr, count, n_factors, n_nodes, score}]</code>。</p>
+<hr />
+<h2 id="构建预计算存储">构建预计算存储</h2>
+<pre><code class="language-bash">python -m assay.cli precompute build \
+  --corpus _assay_sweep/factors_canonical_unique.txt \
+  --universe NASDAQ100 --start 2025-01-02 --end 2026-06-09 --top-k 512
+python -m assay.cli precompute stats
+</code></pre>
+<p>这会挖掘出最热的前 <code>k</code> 个共享子树，并为<strong>所有资产</strong>各自计算，
+将矩阵存储在 <code>&lt;data_dir&gt;/precompute/</code> 下。构建本身也经过 CSE 加速
+（嵌套的共享子树只计算一次）。</p>
+<p>SDK：</p>
+<pre><code class="language-python">import assay
+svc = assay.init()
+
+info = svc.build_precompute(
+    &quot;_assay_sweep/factors_canonical_unique.txt&quot;,
+    universe=&quot;NASDAQ100&quot;, period=(&quot;2025-01-02&quot;, &quot;2026-06-09&quot;), top_k=512,
+)
+print(info[&quot;built&quot;], &quot;subexprs |&quot;, info[&quot;est_evals_saved&quot;], &quot;evals saved / pass&quot;)
+</code></pre>
+<h3 id="按历史自动更新">按历史自动更新</h3>
+<p>磁盘上的键会折入 <code>FactorEngine.panel_fingerprint()</code>——面板的
+<strong>日期 × 代码 × 字段</strong>的摘要。导入新历史后指纹会改变，因此
+陈旧条目会直接不再匹配（一次未命中），存储便为新面板重建。
+无需手动失效；条目在一个面板内是稳定且共享的。</p>
+<h3 id="与每日数据更新耦合">与每日数据更新耦合</h3>
+<p>热缓存被接入数据管理，使其<strong>自动</strong>与实时数据保持对齐：</p>
+<ul>
+<li>在一次成功的<strong>数据更新任务</strong>（<code>POST /v1/admin/data/jobs</code>）之后，同一任务会
+为该市场的主股票池刷新预计算存储，覆盖<strong>刚导入的数据区间</strong>，
+以<strong>因子库</strong>作为语料库进行挖掘
+（<code>AssayService.refresh_precompute_for_market</code>）。一次 <code>init</code> 运行会刷新每个股票池。</li>
+<li>每次构建都会写入一份<strong>清单（manifest）</strong>，记录其有效期、<code>as_of</code>、
+指纹、构建时间以及最新导入日期——因此新鲜度只是一次廉价的
+日期比较（无需加载面板）。</li>
+<li><strong>数据管理页面</strong>（Admin → Data Manager）会显示一张 <em>Hot cache</em> 卡片：按
+股票池展示有效期、条目数、最热的子表达式，以及一个
+<strong>fresh / stale</strong> 徽章（stale = 缓存构建后数据已推进）。
+<strong>Rebuild US / Rebuild CN</strong> 按钮会排入对每个股票池的完整重建。</li>
+</ul>
+<pre><code>GET  /v1/admin/cache/status     -&gt; {store:{entries,bytes,dir}, scopes:[{universe, period, as_of,
+                                     fingerprint, built_at, data_latest, n_entries, fresh, top}]}
+POST /v1/admin/cache/rebuild     {market}  -&gt; queues a background rebuild job
+</code></pre>
+<p><code>precompute_status()</code> 仅当某个范围记录的 <code>data_latest</code> 仍等于该市场当前最新
+导入日期时，才将其标记为 <code>fresh</code>——即缓存已对齐到实时数据的有效期。</p>
+<hr />
+<h2 id="用它来加速扫描">用它来加速扫描</h2>
+<pre><code class="language-python"># raw factor VALUES for a big corpus, CSE + precompute accelerated
+results = svc.evaluate_many(exprs, universe=&quot;NASDAQ100&quot;,
+                            period=(&quot;2025-01-02&quot;, &quot;2026-06-09&quot;), use_precompute=True)
+for r in results:          # r is a FactorResult: r.values is the (T, N) matrix
+    ...
+</code></pre>
+<p>在引擎层面（无服务 / 数据层）：</p>
+<pre><code class="language-python">from assay.engine import FactorEngine, PrecomputeStore
+
+eng = FactorEngine(panel)
+store = PrecomputeStore(&quot;/path/to/precompute&quot;)
+store.build(eng, corpus_exprs, top_k=512)          # once
+
+bound = store.bind(eng.panel_fingerprint())
+results = eng.evaluate_many(exprs, precompute=bound)  # warm: hot subtrees loaded, not recomputed
+print(f&quot;{bound.hit_rate:.0%} of subtree lookups served from precompute&quot;)
+</code></pre>
+<p><code>evaluate_many</code> 为每个输入返回一个 <code>FactorResult</code>（仅有值——无 IC 指标）。
+格式错误的表达式会抛出异常，与 <code>evaluate()</code> 完全一样；若需要软失败，
+可用 <code>engine.diagnose()</code> 预先过滤。</p>
+<hr />
+<h2 id="何时用哪个">何时用哪个</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Situation</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>单个因子</td>
+<td><code>evaluate()</code></td>
+</tr>
+<tr>
+<td>偶尔的批量</td>
+<td><code>evaluate_many()</code>（进程内 CSE——免费）</td>
+</tr>
+<tr>
+<td>对稳定面板的反复扫描</td>
+<td>先 <code>precompute build</code> 一次，再 <code>evaluate_many(..., use_precompute=True)</code></td>
+</tr>
+<tr>
+<td>评分（IC / 衰减 / 换手率），而非原始值</td>
+<td><code>batch()</code>（逐因子指标）</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="工作原理-内部">工作原理（内部）</h2>
+<ul>
+<li><code>assay.engine.cse.common_subexpressions(exprs)</code>——解析语料库，遍历每一棵
+AST，按 <code>struct_hash</code> 聚合子树，按所省的重新计算量排序。</li>
+<li><code>FactorEngine._eval_cse(node, ctx, memo, precompute)</code>——备忘化求值：每个
+<code>OpNode</code> 结果按其 <code>struct_hash</code> 缓存；已绑定的 <code>precompute</code> 会通过从磁盘加载
+其矩阵来短路一个子树。叶子（字段 / 字面量）不耗成本，永不缓存。</li>
+<li><code>PrecomputeStore</code>——内容寻址的 <code>(hash, fingerprint) → (T, N).npy</code>，分片
+并原子写入（临时文件 + <code>os.replace</code>），尽力而为（损坏的文件
+读作一次未命中）。与 L2 因子缓存如出一辙。</li>
+</ul>
+<p>正确性依赖于算子的<strong>纯粹性</strong>：内核返回新数组且从不改动
+输入，因此在多个父节点间共享同一个数组对象是安全的——这与
+引擎在单次求值内跨每个引用复用字段矩阵时所依赖的假设相同。</p>

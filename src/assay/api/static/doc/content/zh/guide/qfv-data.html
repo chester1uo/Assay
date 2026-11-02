@@ -1,0 +1,102 @@
+<h1 class="doc-title">美股数据（QFinVerse）</h1>
+<p>在 assay.qfinverse.com 上，美股股票池读取 QFinVerse 用 MASSIVE 数据构建的日频面板：2003 年 9 月起的日线、拆股和分红，以及 MASSIVE 的 ticker 参考数据。这种部署下 Assay 自己不再导入美股数据。</p>
+<h2 id="配置">配置</h2>
+<pre><code class="language-bash">export ASSAY_QFV_PANEL_DIR=/srv/qfinverse/data/daily_panel   # 面板根目录（含 CURRENT）
+assay serve-api
+</code></pre>
+<p>读取代码随 Assay 一起提供，在 <code>src/assay/data/qfv_panel</code>（格式 <code>qfv-daily-panel/1</code>），可用 <code>scripts/sync_qfv_panel.py</code> 从 QFinVerse 代码重新同步。QFinVerse 每个交易日纽约时间 21:45 更新面板；Assay 在下一次请求时切到新版本，旧版本的缓存结果不会复用。</p>
+<h2 id="股票池">股票池</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>股票池</th>
+<th>成分</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TOP500</code>、<code>TOP1000</code>、<code>TOP3000</code></td>
+<td>每月第一个交易日流动性最好的普通股</td>
+</tr>
+<tr>
+<td><code>SP500</code>、<code>NASDAQ100</code></td>
+<td>带日期的指数成分历史，对应到 QFinVerse 证券</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>TOP</code> 股票池按此前 63 个交易日的成交额中位数排序（至少交易 50 天，最近收盘价不低于 5 美元），排除 ETF、ADR、优先股、权证、单位和权利。只用生效日之前的数据，也保留后来退市的股票。</p>
+<p>评估覆盖区间内任何时候属于股票池的证券，并且只在它属于股票池的日子里打分。如果只用最后一天的成分，会漏掉所有中途调出的股票；在 2016–2026 年的 NASDAQ100 上，这会让低波动和振幅类因子的 IC 符号反过来。</p>
+<h2 id="证券-id">证券 ID</h2>
+<p>日线只有 ticker，所以每只证券有一个永久 ID：</p>
+<ul>
+<li>一个 ticker 停止交易超过 63 个交易日后再出现，算新证券，老的那只标为 <code>TICKER~YYYY-MM</code>（如 <code>ABC~2004-03</code>）；</li>
+<li>改名按同一只证券处理：MASSIVE 的 ticker 历史或相同的 composite FIGI（<code>FB</code> → <code>META</code>）；或者退市股和新股票同属一个 CIK，且价格连续在 25% 以内（<code>COH</code> → <code>TPR</code>）。</li>
+</ul>
+<p>表达式或图表里的 ticker，指窗口最后一天持有该 ticker 的证券。</p>
+<h2 id="公司行动">公司行动</h2>
+<p>价格按成交原样存储，读取时复权到窗口最后一天的股本口径，并且只用除权日在窗口之内的事件。所以结束在过去的回测读不到之后的拆股。</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>字段</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>open high low close</code></td>
+<td>拆股和分红复权（总收益口径）</td>
+</tr>
+<tr>
+<td><code>volume</code></td>
+<td>拆股复权</td>
+</tr>
+<tr>
+<td><code>transactions</code></td>
+<td>原样</td>
+</tr>
+<tr>
+<td><code>dvol</code></td>
+<td>原始收盘价 × 成交量</td>
+</tr>
+<tr>
+<td><code>ret</code></td>
+<td>日总收益，与窗口无关</td>
+</tr>
+</tbody>
+</table></div>
+<p>每次拆股使用前都用价格核对：</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>状态</th>
+<th>含义</th>
+<th>是否应用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ok</code></td>
+<td>除权日价格按比例跳变</td>
+<td>是</td>
+</tr>
+<tr>
+<td><code>moved</code></td>
+<td>跳变比供应商日期差几天，按实际跳变日处理</td>
+<td>是</td>
+</tr>
+<tr>
+<td><code>no_jump</code></td>
+<td>前后 10 个交易日内没有跳变：价格已复权，或拆股并未发生</td>
+<td>否</td>
+</tr>
+<tr>
+<td><code>small</code></td>
+<td>比例在 1:1 的 10% 以内（送股）</td>
+<td>是</td>
+</tr>
+</tbody>
+</table></div>
+<p>分红按 <code>1 − 现金 / 前收</code> 复权。以下分红跳过：不是美元；超过股价一半（基本都是单位错误）；除息日前 15 天内没有收盘价。</p>
+<h2 id="速度">速度</h2>
+<p>面板按年存成 float32 稠密矩阵，内存映射读取。2016–2026 年的 <code>TOP500</code> 约 0.3 秒读完，2010–2026 年的整个 <code>TOP3000</code> 约 3 秒。<code>SP500</code> 十年 6 个因子评估约 11 秒，原来按 ticker 存的 parquet 需要 54 秒。</p>

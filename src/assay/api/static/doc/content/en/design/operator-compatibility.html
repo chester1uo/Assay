@@ -1,0 +1,549 @@
+<h1 class="doc-title">Assay Operator Compatibility Table</h1>
+<h2 id="alpha-101-qlib-assay-native-三方对照">Alpha 101 · qlib · Assay Native — 三方对照</h2>
+<blockquote>
+<p><strong>设计原则</strong>：Assay 的 AST 后端是唯一的执行引擎。Alpha 101 风格和 qlib 风格都是前端语法糖，经由各自的 Parser 转换成相同的 AST 节点后执行。</p>
+</blockquote>
+<hr />
+<h2 id="一-时序算子-time-series-operators">一、时序算子（Time-Series Operators）</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Alpha 101 / WQ 写法</th>
+<th>qlib 写法</th>
+<th>Assay 原生写法</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>delay(x, d)</code></td>
+<td><code>Ref(x, d)</code></td>
+<td><code>ts_delay(x, d)</code></td>
+<td>取 d 日前的值</td>
+</tr>
+<tr>
+<td><code>delta(x, d)</code></td>
+<td><code>Delta(x, d)</code></td>
+<td><code>ts_delta(x, d)</code></td>
+<td><code>x - delay(x, d)</code></td>
+</tr>
+<tr>
+<td><code>returns</code> <em>(field)</em></td>
+<td><code>$close / Ref($close,1) - 1</code></td>
+<td><code>ts_returns(close, 1)</code></td>
+<td>Alpha101 用 <code>returns</code> 作内建字段；Assay 显式计算</td>
+</tr>
+<tr>
+<td><code>correlation(x, y, d)</code></td>
+<td><code>Corr(x, y, d)</code></td>
+<td><code>ts_corr(x, y, d)</code></td>
+<td>滚动 Pearson</td>
+</tr>
+<tr>
+<td><code>covariance(x, y, d)</code></td>
+<td><code>Cov(x, y, d)</code></td>
+<td><code>ts_cov(x, y, d)</code></td>
+<td>滚动协方差</td>
+</tr>
+<tr>
+<td><code>stddev(x, d)</code></td>
+<td><code>Std(x, d)</code></td>
+<td><code>ts_std(x, d)</code></td>
+<td>滚动标准差</td>
+</tr>
+<tr>
+<td><code>sum(x, d)</code></td>
+<td><code>Sum(x, d)</code></td>
+<td><code>ts_sum(x, d)</code></td>
+<td>滚动加总</td>
+</tr>
+<tr>
+<td><code>mean(x, d)</code> <em>(非标准，部分实现有)</em></td>
+<td><code>Mean(x, d)</code></td>
+<td><code>ts_mean(x, d)</code></td>
+<td>滚动均值</td>
+</tr>
+<tr>
+<td><code>product(x, d)</code></td>
+<td><code>Product(x, d)</code></td>
+<td><code>ts_product(x, d)</code></td>
+<td>滚动连乘</td>
+</tr>
+<tr>
+<td><code>ts_min(x, d)</code></td>
+<td><code>Min(x, d)</code></td>
+<td><code>ts_min(x, d)</code></td>
+<td>滚动最小值</td>
+</tr>
+<tr>
+<td><code>ts_max(x, d)</code></td>
+<td><code>Max(x, d)</code></td>
+<td><code>ts_max(x, d)</code></td>
+<td>滚动最大值</td>
+</tr>
+<tr>
+<td><code>ts_argmin(x, d)</code></td>
+<td><code>IdxMin(x, d)</code></td>
+<td><code>ts_argmin(x, d)</code></td>
+<td>最小值位置（距今天数）</td>
+</tr>
+<tr>
+<td><code>ts_argmax(x, d)</code></td>
+<td><code>IdxMax(x, d)</code></td>
+<td><code>ts_argmax(x, d)</code></td>
+<td>最大值位置</td>
+</tr>
+<tr>
+<td><code>Ts_Rank(x, d)</code></td>
+<td><code>Rank(x, d)</code> <em>(ts版)</em></td>
+<td><code>ts_rank(x, d)</code></td>
+<td>当前值在过去 d 日中的分位 [0,1]</td>
+</tr>
+<tr>
+<td><code>decay_linear(x, d)</code></td>
+<td><code>WMA(x, d)</code></td>
+<td><code>ts_decay_linear(x, d)</code></td>
+<td>线性衰减加权均值，近期权重更大</td>
+</tr>
+<tr>
+<td><code>EMA(x, d)</code> 或 <code>LinearDecay</code></td>
+<td><code>EMA(x, d)</code></td>
+<td><code>ts_ema(x, d)</code></td>
+<td>指数移动均值</td>
+</tr>
+<tr>
+<td><em>(无标准写法)</em></td>
+<td><code>DEMA(x, d)</code></td>
+<td><code>ts_dema(x, d)</code></td>
+<td>双指数移动均值</td>
+</tr>
+<tr>
+<td><code>Ts_ArgMax(x, d)</code></td>
+<td><code>IdxMax(x, d)</code></td>
+<td><code>ts_argmax(x, d)</code></td>
+<td>同 ts_argmax，Alpha101 大写风格</td>
+</tr>
+<tr>
+<td><code>Ts_ArgMin(x, d)</code></td>
+<td><code>IdxMin(x, d)</code></td>
+<td><code>ts_argmin(x, d)</code></td>
+<td>同 ts_argmin</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="二-截面算子-cross-sectional-operators">二、截面算子（Cross-Sectional Operators）</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Alpha 101 / WQ 写法</th>
+<th>qlib 写法</th>
+<th>Assay 原生写法</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rank(x)</code></td>
+<td><code>CSRank(x)</code></td>
+<td><code>cs_rank(x)</code></td>
+<td>截面百分位排名 [0,1]</td>
+</tr>
+<tr>
+<td><code>scale(x, a=1)</code></td>
+<td><code>CSScale(x)</code></td>
+<td><code>cs_scale(x, a=1)</code></td>
+<td>截面绝对值归一到 a</td>
+</tr>
+<tr>
+<td><code>IndNeutralize(x, IndClass.sector)</code></td>
+<td><code>IndNeutralize(x, level)</code></td>
+<td><code>cs_neutralize(x, 'sector')</code></td>
+<td>行业中性化，去除 sector beta</td>
+</tr>
+<tr>
+<td><code>IndNeutralize(x, IndClass.industry)</code></td>
+<td><code>IndNeutralize(x, 'industry')</code></td>
+<td><code>cs_neutralize(x, 'industry')</code></td>
+<td>行业分类更细一级</td>
+</tr>
+<tr>
+<td><code>IndNeutralize(x, IndClass.subindustry)</code></td>
+<td><code>IndNeutralize(x, 'subindustry')</code></td>
+<td><code>cs_neutralize(x, 'subindustry')</code></td>
+<td>最细粒度行业中性化</td>
+</tr>
+<tr>
+<td><em>(无标准写法)</em></td>
+<td><code>CSZScore(x)</code></td>
+<td><code>cs_zscore(x)</code></td>
+<td>截面 z-score</td>
+</tr>
+<tr>
+<td><em>(无标准写法)</em></td>
+<td><code>CSDemean(x)</code></td>
+<td><code>cs_demean(x)</code></td>
+<td>截面去均值</td>
+</tr>
+<tr>
+<td><em>(无标准写法)</em></td>
+<td><em>(无)</em></td>
+<td><code>cs_winsorize(x, p)</code></td>
+<td>截面 p%/1-p% 截尾</td>
+</tr>
+<tr>
+<td><em>(无标准写法)</em></td>
+<td><em>(无)</em></td>
+<td><code>cs_group_rank(x, g)</code></td>
+<td>组内排名（如行业内排名）</td>
+</tr>
+<tr>
+<td><em>(无标准写法)</em></td>
+<td><em>(无)</em></td>
+<td><code>cs_group_mean(x, g)</code></td>
+<td>组内均值</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="三-数学-逐元素算子-mathematical-operators">三、数学 / 逐元素算子（Mathematical Operators）</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Alpha 101 / WQ 写法</th>
+<th>qlib 写法</th>
+<th>Assay 原生写法</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>abs(x)</code></td>
+<td><code>Abs(x)</code></td>
+<td><code>abs(x)</code></td>
+<td>绝对值</td>
+</tr>
+<tr>
+<td><code>log(x)</code></td>
+<td><code>Log(x)</code></td>
+<td><code>log(x)</code></td>
+<td>自然对数，x≤0 → NaN</td>
+</tr>
+<tr>
+<td><code>sign(x)</code></td>
+<td><code>Sign(x)</code></td>
+<td><code>sign(x)</code></td>
+<td>+1 / 0 / -1</td>
+</tr>
+<tr>
+<td><code>SignedPower(x, e)</code></td>
+<td><code>Power(x, e)</code></td>
+<td><code>signed_power(x, e)</code></td>
+<td><code>sign(x) * abs(x)^e</code>，保留符号的幂次</td>
+</tr>
+<tr>
+<td><code>power(x, e)</code> <em>(部分实现)</em></td>
+<td><code>Power(x, e)</code></td>
+<td><code>pow(x, e)</code></td>
+<td>普通幂次，注意 SignedPower ≠ power</td>
+</tr>
+<tr>
+<td><code>sqrt(x)</code></td>
+<td><code>Sqrt(x)</code></td>
+<td><code>sqrt(x)</code></td>
+<td>平方根</td>
+</tr>
+<tr>
+<td><code>min(x, y)</code></td>
+<td><code>Min(x, y)</code> <em>(element-wise)</em></td>
+<td><code>elem_min(x, y)</code></td>
+<td>逐元素最小值（注意和 ts_min 区分）</td>
+</tr>
+<tr>
+<td><code>max(x, y)</code></td>
+<td><code>Max(x, y)</code> <em>(element-wise)</em></td>
+<td><code>elem_max(x, y)</code></td>
+<td>逐元素最大值</td>
+</tr>
+<tr>
+<td><code>(cond ? a : b)</code></td>
+<td><code>If(cond, a, b)</code></td>
+<td><code>where(cond, a, b)</code></td>
+<td>三元条件选择</td>
+</tr>
+<tr>
+<td><em>(无)</em></td>
+<td><code>Clip(x, lo, hi)</code></td>
+<td><code>clip(x, lo, hi)</code></td>
+<td>截断到 [lo, hi]</td>
+</tr>
+<tr>
+<td><em>(无)</em></td>
+<td><em>(无)</em></td>
+<td><code>safe_div(a, b, fill=0)</code></td>
+<td>除零安全，b=0 时返回 fill</td>
+</tr>
+<tr>
+<td><em>(无)</em></td>
+<td><em>(无)</em></td>
+<td><code>fillna(x, method)</code></td>
+<td>NaN 填充：ffill / zero / median</td>
+</tr>
+<tr>
+<td><em>(无)</em></td>
+<td><code>Sigmoid(x)</code></td>
+<td><code>sigmoid(x)</code></td>
+<td>1/(1+e^-x)</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="四-特殊字段-预计算量-built-in-fields">四、特殊字段 / 预计算量（Built-in Fields）</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Alpha 101 / WQ 写法</th>
+<th>qlib 写法</th>
+<th>Assay 原生写法</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>open</code></td>
+<td><code>$open</code></td>
+<td><code>open</code></td>
+<td>当日开盘价</td>
+</tr>
+<tr>
+<td><code>high</code></td>
+<td><code>$high</code></td>
+<td><code>high</code></td>
+<td>当日最高价</td>
+</tr>
+<tr>
+<td><code>low</code></td>
+<td><code>$low</code></td>
+<td><code>low</code></td>
+<td>当日最低价</td>
+</tr>
+<tr>
+<td><code>close</code></td>
+<td><code>$close</code></td>
+<td><code>close</code></td>
+<td>当日收盘价（复权）</td>
+</tr>
+<tr>
+<td><code>volume</code></td>
+<td><code>$volume</code></td>
+<td><code>volume</code></td>
+<td>当日成交量</td>
+</tr>
+<tr>
+<td><code>vwap</code></td>
+<td><code>$vwap</code></td>
+<td><code>vwap</code></td>
+<td>当日成交量加权均价</td>
+</tr>
+<tr>
+<td><code>returns</code></td>
+<td><code>$close/$close[-1]-1</code></td>
+<td><code>ts_returns(close, 1)</code></td>
+<td>Alpha101 作内建字段，Assay 显式计算</td>
+</tr>
+<tr>
+<td><code>adv{d}</code></td>
+<td><code>Mean($volume, d)</code></td>
+<td><code>ts_mean(volume, d)</code></td>
+<td>d 日平均成交量，如 <code>adv20</code> = <code>ts_mean(volume, 20)</code></td>
+</tr>
+<tr>
+<td><code>cap</code> <em>(市值)</em></td>
+<td><code>$market_cap</code></td>
+<td><code>market_cap</code></td>
+<td>总市值</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="五-特殊语法兼容说明">五、特殊语法兼容说明</h2>
+<h3 id="5-1-adv-d-的处理">5.1  <code>adv{d}</code> 的处理</h3>
+<p>Alpha 101 里大量使用 <code>adv20</code>、<code>adv5</code>、<code>adv81</code> 这类写法（d 日平均成交额）。Assay 的 Parser 会把它识别为宏展开：</p>
+<pre><code>adv20  →  ts_mean(volume, 20)
+adv5   →  ts_mean(volume, 5)
+adv81  →  ts_mean(volume, 81)
+</code></pre>
+<h3 id="5-2-signedpower-vs-pow">5.2  <code>SignedPower</code> vs <code>pow</code></h3>
+<p>Alpha 101 里 <code>SignedPower(x, e) = sign(x) * abs(x)^e</code>，保留原始符号。这和普通的 <code>pow(x, e)</code> 不同（负数的偶数次幂会变正）。Assay 两者都支持，名字不同，不能混用：</p>
+<pre><code class="language-python">signed_power(x, 2)  # = sign(x) * x^2，保留符号
+pow(x, 2)           # = x^2，负数变正
+</code></pre>
+<h3 id="5-3-ts_rank-vs-rank">5.3  <code>Ts_Rank</code> vs <code>rank</code></h3>
+<p>Alpha 101 里 <code>Ts_Rank(x, d)</code> 是时序 rank（当前值在过去 d 日的分位），<code>rank(x)</code> 是截面 rank（当前值在当日所有股票中的分位）。两者完全不同，Parser 根据参数数量自动区分：</p>
+<pre><code class="language-python">Ts_Rank(x, 20)  →  ts_rank(x, 20)   # 1个数据字段 + 1个窗口参数 → 时序
+rank(x)         →  cs_rank(x)        # 只有1个数据字段，无窗口 → 截面
+</code></pre>
+<h3 id="5-4-indneutralize-的-indclass-参数">5.4  <code>IndNeutralize</code> 的 <code>IndClass</code> 参数</h3>
+<p>Alpha 101 里用 <code>IndClass.sector</code>、<code>IndClass.industry</code>、<code>IndClass.subindustry</code> 三级。Assay 把它映射成字符串参数：</p>
+<pre><code class="language-python"># Alpha 101 写法
+IndNeutralize(vwap, IndClass.sector)
+
+# Assay 等价写法
+cs_neutralize(vwap, 'sector')
+</code></pre>
+<p>实际的行业分类数据来源在 DataStore 里配置（GICS、SIC、中信等），与算子本身解耦。</p>
+<h3 id="5-5-qlib-前缀字段">5.5  qlib <code>$</code> 前缀字段</h3>
+<p>qlib 用 <code>$close</code>、<code>$volume</code> 表示字段引用。Assay Parser 自动去掉 <code>$</code> 前缀并映射到 Assay 的字段名：</p>
+<pre><code class="language-python">$close  →  close
+$vwap   →  vwap
+$volume →  volume
+</code></pre>
+<h3 id="5-6-中缀算子-与">5.6  中缀算子 <code>^</code> 与 <code>||</code></h3>
+<p>论文把 <code>^</code>（幂）和 <code>||</code>（逻辑或）列为标准算子。Assay Parser 支持它们：</p>
+<pre><code class="language-python">(high * low)^0.5      →  pow(mul(high, low), 0.5)     # ^ 是普通幂，可负数底数→NaN
+rank(x)^rank(y)       →  pow(cs_rank(x), cs_rank(y))  # 指数可以是表达式（矩阵）
+(a &lt; b) || (a == b)   →  or(lt(a,b), eq(a,b))         # 逻辑或，NaN 视为 false
+</code></pre>
+<p>注意 <code>^</code>（普通幂 <code>pow</code>）与 <code>SignedPower</code>（保号幂 <code>signed_power = sign(x)*abs(x)^a</code>）不同，见 5.2。</p>
+<hr />
+<h2 id="六-alpha-101-覆盖情况验证">六、Alpha 101 覆盖情况验证</h2>
+<p>用上述算子集能实现 Alpha 101 全部 101 个因子。以下是几个典型例子验证对照表的完整性：</p>
+<h3 id="alpha-1">Alpha#1</h3>
+<pre><code>WQ:    rank(Ts_ArgMax(SignedPower(((returns &lt; 0) ? stddev(returns, 20) : close), 2.), 5)) - 0.5
+Assay: cs_rank(ts_argmax(signed_power(where(ts_returns(close,1) &lt; 0, ts_std(ts_returns(close,1), 20), close), 2), 5)) - 0.5
+</code></pre>
+<h3 id="alpha-7">Alpha#7</h3>
+<pre><code>WQ:    (adv20 &lt; volume) ? ((-1 * ts_rank(abs(delta(close, 7)), 60)) * sign(delta(close, 7))) : (-1 * 1)
+Assay: where(ts_mean(volume,20) &lt; volume, (-1 * ts_rank(abs(ts_delta(close,7)), 60)) * sign(ts_delta(close,7)), -1)
+</code></pre>
+<h3 id="alpha-58-窗口按论文-floor-取整-3-92795-3-7-89291-7-5-50322-5">Alpha#58  （窗口按论文 floor 取整：3.92795→3, 7.89291→7, 5.50322→5）</h3>
+<pre><code>WQ:    -1 * Ts_Rank(decay_linear(correlation(IndNeutralize(vwap, IndClass.sector), volume, 3.92795), 7.89291), 5.50322)
+Assay: -1 * ts_rank(ts_decay_linear(ts_corr(cs_neutralize(vwap,'sector'), volume, 3), 7), 5)
+</code></pre>
+<h3 id="alpha-98-floor-4-58418-4-20-8187-20-8-62571-8-6-95668-6">Alpha#98  （floor：4.58418→4, 20.8187→20, 8.62571→8, 6.95668→6）</h3>
+<pre><code>WQ:    rank(decay_linear(correlation(vwap, sum(adv5, 26.4719), 4.58418), 7.18088)) -
+       rank(decay_linear(Ts_Rank(Ts_ArgMin(correlation(rank(open), rank(adv15), 20.8187), 8.62571), 6.95668), 8.07206))
+Assay: cs_rank(ts_decay_linear(ts_corr(vwap, ts_sum(ts_mean(volume,5),26), 4), 7)) -
+       cs_rank(ts_decay_linear(ts_rank(ts_argmin(ts_corr(cs_rank(open), cs_rank(ts_mean(volume,15)), 20), 8), 6), 8))
+</code></pre>
+<hr />
+<h2 id="七-不支持-有歧义的情况">七、不支持 / 有歧义的情况</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>情况</th>
+<th>说明</th>
+<th>Assay 处理方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>adv{d}</code> 中 d 为浮点数（如 <code>adv5.85</code>）</td>
+<td>Alpha101 原文有部分非整数窗口</td>
+<td><strong>向下取整 floor</strong>（遵循论文 “non-integer d → floor(d)”），<code>adv5.85 → ts_mean(volume, 5)</code></td>
+</tr>
+<tr>
+<td><code>decay_linear</code> / 任意 <code>ts_*</code> 的浮点窗口（如 <code>decay_linear(x, 7.89)</code>）</td>
+<td>Alpha101 原文广泛使用</td>
+<td><strong>向下取整 floor</strong>，<code>7.89 → 7</code></td>
+</tr>
+<tr>
+<td><code>IndClass</code> 的具体分类与数据源绑定</td>
+<td>GICS vs SIC vs 中信一级</td>
+<td>在 DataStore 配置层处理，算子层只传字符串</td>
+</tr>
+<tr>
+<td>Alpha101 原文的 <code>cap</code> 字段</td>
+<td>部分实现包含市值</td>
+<td>Assay 作为 <code>market_cap</code> 字段，需 DataStore 提供</td>
+</tr>
+<tr>
+<td>Alpha101 某些 alpha 用 <code>open</code> 同时作为字段和函数名</td>
+<td>歧义</td>
+<td>Parser 根据上下文（有无括号）区分：<code>open</code>=字段，<code>open(...)</code>=不存在的函数</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="八-实现状态-implementation-status">八、实现状态（Implementation Status）</h2>
+<p>本对照表已在 <code>src/assay/engine/</code> 中实现并测试通过：</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>组件</th>
+<th>文件</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>统一 AST</td>
+<td><a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/engine/ast.py" target="_blank" rel="noopener noreferrer">src/assay/engine/ast.py</a></td>
+<td><code>FieldNode</code> / <code>LitNode</code> / <code>OpNode</code>，含 <code>struct_hash</code></td>
+</tr>
+<tr>
+<td>算子注册表 + numpy kernel</td>
+<td><a href="https://github.com/QFinVerse/Assay/tree/main/src/assay/engine/operators" target="_blank" rel="noopener noreferrer">src/assay/engine/operators/</a></td>
+<td>按类别分文件（<code>time_series</code> / <code>cross_sectional</code> / <code>math_ops</code> / <code>arithmetic</code>）+ 共享 <a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/engine/operators/registry.py" target="_blank" rel="noopener noreferrer"><code>registry</code></a>；上表全部算子 + 机读 <code>OPERATOR_SCHEMA</code></td>
+</tr>
+<tr>
+<td><strong>两种前端 Parser</strong></td>
+<td><a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/engine/parsing.py" target="_blank" rel="noopener noreferrer">src/assay/engine/parsing.py</a></td>
+<td>qlib 语法 与 函数式（Assay 原生 + Alpha 101/WQ 别名）共享一套文法</td>
+</tr>
+<tr>
+<td>执行引擎</td>
+<td><a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/engine/engine.py" target="_blank" rel="noopener noreferrer">src/assay/engine/engine.py</a></td>
+<td>面板 → <code>(T×N)</code> 矩阵 → 求值</td>
+</tr>
+<tr>
+<td><strong>Alpha 101 因子库</strong></td>
+<td><a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/factors/alpha101.py" target="_blank" rel="noopener noreferrer">src/assay/factors/alpha101.py</a></td>
+<td>论文（arXiv:1601.00991）全部 101 个因子，逐字录入为 Assay 表达式</td>
+</tr>
+<tr>
+<td>测试</td>
+<td><a href="https://github.com/QFinVerse/Assay/tree/main/tests/engine" target="_blank" rel="noopener noreferrer">tests/engine/</a> · <a href="https://github.com/QFinVerse/Assay/blob/main/tests/factors/test_alpha101.py" target="_blank" rel="noopener noreferrer">tests/factors/test_alpha101.py</a></td>
+<td>方言等价、算子数值、诊断、<strong>101 因子全部解析+求值</strong>、端到端</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>两种语法（two types）</strong> 经各自 Parser 转换为<strong>同一个</strong> AST 与算子后端，因此三列写法
+（Alpha 101 · qlib · Assay 原生）只是前端语法糖：</p>
+<pre><code class="language-python">from assay.engine import parse
+# qlib 与 函数式 产生完全相同的 AST
+assert parse(&quot;Corr($close, $volume, 20)&quot;).struct_hash() \
+    == parse(&quot;ts_corr(close, volume, 20)&quot;).struct_hash()
+</code></pre>
+<p>歧义消解（与上文一致）：<code>rank(x)</code>→截面 / <code>rank(x, d)</code>→时序；<code>min(x, 5)</code>→滚动 /
+<code>min(x, y)</code>→逐元素；<code>SignedPower</code>（保号幂）≠ <code>^</code>/<code>pow</code>（普通幂）；浮点窗口（如 <code>7.89</code>）与
+<code>adv5.85</code> 一律<strong>向下取整 floor</strong>（遵循论文）。行业中性化等组内算子需通过
+<code>FactorEngine(panel, group_data=...)</code> 提供分类标签，Phase-1 数据层暂未内置 sector 数据，
+缺失时会显式报错。</p>
+<p>用 <a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/factors/alpha101.py" target="_blank" rel="noopener noreferrer">src/assay/factors/alpha101.py</a> 评估论文因子：</p>
+<pre><code class="language-python">from assay.factors.alpha101 import ALPHA_101
+from assay.engine import FactorEngine
+eng = FactorEngine(panel, group_data={&quot;sector&quot;: ..., &quot;industry&quot;: ..., &quot;subindustry&quot;: ...})
+report = eng.evaluate(ALPHA_101[58])   # indneutralize 因子需要 group_data
+</code></pre>
+<blockquote>
+<p><strong>adv{d} 口径</strong>：论文定义为 d 日平均<strong>成交额</strong>（dollar volume）；Assay 按项目约定映射为
+<code>ts_mean(volume, d)</code>（平均<strong>成交量</strong>）。如需严格成交额口径，可改用 vwap×volume 字段。</p>
+</blockquote>
+<h3 id="自定义算子-custom-operators">自定义算子（Custom Operators）</h3>
+<p>用户可注册自己的算子，Parser 会自动识别已注册的名字，注册后即可在表达式中使用：</p>
+<pre><code class="language-python">import numpy as np
+from assay.engine import operators as ops, FactorEngine
+
+@ops.op(&quot;ts_zscore&quot;, 2, 2, category=&quot;custom&quot;, output_range=&quot;(-inf, inf)&quot;)
+def ts_zscore(x, d):                       # x 是 (T, N) 矩阵，d 是字面量参数
+    return (x - ops.ts_mean(x, d)) / ops.ts_std(x, d)
+
+FactorEngine(panel).evaluate(&quot;cs_rank(ts_zscore(close, 20))&quot;)   # 直接可用
+</code></pre>
+<p>kernel 收到的数组参数是 <code>(T, N)</code> 矩阵、字面量参数是 python 标量。<code>needs_ctx=True</code> 时额外
+收到求值上下文 <code>ctx</code>（组内算子用 <code>ctx.require_groups(name)</code> 取分类标签）。<code>register(...)</code>
+是非装饰器形式，<code>unregister(name)</code> 注销，<code>operator_schema()</code> 返回含自定义算子的机读 schema。
+内置 <code>ts_*</code> 的浮点窗口会在解析时 floor，自定义算子不会，故请传整数窗口。</p>
+<hr />
+<p><em>— Assay · Operator Compatibility Reference —</em></p>

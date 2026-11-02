@@ -1,0 +1,236 @@
+<h1 class="doc-title">Tushare 数据源(中国 A 股 + 香港)</h1>
+<p>中国 A 股与香港股票的原始市场数据镜像,从 <a href="https://tushare.pro/" target="_blank" rel="noopener noreferrer">Tushare Pro</a> HTTP API
+下载。这是 <code>massive</code>(Polygon,美股)数据源的中国/香港对应物:它将<strong>原始</strong>
+供应商数据落地到磁盘,Assay 的导入器随后可将其规范化为
+标准的 <code>price_raw</code> / <code>adj_events</code> / <code>universe_snapshots</code> parquet 存储
+(<code>market=CN</code> / <code>market=HK</code>)。</p>
+<h2 id="范围">范围</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>市场</th>
+<th>股票池</th>
+<th>成分股历史</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A 股</td>
+<td><strong>CSI300</strong>(<code>000300.SH</code>)、<strong>CSI500</strong>(<code>000905.SH</code>)、<strong>CSI1000</strong>(<code>000852.SH</code>)成分股的并集</td>
+<td>✅ 点对点、按月(<code>index_weight</code>)</td>
+</tr>
+<tr>
+<td>香港</td>
+<td><strong>全市场</strong>(所有有过成交的标的),排名筛出 <strong>HK100</strong></td>
+<td>✅ 点对点、按月(按成交额排名)</td>
+</tr>
+<tr>
+<td>香港</td>
+<td><strong>H 股</strong>(内地注册的发行人),排名筛出 <strong>HSHARE100</strong></td>
+<td>✅ 点对点、按月(ISIN <code>CNE</code> + 成交额)</td>
+</tr>
+<tr>
+<td>香港</td>
+<td><strong>HSI</strong> + <strong>恒生科技</strong>成分股</td>
+<td>⚠️ 仅当前快照(见限制说明)</td>
+</tr>
+</tbody>
+</table></div>
+<p>默认日期范围:<strong>2010-01-01 → 今天</strong>。</p>
+<blockquote>
+<p><strong>CSI300 成分股</strong>由两个供应商代码拼接而成:<code>000300.SH</code> 仅从 2016-01 起
+才带权重,因此深交所镜像 <code>399300.SZ</code> 补充了
+2010-2015 的历史。二者合并(重叠时以标准代码为准)为
+单个 <code>cn/index_weight/CSI300.parquet</code>。CSI500/CSI1000 各只需一个代码
+(CSI1000 的序列从其 2014-10 的成立日开始)。</p>
+</blockquote>
+<h2 id="接口地址与凭证">接口地址与凭证</h2>
+<p>默认情况下,token 用于访问 <code>https://api.tushare.pro</code>。设置
+<code>TUSHARE_API_URL</code>(或在 WebUI 的 <strong>Data Settings → Tushare → API Endpoint</strong>)可将
+同样的调用路由到一个说同一套 <code>{api_name, params, fields}</code> 协议的中继/缓存网关。
+网关通过 <code>X-API-Key</code> 请求头而非请求体中的 <code>token</code> 进行鉴权;客户端两种方式都会发送,
+因此同一份配置对两类接口地址都适用。</p>
+<p>这一点很重要,因为<strong>HK 价格接口在普通 Tushare token 下没有权限</strong> —
+<code>hk_daily</code>、<code>hk_adjfactor</code> 和 <code>hk_daily_adj</code> 都需要一个有权限的接口地址。
+没有它,只有 HK 指数点位序列可以取到。</p>
+<h2 id="运行">运行</h2>
+<pre><code class="language-bash"># from the repo root, with the project venv
+TUSHARE_TOKEN=xxxx TUSHARE_API_URL=https://your-gateway/v1/tushare/query PYTHONPATH=src \
+  /data/haoluo/_assay_venv/bin/python scripts/download_tushare.py --markets hk
+</code></pre>
+<p>该任务<strong>可续跑</strong>:每个按标的 / 按指数的 parquet 若已存在则跳过,
+因此重新运行同一命令会继续被中断的回填。
+传入 <code>--force</code> 可覆盖。常用参数:</p>
+<blockquote>
+<p><strong>增量日度刷新。</strong> 由于续跑会跳过已存在的按标的文件,这个
+独立脚本只做<em>回填</em> — 它不会用新日期扩展某个标的的文件。
+若要增量更新,请使用 WebUI 的 <strong>Data → Update</strong> 任务(或 <code>orchestrate.run(..., mode=&quot;update&quot;)</code>):它<strong>按交易日</strong>(每次 API 调用取所有标的)
+经由 <code>run_cn_by_date</code> 拉取新窗口,并<strong>追加</strong>到原始文件 — 只需少量调用,而非每个
+标的一次。参见 <a href="/doc/guide/data-pipeline">数据管线 → 数据管理器</a>。</p>
+</blockquote>
+<ul>
+<li><code>--markets cn,hk</code> — 选择市场(或用 <code>--steps</code> 精细控制)</li>
+<li><code>--steps cn_universe,cn_prices,...</code> — 显式步骤列表(见 <code>ALL_STEPS</code>)</li>
+<li><code>--start 20100101 --end 20260627</code> — 日期窗口</li>
+<li><code>--rate 380 --workers 8</code> — API 调用/分钟预算与并发数</li>
+<li><code>--api-url URL</code> — 覆盖接口地址(默认取 <code>$TUSHARE_API_URL</code>)</li>
+<li><code>--limit-symbols N</code> — 限制股票池规模以快速冒烟测试</li>
+</ul>
+<p>请把 <code>--rate</code> 设为接口真实的每分钟上限。返回 HTTP 429 的网关就是在告诉你
+预算设得太高了;客户端会等待 <code>Retry-After</code> 而不是指数退避,
+但长期超预算的速率仍会损耗吞吐。</p>
+<h2 id="磁盘布局-tushare_data_dir-默认-data-tushare_data">磁盘布局(<code>$TUSHARE_DATA_DIR</code>,默认 <code>/data/tushare_data</code>)</h2>
+<pre><code>_manifest.json                       run config, row counts, failures, history
+meta/
+  stock_basic.parquet                A-share listings (L + D + P) — names, list/delist dates
+  hk_basic.parquet                   HK listings (L + D — delisted included, no survivorship bias)
+  trade_cal.parquet                  SSE trading calendar
+  hk_trade_cal.parquet               HKEX trading calendar
+cn/
+  index_weight/CSI300.parquet        monthly constituent + weight history ...
+  index_weight/CSI500.parquet
+  index_weight/CSI1000.parquet
+  universe.parquet                   deduped union (ts_code, indices, first_date, last_date)
+  daily/{ts_code}.parquet            raw OHLCV (unadjusted): open/high/low/close/pre_close/vol/amount
+  adj_factor/{ts_code}.parquet       split/merge adjustment factor (for qfq/hfq)
+  daily_basic/{ts_code}.parquet      PE/PB/PS/turnover/total_mv/circ_mv/total_share/float_share/...
+  dividend/{ts_code}.parquet         cash + stock dividends and split ratios
+hk/
+  index_global/HSI.parquet           index value series
+  index_global/HSTECH.parquet
+  constituents.parquet               current-snapshot HSI/HSTECH membership (ts_code, index, name)
+  daily/{YYYY}/{YYYYMMDD}.parquet       raw HK OHLCV (unadjusted), whole market per date
+  adj_factor/{YYYY}/{YYYYMMDD}.parquet  cum_adjfactor + close_price, whole market per date
+  daily_adj/{YYYY}/{YYYYMMDD}.parquet   total_mv/free_mv/total_share/turnover_ratio per date
+logs/
+  failures_*.txt                     per-step symbol failures (if any)
+</code></pre>
+<p>文件为 zstd 压缩的 parquet(项目约定)。各列是<strong>原始
+Tushare 字段</strong>,未经修改,以保证保真度 — 复权/规范化在下游
+Assay 导入层进行,而非在此处。</p>
+<h3 id="为什么-cn-按标的分片而-hk-按日期分片">为什么 CN 按标的分片而 HK 按日期分片</h3>
+<p>CN 的成分股是事先已知的(<code>index_weight</code>),因此下载器可以遍历一份标的列表。
+HK <strong>完全没有成分股接口</strong>,也就没有可遍历的列表:
+可交易的股票池只能从全市场的按日期响应中发现。
+把这些响应原样存下来,代价是每个接口每个交易日一次 API 调用
+(2010→今天约 4,100 天 x 3 = 约 12,300 次调用),换来的镜像
+<strong>在构造上就没有幸存者偏差</strong> — 2014 年退市的标的,在其最后一个交易日之前的
+每个文件里都仍然在。</p>
+<p>这也让续跑和增量更新走同一条代码路径:已存在文件的日期会被跳过,
+因此重新运行只拉取新增的尾部。</p>
+<h2 id="复权-拆股-分红-合并">复权(拆股 / 分红 / 合并)</h2>
+<p><code>cn/daily</code> 中的 A 股价格是<strong>未复权的</strong>。要构建前复权/后复权
+序列,请将其与 <code>cn/adj_factor</code>(Tushare 的累积因子)结合,或从
+<code>cn/dividend</code> 派生事件(拆股/送股用 <code>stk_div</code>、<code>stk_bo_rate</code>、<code>stk_co_rate</code>,
+现金分红用 <code>cash_div</code>)。这与 Assay 的 <code>adj_events</code> 模型一致,
+后者从原始事件重新计算累积因子,而非信任
+供应商的累积数值。</p>
+<h2 id="hk-公司行为">HK 公司行为</h2>
+<p>Tushare 对 HK <strong>不提供任何分红或拆股记录</strong> — 只有一个累积的
+<code>hk_adjfactor</code>。因此导入层从它的跳变中重建事件:
+当因子从 <code>f_prev</code> 变为 <code>f</code> 时,总的价格比率为
+<code>r = f / f_prev</code>,该日期之前的价格全部乘以 <code>1 / r</code>。</p>
+<p>有两种供应商数据的瑕疵会让对该因子的朴素解读出错,因此每一次跳变都会与
+<code>hk_daily.pre_close</code> 交叉验证(在公司行为发生日,它会按行为后的口径重述),
+两者相差超过 1% 的跳变会被丢弃:</p>
+<ul>
+<li>该因子偶尔会在<strong>没有任何公司行为</strong>的日期上被<strong>重新锚定</strong>,
+否则就会凭空造出一笔两位数的分红;</li>
+<li><code>pre_close</code> 自身在 1 港元以下的低价股上会相对前收盘<strong>漂移一个跳动价位</strong>,
+因此它只作为佐证,绝不用于确定幅度。</li>
+</ul>
+<p>留存下来的跳变,在因子下降时、<code>hk/daily_adj</code> 的股本数发生实质性变动时,
+<strong>或该股本数不可得时</strong>,归因为股本变动(<code>split_ratio = r</code>);只有股本数已知
+且保持不变的跳变,才会成为一笔 <code>close_prev * (1 - 1/r)</code> 的现金分红。</p>
+<p>默认归因为股本事件,是一种更安全的犯错方式。两种归因下全收益序列都是精确的,
+但 <code>adj=&quot;split&quot;</code> 是<em>默认</em>的读取口径(<code>AssayConfig.default_adj</code>),而把一次
+2 拆 1 误读为分红,会把一半股价记成现金,并在仅含拆股的面板中留下未经处理的
+除权缺口 — 届时每个因子都会读到一笔凭空捏造的 -50% 收益。反方向的错误则只是
+让仅含拆股的视图多复权了一笔分红而已。导入器会记录一条警告,统计它无法根据
+股本数据完成归因的跳变数量。</p>
+<p>由于 <code>adj_events</code> 是一个只做 upsert 的存储 — 错误的事件无法被后续运行撤回,
+只能通过删除该存储来清除 — 由此引出两条硬性前提:</p>
+<ul>
+<li><code>hk/daily</code> <strong>必须</strong>存在,否则根本不会写入任何事件(没有 <code>pre_close</code> 就没有
+可供佐证的对象,而供应商的一次重新锚定就会变成一笔永久的两位数幻影分红);</li>
+<li>不完整的 <code>hk/daily_adj</code> 只会削弱拆股与全收益的区分,但绝不会凭空造出一笔分红。</li>
+</ul>
+<p>注意 <code>hk_daily_adj</code> 自带的 <code>close</code> / <code>adj_factor</code> 列<em>并不是</em>可用的
+复权序列:它们在合股处无法正确衔接。请使用
+<code>hk_adjfactor</code>,其 <code>close_price</code> 与 <code>hk_daily.close</code> 精确对得上。</p>
+<p>合股通常是在该股<strong>停牌</strong>期间执行的,因此比率最大的那些跳变,恰恰就是没有
+<code>hk_daily</code> K 线可以为其作证的跳变。这些跳变改为与因子数据源自身重述过的
+<code>close_price</code> 相互印证,并且只有当比率极端到(任一方向 ≥2 倍)足以明确判定
+为股本变动时才被接受 — 非交易日上一个接近 1 的比率无法与一次重新锚定区分开,
+而漏掉一笔小额分红只是 2% 的误差,漏掉一次合股却是 40 倍的误差。</p>
+<h3 id="实测精度">实测精度</h3>
+<p>以交易所自己的日收益率(<code>close / pre_close</code>)为基准,覆盖曾经进入过 HK100 的
+487 只标的,2010-2026 年,共 145 万根 K 线:</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>偏差</th>
+<th>K 线数</th>
+<th>占比</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>&gt; 0.1%</td>
+<td>1,892</td>
+<td>0.13%</td>
+</tr>
+<tr>
+<td>&gt; 1%</td>
+<td>1,117</td>
+<td>0.077%</td>
+</tr>
+<tr>
+<td>&gt; 20%</td>
+<td>23</td>
+<td>0.0016%</td>
+</tr>
+</tbody>
+</table></div>
+<p>若只看最近一个月内成交最活跃的 300 只标的,则为 <strong>0 处不符</strong>(最大 6e-05)。</p>
+<p>最差的那 23 根 K 线大致均分于两个原因,两者都源自供应商数据本身,
+而非重建过程:</p>
+<ul>
+<li><strong><code>pre_close</code> 本身就是错的</strong>,出现在一些交投清淡的日子(例如 <code>01063.HK</code>
+对一只成交价 0.22 港元的股票报出了 0.01 港元的前收盘价)。此时重建出的
+序列才是正确的那一个,而<em>基准</em>才是坏数据。</li>
+<li><strong><code>cum_adjfactor</code> 漏掉了一次 <code>pre_close</code> 确实记录到的公司行为</strong> — 尤其是
+分拆(例如 <code>00004.HK</code> 在 2017 年 11 月的分拆)。由于事件是从因子跳变中提取的,
+因子数据源里没有的公司行为,在 <code>adj_events</code> 里同样没有,于是留下了未经处理的
+除权缺口。同时从 <code>pre_close</code> 的重述中提取事件可以补上这一块,
+这也是显而易见的下一步改进。</li>
+</ul>
+<p>这两类残差对一个做过排序的因子都不构成实质影响(默认的 <code>signal_transform</code>
+就是 <code>rank</code>),但对任何直接消费原始收益率的东西都会有影响。</p>
+<h2 id="已知限制">已知限制</h2>
+<ol>
+<li>
+<p><strong>HK 指数成分是当前快照,而非历史。</strong> Tushare <strong>没有</strong>
+为 HSI 或恒生科技暴露任何指数成分接口
+(<code>index_member</code> / <code>index_basic market=HK</code> 均返回空)。因此这两个股票池
+是内置于 <code>src/assay/data/tushare/constituents.py</code> 的单个<strong>当前</strong>成分列表
+(捕获于 2026-06-27),基于它们的回测存在<strong>幸存者偏差</strong>。
+建议优先使用 <strong>HK100</strong>,它由导入层根据实际成交额点对点地推导得出(参见
+<a href="/doc/guide/multi-market">多市场</a>)。</p>
+</li>
+<li>
+<p><strong>没有 HK 行业分类。</strong> <code>hk_basic</code> 不带行业字段,Tushare 也没有
+A 股行业分类的 HK 对应接口,因此 <code>market=HK</code> 不会写出
+<code>security_groups</code> 存储。行业中性化在那里是诚实地不可用,
+而不是悄悄变成一个空操作。</p>
+</li>
+<li>
+<p><strong>恒生科技指数代码。</strong> 在 <code>index_global</code> 上,恒生科技的点位
+序列是 <code>HKTECH</code>(而非 <code>HSTECH</code>,后者返回空)。友好名称
+<code>HSTECH</code> 用于磁盘文件和成分列表。</p>
+</li>
+<li>
+<p><strong>HK 价格只有港元计价。</strong> 不存在汇率账簿,因此 HK 回测的净值以
+港元计,不经 Assay 之外的换算无法与美股或 A 股的运行结果对比。</p>
+</li>
+</ol>

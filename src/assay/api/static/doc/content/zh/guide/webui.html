@@ -1,0 +1,35 @@
+<h1 class="doc-title">WebUI</h1>
+<p>一个<strong>零安装、零构建</strong>的 web 应用，由 FastAPI 后端直接提供服务——原生 JS +
+手写 SVG 图表，无框架、无打包器、无 CDN。位于
+<a href="https://github.com/QFinVerse/Assay/tree/main/src/assay/api/static" target="_blank" rel="noopener noreferrer"><code>src/assay/api/static/</code></a>。</p>
+<blockquote>
+<p><a href="/doc/design/webui">WebUI 设计文档</a>中的生产级 React/Vite/Recharts/Monaco 技术栈
+是文档记载的目标；这个已交付的 UI 是可运行的等价实现（构建环境中没有 npm）。</p>
+</blockquote>
+<h2 id="运行">运行</h2>
+<pre><code class="language-bash">python -m assay.cli serve-api --port 8000
+# open http://localhost:8000
+</code></pre>
+<p>它会自动采用已导入的数据区间作为默认求值周期（来自
+<code>/v1/system/status</code>），因此因子在确实有数据的日期上求值。升级后请强制刷新
+以获取新资源。</p>
+<h2 id="界面">界面</h2>
+<ul>
+<li><strong>Dashboard</strong>——数据状态栏、KPI 卡片、因子排行榜、数据日历热力图。</li>
+<li><strong>Factor Library</strong>——可过滤列表、因子详情、相关性矩阵热力图 + 剪枝预览。</li>
+<li><strong>Single Factor Test</strong>——一个轻量的表达式编辑器，带<strong>实时 lint/AST</strong>（通过
+<code>POST /v1/factor/lint</code>）、qlib↔Python 转换按钮、配置行，以及<strong>渐进式
+SSE 流式图表</strong>（IC 时间序列、衰减、分组收益、IC 热力图）外加一个带
+保存到库功能的摘要面板。</li>
+</ul>
+<h2 id="使用技巧">使用技巧</h2>
+<ul>
+<li>求值需要已导入的数据。对于短窗口因子（例如 <code>cs_rank(close)</code>）你会立即看到
+图表；20 日窗口因子需要 ≥ 20 天的历史，否则会全为 NaN（UI 会显示诊断信息
+而非静默失败）。</li>
+<li>可选的 API key：存储在 <code>localStorage.assay_api_key</code> 中，并作为 <code>X-API-Key</code> 发送
+（仅当服务器设置了 <code>ASSAY_API_KEYS</code> 时才需要）。</li>
+</ul>
+<h2 id="未接入-无后端">未接入（无后端）</h2>
+<p>实时 agent 信息流、Alpha-Space UMAP 图、Lineage DAG 以及 IC 热力图库模式
+都被标注为&quot;暂不可用&quot;而非伪造——它们需要尚不存在的后端端点 / 数据。</p>

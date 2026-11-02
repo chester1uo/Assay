@@ -1,0 +1,87 @@
+<h1 class="doc-title">MCP Server</h1>
+<p>The MCP server exposes Assay's evaluate→library loop as Model Context Protocol tools that LLM
+agents call to drive autonomous alpha mining. Built on the high-level <strong>FastMCP</strong> API
+(<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/mcp/server.py" target="_blank" rel="noopener noreferrer"><code>src/assay/mcp/server.py</code></a>).</p>
+<h2 id="run">Run</h2>
+<pre><code class="language-bash">python -m assay.mcp.server                          # stdio (Claude Desktop / local agents)
+python -m assay.cli serve-mcp --transport sse --port 8001   # SSE/HTTP (remote agents)
+</code></pre>
+<p>The module imports with no credentials; the data store under the service is built lazily, so
+only tools that touch price data need MASSIVE creds.</p>
+<h2 id="tools-11">Tools (11)</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Tool</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>assay_evaluate</code></td>
+<td>Evaluate one factor → <code>FactorReport</code> (qlib or Python syntax)</td>
+</tr>
+<tr>
+<td><code>assay_batch</code></td>
+<td>Evaluate many factors in parallel, sorted by <code>rank_icir</code> (prefer over a loop)</td>
+</tr>
+<tr>
+<td><code>assay_lint</code></td>
+<td>Data-free syntax check of an expression (dialect, fields, operators, diagnostics)</td>
+</tr>
+<tr>
+<td><code>assay_universes</code></td>
+<td>List available universes with symbol counts and default</td>
+</tr>
+<tr>
+<td><code>assay_portfolio_backtest</code></td>
+<td>Full portfolio backtest of a factor → compact <code>PortfolioReport</code></td>
+</tr>
+<tr>
+<td><code>assay_library_list</code></td>
+<td>List library factors with filters (check redundancy before generating)</td>
+</tr>
+<tr>
+<td><code>assay_library_get</code></td>
+<td>Full <code>FactorReport</code> for one factor</td>
+</tr>
+<tr>
+<td><code>assay_library_save</code></td>
+<td>Save a report to the library</td>
+</tr>
+<tr>
+<td><code>assay_library_correlation</code></td>
+<td>Pairwise correlation between factor IDs</td>
+</tr>
+<tr>
+<td><code>assay_library_prune</code></td>
+<td>Identify / remove redundant factors</td>
+</tr>
+<tr>
+<td><code>assay_system_status</code></td>
+<td>Data freshness + cache statistics</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>assay_evaluate</code>'s description is enriched at runtime with the live operator schema
+(<code>assay.engine.operator_schema()</code>), so agents see the available operators inline.</p>
+<h2 id="claude-desktop-config">Claude Desktop config</h2>
+<p><code>~/.config/claude/claude_desktop_config.json</code>:</p>
+<pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;assay&quot;: {
+      &quot;command&quot;: &quot;python&quot;,
+      &quot;args&quot;: [&quot;-m&quot;, &quot;assay.mcp.server&quot;],
+      &quot;env&quot;: { &quot;ASSAY_DATA_DIR&quot;: &quot;data_2025_2026h1&quot; }
+    }
+  }
+}
+</code></pre>
+<h2 id="typical-agent-loop">Typical agent loop</h2>
+<pre><code>assay_library_list(limit=10)         → what high-quality factors already exist?
+assay_batch([...candidate exprs...]) → sorted results; top factor's rank_icir / redundancy
+assay_library_correlation([...])     → is the new factor redundant with existing ones?
+assay_library_save(best_report)      → keep the unique, high-ICIR factor
+assay_library_prune(dry_run=true)    → propose removing dominated factors
+</code></pre>
+<p>Design contract: <a href="/doc/design/architecture">architecture.md</a> §6.</p>

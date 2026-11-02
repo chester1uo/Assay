@@ -17,6 +17,11 @@ dependencies = [
     "exchange-calendars>=4",
 ]
 
+[project.urls]
+Homepage = "https://assay.qfinverse.com"
+Documentation = "https://assay.qfinverse.com/doc/"
+Repository = "https://github.com/QFinVerse/Assay"
+
 [project.optional-dependencies]
 perf = [
     "numba>=0.60",

@@ -1,0 +1,1242 @@
+<h1 class="doc-title">Assay WebUI — Detailed Design</h1>
+<p><strong>Version:</strong> 0.1 · Draft<br />
+<strong>Scope:</strong> Dashboard · Factor Library Analysis · Single Factor Test<br />
+<strong>Stack:</strong> React 18 · Recharts · Monaco Editor · Tailwind CSS</p>
+<blockquote>
+<p><strong>Implementation status (2026-06): 🔶 A runnable WebUI now exists — but as a zero-install
+vanilla-JS app, not the React/Vite stack this doc specifies.</strong> Because the build
+environment has no npm registry access (proxy 407), the shipped UI lives at
+<a href="https://github.com/QFinVerse/Assay/tree/main/src/assay/api/static" target="_blank" rel="noopener noreferrer"><code>src/assay/api/static/</code></a> and is served directly by FastAPI
+(<code>python -m assay.cli serve-api</code> → <code>http://localhost:8000</code>). It implements the three
+screens below — <strong>Dashboard, Factor Library, Single Factor Test</strong> — with hand-rolled SVG
+charts, a lightweight expression editor (not Monaco), the qlib↔python syntax bridge, and
+<strong>SSE-streaming evaluate</strong>, all bound to the real <code>/v1/*</code> API. It backs the editor with a
+new data-free <strong><code>POST /v1/factor/lint</code></strong> endpoint (AST + diagnostics).</p>
+<p>This document remains the spec for the <strong>production React 18 + Vite + TS + Recharts +
+Monaco + Tailwind</strong> rebuild (📋, the documented target). Features with no backend endpoint
+are <strong>omitted/gated</strong> in the shipped UI, not faked: the live agent feed
+(<code>/v1/events/session-stream</code>), the Alpha Space Map (UMAP), the Lineage DAG, and the IC
+Heatmap mode. The shipped UI stays consistent with backend reality:</p>
+<ul>
+<li><strong>Primary universe is NASDAQ-100</strong> (~101 symbols), the only one wired up end-to-end.
+SP500 / Russell 2000 are roadmap selector options.</li>
+<li>The MASSIVE day-aggregate source provides <strong>OHLCV + transaction count, no <code>vwap</code></strong> — so
+<code>vwap</code> is not a selectable field or execution price today.</li>
+<li>Error/diagnostic codes and <code>failure_mode</code> values come from the implemented
+<code>assay.engine.diagnostics</code> catalog (<code>SYNTAX_ERROR</code> · <code>LOOKAHEAD</code> · <code>CONSTANT</code> ·
+<code>ALL_NAN</code> · <code>RUNTIME_ERROR</code>; codes <code>ASSAY-P###/E###/O###</code>).</li>
+</ul>
+</blockquote>
+<hr />
+<h2 id="table-of-contents">Table of Contents</h2>
+<ol>
+<li><a href="#1-information-architecture">Information Architecture</a></li>
+<li><a href="#2-global-shell">Global Shell</a></li>
+<li><a href="#3-dashboard">Dashboard</a></li>
+<li><a href="#4-factor-library-analysis">Factor Library Analysis</a></li>
+<li><a href="#5-single-factor-test">Single Factor Test</a></li>
+<li><a href="#6-shared-components">Shared Components</a></li>
+<li><a href="#7-state-management">State Management</a></li>
+<li><a href="#8-data-fetching--streaming">Data Fetching &amp; Streaming</a></li>
+<li><a href="#9-monaco-editor-extension">Monaco Editor Extension</a></li>
+<li><a href="#10-routing">Routing</a></li>
+<li><a href="#11-design-tokens">Design Tokens</a></li>
+</ol>
+<hr />
+<h2 id="1-information-architecture">1. Information Architecture</h2>
+<pre><code>assay-ui/
+├── /                           → redirect → /dashboard
+├── /dashboard                  → Dashboard
+├── /library                    → Factor Library (default: list view)
+│   ├── /library?mode=matrix    → Correlation matrix
+│   ├── /library?mode=map       → Alpha space map
+│   ├── /library?mode=heatmap   → IC heatmap
+│   └── /library?mode=lineage   → Factor lineage DAG
+├── /factor                     → Single Factor Test (blank editor)
+└── /factor/:factor_id          → Single Factor Test (pre-loaded)
+</code></pre>
+<p>URL params shared across all routes (global state, synced to URL):</p>
+<pre><code>?universe=NASDAQ100
+&amp;period_start=2020-01-01
+&amp;period_end=2024-12-31
+</code></pre>
+<hr />
+<h2 id="2-global-shell">2. Global Shell</h2>
+<h3 id="2-1-layout">2.1  Layout</h3>
+<pre><code>┌─────────────────────────────────────────────────────────────────┐
+│  TopNav                                                  [48px]  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  &lt;Outlet /&gt;     (page content, scrollable)                       │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+</code></pre>
+<p>No sidebar. All navigation lives in the top bar. Pages are full-width with internal padding.</p>
+<h3 id="2-2-topnav-component">2.2  TopNav component</h3>
+<pre><code>┌──────────────────────────────────────────────────────────────────────────┐
+│  ◆ ASSAY   │  Dashboard  │  Factor Library  │  Single Factor Test   │    │
+│            │                                                   [search]   │
+│                                       [NASDAQ100 ▾]  [2020–2024 ▾]  [●]   │
+└──────────────────────────────────────────────────────────────────────────┘
+</code></pre>
+<p>Elements from left to right:</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Element</th>
+<th>Type</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>◆ ASSAY</code></td>
+<td>Logo + text</td>
+<td>Navigates to <code>/dashboard</code></td>
+</tr>
+<tr>
+<td><code>Dashboard</code></td>
+<td>Tab</td>
+<td>Active state when on <code>/dashboard</code></td>
+</tr>
+<tr>
+<td><code>Factor Library</code></td>
+<td>Tab</td>
+<td>Active state when on <code>/library</code></td>
+</tr>
+<tr>
+<td><code>Single Factor Test</code></td>
+<td>Tab</td>
+<td>Active state when on <code>/factor</code></td>
+</tr>
+<tr>
+<td>Search box</td>
+<td>Input</td>
+<td>Full-text search across factor expressions in library; results shown in dropdown; selecting navigates to <code>/factor/:factor_id</code></td>
+</tr>
+<tr>
+<td>Universe selector</td>
+<td>Dropdown</td>
+<td>Options: NASDAQ100 (default, only one wired up today), SP500, Russell2000 (roadmap — shown disabled until ingested); updates global state</td>
+</tr>
+<tr>
+<td>Period selector</td>
+<td>Dropdown</td>
+<td>Presets: 1Y, 3Y, 5Y + custom date range picker; updates global state</td>
+</tr>
+<tr>
+<td>Status indicator</td>
+<td>Dot icon</td>
+<td>Green = data fresh, amber = stale (&gt; 24h), red = sync error; tooltip shows last sync time; click navigates to data calendar on Dashboard</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="2-3-topnav-props-and-behaviour">2.3  TopNav props and behaviour</h3>
+<p>Changing universe or period:</p>
+<ol>
+<li>Updates Zustand global state</li>
+<li>Invalidates current session ID (calls <code>POST /v1/session/create</code> with new params)</li>
+<li>Triggers React Query cache invalidation for library queries</li>
+<li>Does <strong>not</strong> re-run any in-progress evaluation — user must re-run manually</li>
+</ol>
+<hr />
+<h2 id="3-dashboard">3. Dashboard</h2>
+<h3 id="3-1-page-layout">3.1  Page layout</h3>
+<pre><code>┌──────────────────────────────────────────────────────────────────┐
+│  StatusBar                                               [48px]   │
+├──────────────────────────────────────────────────────────────────┤
+│  KPI Row  [4 cards]                                     [120px]   │
+├──────────────────┬───────────────────────────────────────────────┤
+│                  │                                               │
+│  Factor          │  Agent Activity Feed                          │
+│  Leaderboard     │                                               │
+│  [60%]           │  [40%]                            [~400px]   │
+│                  │                                               │
+├──────────────────┴───────────────────────────────────────────────┤
+│  Data Calendar                                          [160px]   │
+└──────────────────────────────────────────────────────────────────┘
+</code></pre>
+<h3 id="3-2-statusbar">3.2  StatusBar</h3>
+<p>A slim 48px strip at the top of the Dashboard page (below TopNav). Shows three items:</p>
+<pre><code>  ● Data current as of Dec 31 2024  ·  Last sync: 2 hours ago  ·  101 symbols  ·  ⚠ 2 warnings
+</code></pre>
+<ul>
+<li>Green dot = fully synced, amber = stale, red = error</li>
+<li>Click &quot;2 warnings&quot; expands an inline alert panel listing specific data quality issues</li>
+<li>The bar is sticky within the Dashboard page scroll container</li>
+</ul>
+<h3 id="3-3-kpi-row">3.3  KPI Row</h3>
+<p>Four metric cards in a horizontal row with equal widths.</p>
+<pre><code>┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│  Total       │  │  Avg         │  │  Agent       │  │  Best IC     │
+│  factors     │  │  RankICIR    │  │  sessions    │  │  today       │
+│              │  │              │  │              │  │              │
+│  1,284       │  │  0.52        │  │  3           │  │  0.089       │
+│  ↑ 31 today  │  │  ↑ 0.03      │  │  284 factors │  │  ts_corr...  │
+└──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
+</code></pre>
+<p>Each card:</p>
+<ul>
+<li>Label in 13px muted text above the number</li>
+<li>Primary metric in 28px / medium weight</li>
+<li>Secondary line: delta vs previous session (cards 1, 2) or contextual detail (cards 3, 4)</li>
+<li>Background: <code>--color-background-secondary</code>, no border, 8px radius</li>
+<li>Cards 1, 3 are clickable: card 1 navigates to <code>/library</code>, card 4 navigates to <code>/factor/:best_factor_id</code></li>
+</ul>
+<p>Polling: KPI row refetches every 30 seconds via React Query.</p>
+<h3 id="3-4-factor-leaderboard">3.4  Factor Leaderboard</h3>
+<p>Left column (60%), shows the top 100 factors sorted by RankICIR.</p>
+<h4 id="controls-above-table">Controls (above table)</h4>
+<pre><code>[Sort: RankICIR ▾]  [Min ICIR: 0.0 ▾]  [Source: All ▾]  [Hide redundant: ○]
+</code></pre>
+<ul>
+<li>Sort dropdown: RankICIR (default), IC, Decay half-life, Evaluated date</li>
+<li>Min ICIR filter: slider + numeric input, 0.0–2.0</li>
+<li>Source filter: All, AGENT, HUMAN, WQ101, IMPORTED</li>
+<li>Hide redundant toggle: filters out factors with <code>redundancy_score &gt; 0.7</code></li>
+</ul>
+<h4 id="table-columns">Table columns</h4>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Column</th>
+<th>Source field</th>
+<th>Width</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Expression</td>
+<td><code>expr</code> (truncated to 40 chars)</td>
+<td>flex</td>
+<td>Tooltip shows full expression on hover</td>
+</tr>
+<tr>
+<td>RankIC</td>
+<td><code>rank_ic</code></td>
+<td>72px</td>
+<td>Right-aligned, 3 decimal places</td>
+</tr>
+<tr>
+<td>RankICIR</td>
+<td><code>rank_icir</code></td>
+<td>80px</td>
+<td>Right-aligned, inline bar overlay</td>
+</tr>
+<tr>
+<td>Decay</td>
+<td><code>decay_halflife_days</code></td>
+<td>64px</td>
+<td><code>Xd</code> format, color: green &lt; 10d, amber 10–30d, red &gt; 30d</td>
+</tr>
+<tr>
+<td>Redundancy</td>
+<td><code>redundancy_score</code></td>
+<td>72px</td>
+<td>Colored badge: green &lt; 0.4, amber 0.4–0.7, red &gt; 0.7</td>
+</tr>
+<tr>
+<td>Source</td>
+<td><code>lineage.source</code></td>
+<td>80px</td>
+<td>Small tag badge</td>
+</tr>
+<tr>
+<td>Status</td>
+<td><code>failure_mode</code></td>
+<td>64px</td>
+<td>Green check or red <code>!</code> badge</td>
+</tr>
+</tbody>
+</table></div>
+<p>Table behaviours:</p>
+<ul>
+<li>Click any row → navigates to <code>/factor/:factor_id</code> with factor pre-loaded</li>
+<li>Hover any row → shows a mini preview popover with IC sparkline (last 60 days)</li>
+<li>Table is virtualised (react-virtual) for performance with 1000+ rows</li>
+<li>Sticky header</li>
+</ul>
+<h3 id="3-5-agent-activity-feed">3.5  Agent Activity Feed</h3>
+<p>Right column (40%). Live feed of factor evaluations triggered in the current or most recent agent session.</p>
+<h4 id="session-summary-panel-top-of-feed">Session summary panel (top of feed)</h4>
+<pre><code>┌──────────────────────────────────────────────────┐
+│  Session #42   Started 14:30 · 23 min ago        │
+│                                                  │
+│  284 evaluated   ·   61% pass   ·   avg IC 0.041 │
+│  ▁▂▃▄▅▃▂▄▅▆▅▄▃▂ (IC sparkline)                  │
+└──────────────────────────────────────────────────┘
+</code></pre>
+<h4 id="feed-entries">Feed entries</h4>
+<p>Each entry is a card with:</p>
+<pre><code>┌────────────────────────────────────────────────────┐
+│  ts_corr(close, volume, 20)             0.047 IC   │
+│  RankICIR 0.61  ·  Decay 12d  ·  31ms             │
+│  &quot;Consider shorter window for higher turnover...&quot;  │
+└────────────────────────────────────────────────────┘
+</code></pre>
+<ul>
+<li>New entries animate in from the top (CSS slide-down transition)</li>
+<li>Maximum 50 visible entries; older ones fade out at the bottom</li>
+<li>Failed evaluations shown with red left border and the <code>failure_mode</code> code</li>
+<li>Click any entry → navigates to <code>/factor/:factor_id</code></li>
+<li>A &quot;Pause feed&quot; toggle freezes auto-scroll so the user can read</li>
+</ul>
+<p>Polling: new entries via SSE subscription to <code>GET /v1/events/session-stream</code>.</p>
+<h3 id="3-6-data-calendar">3.6  Data Calendar</h3>
+<p>Full-width strip below the leaderboard + feed row. A GitHub contribution heatmap showing data availability by trading day.</p>
+<pre><code>       Jan  Feb  Mar  Apr  May  Jun  Jul  Aug  Sep  Oct  Nov  Dec
+2022   ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████
+2023   ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████
+2024   ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████
+</code></pre>
+<p>Cell colors:</p>
+<ul>
+<li>Dark green: 100% coverage (all symbols have data)</li>
+<li>Medium green: &gt; 95% coverage</li>
+<li>Amber: 80–95% coverage</li>
+<li>Red: &lt; 80% coverage</li>
+<li>Light gray: non-trading day (weekend / holiday)</li>
+</ul>
+<p>Interactions:</p>
+<ul>
+<li>Hover cell → tooltip: <code>Dec 15 2024  101/101 symbols  Last sync: 21:05 UTC</code></li>
+<li>Click red/amber cell → expands an inline data quality panel below the calendar listing missing symbols</li>
+<li>Year labels on left are clickable to scroll to that year</li>
+</ul>
+<hr />
+<h2 id="4-factor-library-analysis">4. Factor Library Analysis</h2>
+<h3 id="4-1-page-layout">4.1  Page layout</h3>
+<pre><code>┌────────────────────────────────────────────────────────────────────┐
+│  [Analysis mode tabs]  [Bulk action bar — visible when selected]   │
+├──────────────────────┬─────────────────────────────────────────────┤
+│                      │                                             │
+│  Factor List         │  Analysis Panel                            │
+│  [35%]               │  [65%]                                     │
+│                      │                                             │
+│  (virtualised list)  │  (changes based on active mode tab)        │
+│                      │                                             │
+└──────────────────────┴─────────────────────────────────────────────┘
+</code></pre>
+<p>The left/right split is resizable — user can drag the divider between 25%–50%.</p>
+<h3 id="4-2-mode-tabs">4.2  Mode tabs</h3>
+<pre><code>[Factor Detail]  [Correlation Matrix]  [Alpha Space Map]  [IC Heatmap]  [Lineage]
+</code></pre>
+<p>Mode state is persisted in the URL as <code>?mode=matrix</code>.</p>
+<h3 id="4-3-factor-list-left-panel">4.3  Factor List (left panel)</h3>
+<h4 id="filter-bar">Filter bar</h4>
+<pre><code>[🔍 Search expressions...        ] [Source: All ▾] [Sort: RankICIR ▾]
+[Min ICIR ──●──────] [Max redundancy ──────●──] [× Clear filters]
+</code></pre>
+<ul>
+<li>Full-text search runs against the expression string (client-side for small libraries, server-side for &gt; 500 factors)</li>
+<li>Sliders update results on release (not on drag, to avoid excessive API calls)</li>
+<li>Active filter count badge on &quot;Clear filters&quot; button</li>
+</ul>
+<h4 id="list-item">List item</h4>
+<pre><code>┌──────────────────────────────────────────────────────────────────────┐
+│ ☐  ts_corr(close, volume, 20)                              [AGENT]   │
+│    ████████████████░░░░░  0.61 ICIR  ·  12d decay  ·  ● unique      │
+└──────────────────────────────────────────────────────────────────────┘
+</code></pre>
+<ul>
+<li>Checkbox for multi-select</li>
+<li>Expression in monospace, truncated, full text in tooltip</li>
+<li>ICIR as a horizontal bar (filled proportion = ICIR / 2.0, max scale)</li>
+<li>Decay half-life</li>
+<li>Redundancy badge: <code>● unique</code> (green), <code>◐ similar</code> (amber), <code>● redundant</code> (red)</li>
+<li>Source tag: <code>AGENT</code>, <code>HUMAN</code>, <code>WQ101</code>, <code>IMPORTED</code></li>
+<li>Clicking the item body: selects it and updates the right panel</li>
+<li>Clicking the checkbox: adds to multi-select without changing right panel</li>
+</ul>
+<p>Selected item has a blue left border. Active item (last clicked) has a slightly darker background.</p>
+<h4 id="bulk-action-bar-appears-when-1-item-checked">Bulk action bar (appears when ≥ 1 item checked)</h4>
+<pre><code>  3 selected   [Export ↓]  [Tag ▾]  [Compare]  [Delete]  [× Clear]
+</code></pre>
+<ul>
+<li>Export: downloads FactorReport JSON or CSV for selected factors</li>
+<li>Tag: dropdown to add a label (create new or choose existing)</li>
+<li>Compare: switches to Correlation Matrix mode pre-seeded with selected factors</li>
+<li>Delete: shows confirmation modal listing expressions; confirmed deletion calls <code>DELETE /v1/library/factors</code></li>
+</ul>
+<h3 id="4-4-mode-a-factor-detail">4.4  Mode A — Factor Detail</h3>
+<p>Default mode. Shows when a factor is selected from the list.</p>
+<p>Right panel layout:</p>
+<pre><code>┌─────────────────────────────────────────────────────────────────────┐
+│  ts_corr(close, volume, 20)                                         │
+│  Factor ID: abc123  ·  Evaluated: Jan 15 2025  ·  AGENT            │
+│                                                    [Open in tester →]│
+├───────────────────┬─────────────────────────────────────────────────┤
+│  RankIC   0.047   │  IC      0.032                                  │
+│  RankICIR 0.61    │  ICIR    0.43                                   │
+│  Decay    12d     │  Turnover  0.72                                  │
+│  Redundancy 0.31  │  Lookahead  ✓ Clean                             │
+├───────────────────┴─────────────────────────────────────────────────┤
+│  IC sparkline (last 252 trading days)                               │
+│  ▁▂▃▄▅▃▂▄▅▆▅▄▃▂▁▂▃▄▅▆▇▆▅▄▃▂▁▂▃▄▅                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│  Suggestion                                                         │
+│  &quot;Decay is moderate. Try ts_corr(close, volume, 10) for shorter...&quot; │
+├─────────────────────────────────────────────────────────────────────┤
+│  ▶ Lineage  (collapsed by default)                                  │
+│  ▶ Full FactorReport JSON  (collapsed by default)                   │
+└─────────────────────────────────────────────────────────────────────┘
+</code></pre>
+<p>The &quot;Open in tester →&quot; button navigates to <code>/factor/abc123</code>.</p>
+<h3 id="4-5-mode-b-correlation-matrix">4.5  Mode B — Correlation Matrix</h3>
+<p>Full right panel is a heatmap.</p>
+<pre><code>Controls:
+  [Redundancy threshold: 0.70 ──●──────]  [Cluster: ○ On]  [Export matrix ↓]
+</code></pre>
+<p>Heatmap:</p>
+<ul>
+<li>Rows and columns are factor expressions (truncated)</li>
+<li>Cell color: diverging scale, red = high positive correlation, white = 0, blue = high negative</li>
+<li>Threshold overlay: cells above the slider value get a red diagonal strikethrough</li>
+<li>Factors are reordered by hierarchical clustering when &quot;Cluster&quot; is on (computed client-side with hclust from <code>ml-hclust</code> library)</li>
+<li>Hover any cell: tooltip shows <code>ts_corr... × cs_rank...  correlation: 0.83</code></li>
+<li>Click any cell: opens a scatter plot modal of the two factors' daily values</li>
+</ul>
+<p>Summary below heatmap:</p>
+<pre><code>  14 pairs above 0.70 threshold.  Pruning would remove 8 dominated factors.
+  [Preview pruning →]
+</code></pre>
+<p>&quot;Preview pruning&quot; opens a side drawer listing the 8 factors that would be removed, keeping the one with higher RankICIR in each pair.</p>
+<h3 id="4-6-mode-c-alpha-space-map">4.6  Mode C — Alpha Space Map</h3>
+<p>Full right panel is a 2D scatter plot.</p>
+<p>The position of each point is computed by running UMAP on the pairwise rank-correlation distance matrix (1 - |corr|). Factors that behave similarly cluster together; orthogonal factors are far apart.</p>
+<pre><code>Controls:
+  [Color by: RankICIR ▾]  [Size by: IC ▾]  [Show gaps: ○]  [Reset zoom]
+</code></pre>
+<p>Plot:</p>
+<ul>
+<li>Each point is a factor</li>
+<li>Default: color = RankICIR (green → yellow → red scale), size = fixed</li>
+<li>&quot;Color by&quot; options: RankICIR, source (AGENT/HUMAN/WQ101), decay half-life, redundancy</li>
+<li>Hover: tooltip with expression, RankICIR, decay</li>
+<li>Click: selects factor, switches left panel to that factor, shows detail in Mode A panel simultaneously if split view is active</li>
+<li>&quot;Show gaps&quot; overlay: draws the convex hull of existing points and highlights the empty interior regions — these are unexplored alpha regions the agent should target</li>
+<li>Pan and zoom supported (d3-zoom)</li>
+</ul>
+<p>UMAP is computed client-side using <code>umap-js</code> on page load or when the factor set changes. For &gt; 300 factors a loading spinner appears (typically 1–3 seconds).</p>
+<h3 id="4-7-mode-d-ic-heatmap">4.7  Mode D — IC Heatmap</h3>
+<p>Full right panel. A matrix where rows = factors, columns = trading dates, cells = IC value that day.</p>
+<pre><code>Controls:
+  [Date range: 2024 ▾]  [Color scale: ±0.15 ────●────]  [Sort rows: RankICIR ▾]
+</code></pre>
+<ul>
+<li>Rows are factors in the same order as the left panel list (honors current filters)</li>
+<li>Columns are trading days, grouped by month</li>
+<li>Color: green for positive IC, red for negative, white for ~0</li>
+<li>Color scale slider sets the saturation anchor (default ±0.15 = full red/green)</li>
+<li>Hover cell: <code>Factor: ts_corr(close,volume,20)  Date: Nov 15 2024  IC: 0.061</code></li>
+<li>Click row label: selects factor in left panel, shows detail in Mode A</li>
+</ul>
+<p>This view makes regime effects immediately visible — a vertical band of red means all factors failed on those dates (market event). A horizontal band of red means one factor consistently fails.</p>
+<h3 id="4-8-mode-e-factor-lineage">4.8  Mode E — Factor Lineage</h3>
+<p>A directed graph showing the provenance of factors.</p>
+<p>Nodes:</p>
+<ul>
+<li><code>[PROMPT]</code> — LLM prompt (shows model, timestamp, prompt hash)</li>
+<li><code>[FACTOR]</code> — factor expression (shows expression, RankICIR)</li>
+<li><code>[SNAPSHOT]</code> — data snapshot used for evaluation</li>
+</ul>
+<p>Edges:</p>
+<ul>
+<li><code>[PROMPT] → [FACTOR]</code> — &quot;generated&quot;</li>
+<li><code>[FACTOR] + [SNAPSHOT] → [FACTOR]</code> — &quot;evaluated on&quot;</li>
+</ul>
+<p>Layout: top-to-bottom DAG using dagre layout algorithm.</p>
+<pre><code>Controls:
+  [Show: All factors / High quality only (ICIR &gt; 0.5)]  [Zoom to fit]
+</code></pre>
+<p>Interactions:</p>
+<ul>
+<li>Hover node: tooltip with full details</li>
+<li>Click <code>[FACTOR]</code> node: selects in left panel, shows detail in Mode A</li>
+<li>Click <code>[PROMPT]</code> node: opens modal with full prompt text</li>
+<li>Double-click <code>[SNAPSHOT]</code> node: opens data calendar filtered to that snapshot date</li>
+</ul>
+<hr />
+<h2 id="5-single-factor-test">5. Single Factor Test</h2>
+<h3 id="5-1-page-layout">5.1  Page layout</h3>
+<pre><code>┌─────────────────────────────────────────────────────────────────────┐
+│  Expression Editor                                        [~180px]  │
+├─────────────────────────────────────────────────────────────────────┤
+│  Config Row                                                [48px]   │
+├───────────────────────────────────────┬─────────────────────────────┤
+│                                       │                             │
+│  Results Grid  (2 columns)            │  Summary Panel             │
+│                                       │  [300px fixed]             │
+│  [IC Series]      [Decay Curve]       │                             │
+│  [Group Returns]  [Factor Heatmap]    │                             │
+│  [Turnover]       [Return Distrib]    │                             │
+│                                       │                             │
+└───────────────────────────────────────┴─────────────────────────────┘
+</code></pre>
+<p>On narrow screens (&lt; 1200px) the summary panel moves below the results grid and the results grid becomes 1 column.</p>
+<h3 id="5-2-expression-editor">5.2  Expression Editor</h3>
+<p>A Monaco Editor instance occupying approximately 180px height (4–6 lines). Resizable by dragging the bottom edge.</p>
+<h4 id="toolbar-above-the-editor">Toolbar above the editor</h4>
+<pre><code>[● qlib] [● Python]   [⇄ Convert syntax]   [⌘↵ Evaluate]   [↺ History]   [? Operator docs]
+</code></pre>
+<ul>
+<li>Syntax toggle: shows which syntax is currently active; clicking switches highlighting mode</li>
+<li>Convert syntax: rewrites the current expression between qlib and Python syntax (calls the <code>syntax-bridge</code> utility in-process, no API call)</li>
+<li>Evaluate button: triggers evaluation; shows loading spinner after click, replaced by latency badge on completion (e.g. <code>342ms</code>)</li>
+<li>History: dropdown of last 20 evaluated expressions, click to restore</li>
+<li>Operator docs: opens a drawer with the full <code>OPERATOR_SCHEMA</code> as a searchable reference</li>
+</ul>
+<h4 id="editor-behaviours">Editor behaviours</h4>
+<ul>
+<li>Default height: 4 lines (expands to content up to 8 lines before scrolling)</li>
+<li>Keyboard shortcut: <code>Cmd+Enter</code> (Mac) / <code>Ctrl+Enter</code> (Windows) triggers evaluation</li>
+<li>On load with <code>factor_id</code> route param: editor is pre-populated with the factor's expression</li>
+<li>Syntax error underlines appear as the user types, sourced from the parser running in a Web Worker</li>
+<li>The AST tree is rendered in a collapsible panel directly below the editor, hidden by default; the &quot;AST&quot; disclosure link toggles it</li>
+</ul>
+<h4 id="ast-disclosure-panel">AST disclosure panel</h4>
+<pre><code>▼ AST  (click to expand)
+
+BinOp(-)
+├── ts_corr
+│   ├── FieldNode(close)
+│   ├── FieldNode(volume)
+│   └── LitNode(20)
+└── cs_rank
+    └── FieldNode(close)
+</code></pre>
+<p>Rendered as an indented tree. Node types use different colors: FieldNode (teal), LitNode (amber), OpNode (blue), BinOp (gray).</p>
+<h3 id="5-3-config-row">5.3  Config Row</h3>
+<p>A horizontal strip below the editor with six controls. Controls are compact (height 36px).</p>
+<pre><code>[NASDAQ100 ▾]  [2020–2024 ▾]  [next_open ▾]  [1d ✓  5d ✓  10d ✓  20d ✓]  [Neutralize: None ▾]  [Evaluate ▶]
+</code></pre>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Control</th>
+<th>Options</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Universe</td>
+<td>Inherited from global state; shows current value; overridable per-evaluation</td>
+<td>Changing here does not update global state</td>
+</tr>
+<tr>
+<td>Period</td>
+<td>Inherited from global state; overridable</td>
+<td>Same as above</td>
+</tr>
+<tr>
+<td>Execution</td>
+<td><code>next_open</code> (default), <code>next_close</code></td>
+<td>Tooltip explains each. <code>vwap</code> is disabled — the MASSIVE day-aggregate source has no intraday/VWAP data</td>
+</tr>
+<tr>
+<td>Horizons</td>
+<td>Multi-checkbox: 1d, 5d, 10d, 20d (all default)</td>
+<td>Affects decay curve range</td>
+</tr>
+<tr>
+<td>Neutralize</td>
+<td>None (default), Sector, Industry, Market cap</td>
+<td>Applies <code>cs_neutralize</code> before IC</td>
+</tr>
+<tr>
+<td>Evaluate button</td>
+<td>Primary CTA, also triggered by <code>Cmd+Enter</code></td>
+<td>Latency badge replaces spinner on complete</td>
+</tr>
+</tbody>
+</table></div>
+<p>When universe or period differ from global state, the control shows a small <code>*</code> indicator and a tooltip: &quot;This evaluation uses a different universe/period than your global setting.&quot;</p>
+<h3 id="5-4-results-grid">5.4  Results Grid</h3>
+<p>Six chart cards in a 2×3 grid. Chart cards share a common card shell:</p>
+<pre><code>┌────────────────────────────────────────────────┐
+│  Card title           [interpretation hint]  ↓ │
+├────────────────────────────────────────────────┤
+│                                                │
+│  [chart area]                                  │
+│                                                │
+└────────────────────────────────────────────────┘
+</code></pre>
+<ul>
+<li>Title: 14px, medium weight</li>
+<li>Interpretation hint: 12px muted text, one line, updates based on results</li>
+<li><code>↓</code> download icon: exports chart data as CSV</li>
+<li>Chart area fills remaining space; minimum height 220px</li>
+</ul>
+<p>Charts render progressively — each card shows a loading skeleton until its data arrives via SSE.</p>
+<h4 id="card-1-ic-rankic-time-series">Card 1 — IC &amp; RankIC Time Series</h4>
+<p><strong>Chart type:</strong> Line chart (Recharts <code>LineChart</code>)</p>
+<p><strong>Data:</strong> <code>ic[]</code>, <code>rank_ic[]</code>, <code>dates[]</code> from <code>eval.ic_series</code> SSE event</p>
+<p><strong>Series:</strong></p>
+<ul>
+<li>IC: blue line, thin (1.5px)</li>
+<li>RankIC: teal line, thin (1.5px)</li>
+<li>Rolling 63-day mean IC: blue thick line (3px)</li>
+<li>±0.02 significance band: light gray filled area</li>
+</ul>
+<p><strong>Axes:</strong></p>
+<ul>
+<li>X: trading date, monthly ticks, abbreviated month labels</li>
+<li>Y: [-0.15, 0.15] default range; auto-scales if values exceed</li>
+</ul>
+<p><strong>Annotations:</strong></p>
+<ul>
+<li>Vertical dashed lines at major market events (COVID crash Mar 2020, Fed rate hikes 2022); toggled via a &quot;Show events&quot; checkbox</li>
+<li>Summary stats in card header: <code>IC: 0.032  ICIR: 0.43  RankIC: 0.047  RankICIR: 0.61</code></li>
+</ul>
+<p><strong>Interpretation hint:</strong> <code>&quot;Consistent positive signal. IC is stable across the period.&quot;</code>  / <code>&quot;Unstable IC — signal reverses in bear markets.&quot;</code></p>
+<h4 id="card-2-decay-curve">Card 2 — Decay Curve</h4>
+<p><strong>Chart type:</strong> Bar chart (Recharts <code>BarChart</code>)</p>
+<p><strong>Data:</strong> <code>ic_by_horizon</code>, <code>halflife</code> from <code>eval.decay</code> SSE event</p>
+<p><strong>Bars:</strong></p>
+<ul>
+<li>One bar per horizon (1d, 5d, 10d, 20d)</li>
+<li>Bar height = RankIC at that horizon</li>
+<li>Error bars (thin lines) show ±1 std of daily IC at each horizon</li>
+</ul>
+<p><strong>Overlaid line:</strong></p>
+<ul>
+<li>Exponential decay fit: dashed line through bar tops</li>
+<li>Half-life annotation: callout label pointing to the 50% IC level</li>
+</ul>
+<p><strong>Interpretation hint:</strong> <code>&quot;Signal half-life: 12 days. Suitable for weekly rebalancing.&quot;</code></p>
+<h4 id="card-3-group-return-analysis">Card 3 — Group Return Analysis</h4>
+<p><strong>Chart type:</strong> Bar chart with optional line overlay</p>
+<p><strong>Data:</strong> <code>quintile_returns</code> from <code>eval.groups</code> SSE event</p>
+<p><strong>Bars:</strong></p>
+<ul>
+<li>5 bars, one per quintile (Q1 = short, Q5 = long)</li>
+<li>Color: Q1 red, Q2–Q4 gray, Q5 green</li>
+<li>Value labels above each bar (e.g. <code>-0.12%</code>, <code>+0.15%</code>)</li>
+</ul>
+<p><strong>Controls above chart:</strong></p>
+<ul>
+<li>Return type toggle: <code>Raw</code> / <code>Market-adjusted</code> / <code>Sector-adjusted</code></li>
+<li>Horizon selector (1d, 5d, 10d, 20d) — updates chart on change</li>
+</ul>
+<p><strong>Overlaid line:</strong> Long-short spread (Q5 − Q1), shown on secondary Y axis</p>
+<p><strong>Interpretation hint:</strong> <code>&quot;Monotonic spread of 0.27%/day long-short. Strong signal.&quot;</code> / <code>&quot;Non-monotonic — Q3 outperforms Q5. Factor may be non-linear.&quot;</code></p>
+<h4 id="card-4-factor-heatmap">Card 4 — Factor Heatmap</h4>
+<p><strong>Chart type:</strong> Custom SVG calendar heatmap</p>
+<p><strong>Data:</strong> <code>ic[]</code>, <code>dates[]</code> from <code>eval.ic_series</code> SSE event (same data as Card 1)</p>
+<p><strong>Layout:</strong></p>
+<ul>
+<li>Columns: trading days, one cell per day, 4px wide</li>
+<li>Rows: one row per year</li>
+<li>Month labels at top; year labels at left</li>
+<li>Cell color: green (positive IC) → white (zero) → red (negative IC), symmetric diverging scale</li>
+</ul>
+<p><strong>Interactions:</strong></p>
+<ul>
+<li>Hover cell: tooltip <code>Dec 15 2024  IC: 0.061</code></li>
+<li>Color scale adjustable via a small slider below the chart (default ±0.10)</li>
+</ul>
+<p><strong>Interpretation hint:</strong> <code>&quot;Strong in 2021–2022. Signal weakens post-2023 rate hikes.&quot;</code></p>
+<h4 id="card-5-turnover-analysis">Card 5 — Turnover Analysis</h4>
+<p><strong>Chart type:</strong> Dual-axis line chart</p>
+<p><strong>Data:</strong> Computed from <code>factor_vals</code> (rank autocorrelation) and cost model</p>
+<p><strong>Series:</strong></p>
+<ul>
+<li>Primary Y axis: 63-day rolling rank autocorrelation (blue line)</li>
+<li>Secondary Y axis: estimated net IC after transaction costs (orange dashed line)</li>
+</ul>
+<p><strong>Reference line:</strong> Horizontal line at <code>autocorr = 0.8</code> (typical &quot;low turnover&quot; threshold)</p>
+<p><strong>Summary below chart:</strong></p>
+<pre><code>Avg autocorrelation: 0.83  ·  Estimated cost drag: 0.008 IC  ·  Net IC: 0.039
+</code></pre>
+<p><strong>Interpretation hint:</strong> <code>&quot;Low turnover factor. Transaction costs consume ~17% of gross IC.&quot;</code></p>
+<h4 id="card-6-return-distribution">Card 6 — Return Distribution</h4>
+<p><strong>Chart type:</strong> Overlaid histogram (Recharts <code>BarChart</code> with two data series)</p>
+<p><strong>Data:</strong> Forward return distributions for Q1 (short) and Q5 (long) quintiles</p>
+<p><strong>Series:</strong></p>
+<ul>
+<li>Q5 (long) returns: green bars, 40% opacity</li>
+<li>Q1 (short) returns: red bars, 40% opacity</li>
+<li>KDE smooth lines overlaid on each histogram (computed via <code>kernel-density-estimator</code> utility)</li>
+</ul>
+<p><strong>Stats panel below chart:</strong></p>
+<pre><code>                 Q5 (Long)    Q1 (Short)
+Mean return:     +0.0015      -0.0012
+Std dev:          0.0089       0.0091
+t-statistic:     2.34  (p &lt; 0.02)
+</code></pre>
+<p><strong>Interpretation hint:</strong> <code>&quot;Distributions well-separated. Long-short return is statistically significant.&quot;</code></p>
+<h3 id="5-5-summary-panel">5.5  Summary Panel</h3>
+<p>Fixed 300px right column. Shows the structured FactorReport.</p>
+<h4 id="loading-state">Loading state</h4>
+<p>While evaluation is in progress: shows a loading skeleton for each section.</p>
+<h4 id="populated-state">Populated state</h4>
+<pre><code>┌──────────────────────────────────────────────────┐
+│  Expression                                      │
+│  ts_corr(close, volume, 20)                      │
+├──────────────────────────────────────────────────┤
+│  Signal quality                                  │
+│  IC      0.032    ICIR    0.43                   │
+│  RankIC  0.047    RankICIR 0.61                  │
+│  Decay half-life  12 days                        │
+├──────────────────────────────────────────────────┤
+│  Diagnostics                                     │
+│  Look-ahead    ✓ Clean                           │
+│  Redundancy    0.31  (nearest: ts_corr_ret_v15)  │
+│  Failure       None                              │
+├──────────────────────────────────────────────────┤
+│  Suggestion                                      │
+│  Decay is moderate. Consider ts_corr(close,      │
+│  volume, 10) for shorter holding periods.        │
+├──────────────────────────────────────────────────┤
+│  Evaluation context                              │
+│  Universe  NASDAQ100  ·  101 symbols             │
+│  Period    2020-01-01 → 2024-12-31               │
+│  Execution next_open                             │
+│  Duration  342ms                                 │
+├──────────────────────────────────────────────────┤
+│  Lineage                                         │
+│  Snapshot  US_2024Q4_v3                          │
+│  Evaluated Jan 15 2025  14:32:07                │
+│  Source    AGENT (session #42)                   │
+├──────────────────────────────────────────────────┤
+│  [Save to library]   [Compare with library →]   │
+│  ▶ Full JSON  (collapsed)                        │
+└──────────────────────────────────────────────────┘
+</code></pre>
+<ul>
+<li>&quot;Save to library&quot; button: calls <code>POST /v1/library/factors</code>, shows success toast</li>
+<li>&quot;Compare with library →&quot; button: navigates to <code>/library?mode=matrix</code> with this factor pre-seeded in the correlation matrix against the top 20 library factors by RankICIR</li>
+<li>&quot;Full JSON&quot; disclosure: expands a <code>&lt;pre&gt;</code> block with the complete <code>FactorReport</code> JSON, syntax-highlighted, with a copy button</li>
+</ul>
+<h4 id="error-state-when-failure_mode-is-set">Error state (when <code>failure_mode</code> is set)</h4>
+<p>Rendered from the engine's <code>FactorDiagnostics</code> (the <code>errors[]</code> / <code>warnings[]</code> arrays of
+<code>diagnose().to_dict()</code>). The header is the diagnostic <code>title</code>, the code badge is the stable
+<code>ASSAY-*</code> id, the body is the <code>message</code> + caret <code>snippet</code>, and the fix line is the
+<code>suggestion</code>. Example — a real <code>LOOKAHEAD_SHIFT</code> (<code>failure_mode: LOOKAHEAD</code>):</p>
+<pre><code>┌──────────────────────────────────────────────────┐
+│  ⚠  Look-ahead shift              [ASSAY-E007]   │
+│                                                  │
+│  A negative look-back peeks into the future.     │
+│                                                  │
+│    ts_delay(close, -5)                           │
+│    ^^^^^^^^                                       │
+│                                                  │
+│  Fix: use a non-negative window, e.g.            │
+│  ts_delay(close, 5).                             │
+└──────────────────────────────────────────────────┘
+</code></pre>
+<p><code>failure_mode</code> is one of <code>SYNTAX_ERROR</code> · <code>LOOKAHEAD</code> · <code>CONSTANT</code> · <code>ALL_NAN</code> ·
+<code>RUNTIME_ERROR</code>; parse errors (<code>ASSAY-P###</code>) surface inline in the editor (§9) as well.
+The error state replaces the entire summary panel content. The charts still render with
+whatever partial data is available before the error was detected.</p>
+<hr />
+<h2 id="6-shared-components">6. Shared Components</h2>
+<h3 id="6-1-factorreportcard">6.1  <code>&lt;FactorReportCard /&gt;</code></h3>
+<p>Compact card used in the leaderboard and agent feed. Accepts a <code>FactorSummary</code> or <code>FactorReport</code> prop.</p>
+<pre><code class="language-typescript">interface FactorReportCardProps {
+  factor:    FactorSummary | FactorReport
+  compact?:  boolean          // true = no sparkline, 1 line height
+  onClick?:  () =&gt; void
+  selected?: boolean
+}
+</code></pre>
+<h3 id="6-2-icsparkline">6.2  <code>&lt;ICSparkline /&gt;</code></h3>
+<p>A minimal 60-day IC sparkline. Used in the leaderboard hover preview and factor detail card.</p>
+<pre><code class="language-typescript">interface ICSparklineProps {
+  ic:        number[]   // last 60 values
+  width?:    number     // default 120
+  height?:   number     // default 32
+  color?:    string     // default: blue if mean &gt; 0, red if mean &lt; 0
+}
+</code></pre>
+<h3 id="6-3-redundancybadge">6.3  <code>&lt;RedundancyBadge /&gt;</code></h3>
+<pre><code class="language-typescript">interface RedundancyBadgeProps {
+  score:          number          // 0.0–1.0
+  nearestFactor?: FactorSummary  // shown in tooltip if redundant
+}
+// Renders: &quot;● unique&quot; (score &lt; 0.4), &quot;◐ similar&quot; (0.4–0.7), &quot;● redundant&quot; (&gt; 0.7)
+</code></pre>
+<h3 id="6-4-expressiontag">6.4  <code>&lt;ExpressionTag /&gt;</code></h3>
+<p>A monospace pill displaying a truncated factor expression. Full expression shown in tooltip on hover.</p>
+<pre><code class="language-typescript">interface ExpressionTagProps {
+  expr:      string
+  maxChars?: number    // default 40
+  onClick?:  () =&gt; void
+}
+</code></pre>
+<h3 id="6-5-factorreportjson">6.5  <code>&lt;FactorReportJSON /&gt;</code></h3>
+<p>Syntax-highlighted JSON display with copy button and line count badge.</p>
+<pre><code class="language-typescript">interface FactorReportJSONProps {
+  report:  FactorReport
+  maxHeight?: number    // default 400, scroll if taller
+}
+</code></pre>
+<h3 id="6-6-skeletonchart">6.6  <code>&lt;SkeletonChart /&gt;</code></h3>
+<p>Animated loading skeleton sized to match a chart card. Used while SSE events are pending.</p>
+<pre><code class="language-typescript">interface SkeletonChartProps {
+  height?:  number  // default 220
+  type?:    &quot;line&quot; | &quot;bar&quot; | &quot;heatmap&quot;  // affects skeleton shape
+}
+</code></pre>
+<hr />
+<h2 id="7-state-management">7. State Management</h2>
+<p>All state is in Zustand stores. No Redux. No Context API for state (only for DI/config).</p>
+<h3 id="7-1-global-store">7.1  Global store</h3>
+<pre><code class="language-typescript">// src/store/global.ts
+
+interface GlobalState {
+  // User-controlled global settings
+  universe:         string               // &quot;NASDAQ100&quot;
+  period:           [string, string]     // [&quot;2020-01-01&quot;, &quot;2024-12-31&quot;]
+  sessionId:        string | null        // created after universe/period set
+  sessionSetupMs:   number | null        // how long session creation took
+
+  // Actions
+  setUniverse:      (u: string) =&gt; void
+  setPeriod:        (p: [string, string]) =&gt; void
+  createSession:    () =&gt; Promise&lt;void&gt;
+  invalidateSession:() =&gt; void
+}
+</code></pre>
+<h3 id="7-2-library-store">7.2  Library store</h3>
+<pre><code class="language-typescript">// src/store/library.ts
+
+interface LibraryState {
+  // Client-side cache of library factors (augments React Query)
+  savedFactorIds:  Set&lt;string&gt;         // factors the user saved in this session
+  selectedIds:     Set&lt;string&gt;         // multi-select state
+  activeFactorId:  string | null       // currently viewed factor in detail panel
+  activeMode:      LibraryMode         // &quot;detail&quot; | &quot;matrix&quot; | &quot;map&quot; | &quot;heatmap&quot; | &quot;lineage&quot;
+  filters:         LibraryFilters
+
+  // Actions
+  selectFactor:    (id: string) =&gt; void
+  toggleSelect:    (id: string) =&gt; void
+  clearSelect:     () =&gt; void
+  setMode:         (mode: LibraryMode) =&gt; void
+  setFilters:      (f: Partial&lt;LibraryFilters&gt;) =&gt; void
+  markSaved:       (id: string) =&gt; void
+}
+</code></pre>
+<h3 id="7-3-evaluation-store">7.3  Evaluation store</h3>
+<pre><code class="language-typescript">// src/store/evaluation.ts
+
+interface EvalState {
+  // Current evaluation in the Single Factor Test page
+  expr:            string
+  isEvaluating:    boolean
+  events:          EvalEvent[]          // streaming events received so far
+  report:          FactorReport | null  // set when eval.complete arrives
+  error:           EvalError | null
+  latencyMs:       number | null
+
+  // History (last 20 evaluations in this session)
+  history:         Array&lt;{ expr: string; report: FactorReport }&gt;
+
+  // Actions
+  setExpr:         (expr: string) =&gt; void
+  startEval:       () =&gt; void
+  appendEvent:     (e: EvalEvent) =&gt; void
+  completeEval:    (report: FactorReport, ms: number) =&gt; void
+  setError:        (e: EvalError) =&gt; void
+  clearResults:    () =&gt; void
+  restoreFromHistory: (idx: number) =&gt; void
+}
+</code></pre>
+<hr />
+<h2 id="8-data-fetching-streaming">8. Data Fetching &amp; Streaming</h2>
+<p>React Query manages all server state. Custom hooks encapsulate the fetch + SSE logic.</p>
+<h3 id="8-1-query-keys">8.1  Query keys</h3>
+<pre><code class="language-typescript">// Consistent key structure for cache invalidation
+const queryKeys = {
+  system:    {status: [&quot;system&quot;, &quot;status&quot;], calendar: (year: number) =&gt; [&quot;system&quot;, &quot;calendar&quot;, year]},
+  library:   {list: (filters: LibraryFilters) =&gt; [&quot;library&quot;, &quot;list&quot;, filters],
+              factor: (id: string) =&gt; [&quot;library&quot;, &quot;factor&quot;, id],
+              correlation: (ids: string[]) =&gt; [&quot;library&quot;, &quot;corr&quot;, ids.sort().join(&quot;,&quot;)],
+              alphaSpace: (ids: string[]) =&gt; [&quot;library&quot;, &quot;umap&quot;, ids.sort().join(&quot;,&quot;)]},
+  session:   {create: (u: string, p: string) =&gt; [&quot;session&quot;, u, p]},
+}
+</code></pre>
+<h3 id="8-2-evaluation-streaming-hook">8.2  Evaluation streaming hook</h3>
+<pre><code class="language-typescript">// src/api/hooks/useEvaluate.ts
+
+export function useEvaluate() {
+  const store = useEvalStore()
+  const global = useGlobal()
+
+  const evaluate = useCallback(async (overrides?: Partial&lt;EvalRequest&gt;) =&gt; {
+    const req: EvalRequest = {
+      expr:      store.expr,
+      universe:  global.universe,
+      period:    global.period,
+      horizons:  [1, 5, 10, 20],
+      stream:    true,
+      session_id: global.sessionId,
+      ...overrides,
+    }
+
+    store.startEval()
+    const startMs = Date.now()
+
+    try {
+      const res = await fetch(&quot;/v1/factor/evaluate&quot;, {
+        method:  &quot;POST&quot;,
+        headers: { &quot;Content-Type&quot;: &quot;application/json&quot;, &quot;X-API-Key&quot;: getApiKey() },
+        body:    JSON.stringify(req),
+      })
+
+      if (!res.ok) {
+        const err = await res.json()
+        store.setError(err.error)
+        return
+      }
+
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = &quot;&quot;
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split(&quot;\n&quot;)
+        buffer = lines.pop() ?? &quot;&quot;          // keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (!line.startsWith(&quot;data: &quot;)) continue
+          const event = JSON.parse(line.slice(6)) as EvalEvent
+          store.appendEvent(event)
+
+          if (event.type === &quot;eval.complete&quot;) {
+            store.completeEval(event.data as FactorReport, Date.now() - startMs)
+          }
+        }
+      }
+    } catch (e) {
+      store.setError({ code: &quot;NETWORK_ERROR&quot;, message: String(e) })
+    }
+  }, [store, global])
+
+  return { evaluate, isEvaluating: store.isEvaluating, events: store.events }
+}
+</code></pre>
+<h3 id="8-3-library-queries">8.3  Library queries</h3>
+<pre><code class="language-typescript">// src/api/hooks/useLibrary.ts
+
+export function useLibraryList(filters: LibraryFilters) {
+  return useQuery({
+    queryKey: queryKeys.library.list(filters),
+    queryFn:  () =&gt; api.library.list(filters),
+    staleTime: 30_000,    // 30s — library changes slowly
+    refetchOnWindowFocus: true,
+  })
+}
+
+export function useCorrelationMatrix(factorIds: string[], universe: string) {
+  return useQuery({
+    queryKey: queryKeys.library.correlation(factorIds),
+    queryFn:  () =&gt; api.library.correlationMatrix(factorIds, universe),
+    enabled:  factorIds.length &gt;= 2,
+    staleTime: 5 * 60_000,   // 5 min — correlation is expensive to compute
+  })
+}
+</code></pre>
+<hr />
+<h2 id="9-monaco-editor-extension">9. Monaco Editor Extension</h2>
+<h3 id="9-1-language-registration">9.1  Language registration</h3>
+<pre><code class="language-typescript">// src/components/editor/assay-lang.ts
+
+export function setupAssayLanguage(schema: OperatorSchema) {
+  monaco.languages.register({ id: &quot;assay&quot; })
+
+  // ── Token rules ──────────────────────────────────────────────
+  monaco.languages.setMonarchTokensProvider(&quot;assay&quot;, {
+    tokenizer: {
+      root: [
+        [/\$[a-z_]+/,                      &quot;variable.predefined&quot;],   // $close
+        [/\b(ts_|cs_|calc_)[a-z_]+\b/,     &quot;keyword&quot;],               // ts_mean
+        [/\b(Ref|Mean|Std|Corr|EMA|Rank|Delta|Resi|Sum|Product|IdxMax|IdxMin)\b/, &quot;keyword.control&quot;],
+        [/\b(open|high|low|close|volume|transactions)\b/,  &quot;variable&quot;],  // MASSIVE day-agg fields; no vwap/market_cap
+        [/\d+(\.\d+)?/,                    &quot;number&quot;],
+        [/[+\-*/().,&lt;&gt;?:]/,               &quot;operator&quot;],
+        [/&quot;[^&quot;]*&quot;/,                        &quot;string&quot;],
+      ]
+    }
+  })
+
+  // ── Autocomplete ─────────────────────────────────────────────
+  monaco.languages.registerCompletionItemProvider(&quot;assay&quot;, {
+    triggerCharacters: [&quot;(&quot;, &quot;_&quot;],
+    provideCompletionItems(model, position) {
+      const wordInfo = model.getWordUntilPosition(position)
+      const range = {
+        startLineNumber: position.lineNumber,
+        endLineNumber:   position.lineNumber,
+        startColumn:     wordInfo.startColumn,
+        endColumn:       wordInfo.endColumn,
+      }
+
+      const operatorSuggestions = Object.entries(schema).map(([name, op]) =&gt; ({
+        label:            name,
+        kind:             monaco.languages.CompletionItemKind.Function,
+        documentation:    { value: `**${op.signature}**\n\n${op.description}\n\n*Output: ${op.output_range}*` },
+        detail:           op.signature,
+        insertText:       op.insert_snippet,   // &quot;ts_corr(${1:x}, ${2:y}, ${3:d})&quot;
+        insertTextRules:  monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+        range,
+        sortText:         &quot;0&quot; + name,          // operators appear above fields
+      }))
+
+      const fieldSuggestions = [&quot;close&quot;,&quot;open&quot;,&quot;high&quot;,&quot;low&quot;,&quot;volume&quot;,&quot;transactions&quot;].map(f =&gt; ({
+        label:    f,
+        kind:     monaco.languages.CompletionItemKind.Field,
+        detail:   &quot;data field&quot;,
+        insertText: f,
+        range,
+        sortText: &quot;1&quot; + f,
+      }))
+
+      return { suggestions: [...operatorSuggestions, ...fieldSuggestions] }
+    }
+  })
+
+  // ── Signature help (parameter hints) ─────────────────────────
+  monaco.languages.registerSignatureHelpProvider(&quot;assay&quot;, {
+    signatureHelpTriggerCharacters:   [&quot;(&quot;],
+    signatureHelpRetriggerCharacters: [&quot;,&quot;],
+    provideSignatureHelp(model, position) {
+      // Walk backwards from cursor to find enclosing function name and arg index
+      const { fnName, argIndex } = parseCallContext(model, position)
+      if (!fnName || !schema[fnName]) return null
+
+      const op = schema[fnName]
+      return {
+        value: {
+          signatures: [{
+            label:      op.signature,
+            documentation: op.description,
+            parameters: op.params.map(p =&gt; ({
+              label:         p.name,
+              documentation: `${p.type}  range: ${p.min}–${p.max}`
+            })),
+            activeParameter: argIndex,
+          }],
+          activeSignature: 0,
+          activeParameter: argIndex,
+        },
+        dispose: () =&gt; {}
+      }
+    }
+  })
+
+  // ── Inline error (parse validation via Web Worker) ───────────
+  const worker = new Worker(new URL(&quot;./parse-worker.ts&quot;, import.meta.url))
+  let currentModel: monaco.editor.ITextModel | null = null
+
+  monaco.editor.onDidCreateModel(model =&gt; {
+    if (model.getLanguageId() !== &quot;assay&quot;) return
+    currentModel = model
+
+    const update = debounce(() =&gt; {
+      worker.postMessage({ code: model.getValue() })
+    }, 300)
+
+    model.onDidChangeContent(update)
+    update()
+  })
+
+  worker.onmessage = ({ data: errors }) =&gt; {
+    if (!currentModel) return
+    monaco.editor.setModelMarkers(
+      currentModel, &quot;assay&quot;,
+      errors.map((e: ParseError) =&gt; ({
+        severity: monaco.MarkerSeverity.Error,
+        startLineNumber: e.line,  startColumn: e.col,
+        endLineNumber:   e.line,  endColumn: e.col + e.length,
+        message: e.message,
+      }))
+    )
+  }
+}
+</code></pre>
+<h3 id="9-2-syntax-bridge-qlib-python-conversion">9.2  Syntax bridge (qlib ↔ Python conversion)</h3>
+<pre><code class="language-typescript">// src/components/editor/syntax-bridge.ts
+
+export function toAssayPython(qlibExpr: string): string {
+  return qlibExpr
+    .replace(/\$(\w+)/g, &quot;$1&quot;)                       // $close → close
+    .replace(/\bRef\(([^,]+),\s*(\d+)\)/g,  &quot;ts_delay($1, $2)&quot;)
+    .replace(/\bMean\(([^,]+),\s*(\d+)\)/g, &quot;ts_mean($1, $2)&quot;)
+    .replace(/\bStd\(([^,]+),\s*(\d+)\)/g,  &quot;ts_std($1, $2)&quot;)
+    .replace(/\bCorr\(([^,]+),\s*([^,]+),\s*(\d+)\)/g, &quot;ts_corr($1, $2, $3)&quot;)
+    .replace(/\bEMA\(([^,]+),\s*(\d+)\)/g,  &quot;ts_ema($1, $2)&quot;)
+    .replace(/\bRank\(([^)]+)\)/g,           &quot;cs_rank($1)&quot;)
+    .replace(/\bDelta\(([^,]+),\s*(\d+)\)/g,&quot;ts_delta($1, $2)&quot;)
+    .replace(/\bSum\(([^,]+),\s*(\d+)\)/g,  &quot;ts_sum($1, $2)&quot;)
+    .replace(/\bIdxMax\(([^,]+),\s*(\d+)\)/g,&quot;ts_argmax($1, $2)&quot;)
+    .replace(/\bIdxMin\(([^,]+),\s*(\d+)\)/g,&quot;ts_argmin($1, $2)&quot;)
+}
+
+export function toQlib(assayExpr: string): string {
+  return assayExpr
+    .replace(/\bts_delay\(([^,]+),\s*(\d+)\)/g,  &quot;Ref(\$$1, $2)&quot;)
+    .replace(/\bts_mean\(([^,]+),\s*(\d+)\)/g,   &quot;Mean(\$$1, $2)&quot;)
+    .replace(/\bts_std\(([^,]+),\s*(\d+)\)/g,    &quot;Std(\$$1, $2)&quot;)
+    .replace(/\bts_corr\(([^,]+),\s*([^,]+),\s*(\d+)\)/g, &quot;Corr(\$$1, \$$2, $3)&quot;)
+    .replace(/\bts_ema\(([^,]+),\s*(\d+)\)/g,    &quot;EMA(\$$1, $2)&quot;)
+    .replace(/\bcs_rank\(([^)]+)\)/g,             &quot;Rank($1)&quot;)
+    .replace(/\bts_delta\(([^,]+),\s*(\d+)\)/g,  &quot;Delta(\$$1, $2)&quot;)
+    .replace(/\bts_sum\(([^,]+),\s*(\d+)\)/g,    &quot;Sum(\$$1, $2)&quot;)
+    .replace(/\bclose\b/g, &quot;$close&quot;)
+    .replace(/\bvolume\b/g, &quot;$volume&quot;)
+    .replace(/\bopen\b/g, &quot;$open&quot;)
+    .replace(/\bhigh\b/g, &quot;$high&quot;)
+    .replace(/\blow\b/g, &quot;$low&quot;)
+    .replace(/\btransactions\b/g, &quot;$transactions&quot;)
+}
+</code></pre>
+<hr />
+<h2 id="10-routing">10. Routing</h2>
+<pre><code class="language-typescript">// src/main.tsx
+
+import { BrowserRouter, Routes, Route, Navigate } from &quot;react-router-dom&quot;
+import { Shell } from &quot;./components/Shell&quot;
+import Dashboard from &quot;./pages/Dashboard&quot;
+import FactorLibrary from &quot;./pages/FactorLibrary&quot;
+import SingleFactorTest from &quot;./pages/SingleFactorTest&quot;
+
+export default function App() {
+  return (
+    &lt;BrowserRouter&gt;
+      &lt;Routes&gt;
+        &lt;Route path=&quot;/&quot; element={&lt;Shell /&gt;}&gt;
+          &lt;Route index element={&lt;Navigate to=&quot;/dashboard&quot; replace /&gt;} /&gt;
+          &lt;Route path=&quot;dashboard&quot; element={&lt;Dashboard /&gt;} /&gt;
+          &lt;Route path=&quot;library&quot;   element={&lt;FactorLibrary /&gt;} /&gt;
+          &lt;Route path=&quot;factor&quot;    element={&lt;SingleFactorTest /&gt;} /&gt;
+          &lt;Route path=&quot;factor/:factor_id&quot; element={&lt;SingleFactorTest /&gt;} /&gt;
+        &lt;/Route&gt;
+      &lt;/Routes&gt;
+    &lt;/BrowserRouter&gt;
+  )
+}
+</code></pre>
+<p>URL state synchronisation — the universe, period, and library mode are persisted to the URL as query params via a custom <code>useUrlSync</code> hook. Navigating back restores the exact state the user left.</p>
+<hr />
+<h2 id="11-design-tokens">11. Design Tokens</h2>
+<p>All visual design values are Tailwind CSS custom properties, extended in <code>tailwind.config.ts</code>.</p>
+<h3 id="11-1-colors">11.1  Colors</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Token</th>
+<th>Value</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--color-navy</code></td>
+<td><code>#1B2A4A</code></td>
+<td>Headings, logo</td>
+</tr>
+<tr>
+<td><code>--color-blue</code></td>
+<td><code>#2D5BE3</code></td>
+<td>Primary actions, active tabs, links</td>
+</tr>
+<tr>
+<td><code>--color-teal</code></td>
+<td><code>#0E8A7E</code></td>
+<td>RankIC lines, positive signals</td>
+</tr>
+<tr>
+<td><code>--color-amber</code></td>
+<td><code>#B87C1A</code></td>
+<td>Warnings, callouts</td>
+</tr>
+<tr>
+<td><code>--color-red</code></td>
+<td><code>#C0392B</code></td>
+<td>Errors, negative IC, redundant badges</td>
+</tr>
+<tr>
+<td><code>--color-green</code></td>
+<td><code>#1E7B4B</code></td>
+<td>Success, positive IC, unique badges</td>
+</tr>
+<tr>
+<td><code>--color-gray-1</code></td>
+<td><code>#F4F6FA</code></td>
+<td>Alternating table row background</td>
+</tr>
+<tr>
+<td><code>--color-gray-4</code></td>
+<td><code>#8892AA</code></td>
+<td>Muted text, labels</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="11-2-typography-scale">11.2  Typography scale</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Use</th>
+<th>Size</th>
+<th>Weight</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Page title (h1)</td>
+<td>24px</td>
+<td>500</td>
+</tr>
+<tr>
+<td>Section heading (h2)</td>
+<td>18px</td>
+<td>500</td>
+</tr>
+<tr>
+<td>Card title</td>
+<td>14px</td>
+<td>500</td>
+</tr>
+<tr>
+<td>Body text</td>
+<td>14px</td>
+<td>400</td>
+</tr>
+<tr>
+<td>Table text</td>
+<td>13px</td>
+<td>400</td>
+</tr>
+<tr>
+<td>Label / hint</td>
+<td>12px</td>
+<td>400</td>
+</tr>
+<tr>
+<td>Monospace (expressions)</td>
+<td>13px</td>
+<td>400 (JetBrains Mono)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="11-3-spacing">11.3  Spacing</h3>
+<p>Base unit: 4px. Common spacings: 4, 8, 12, 16, 24, 32, 48px.</p>
+<h3 id="11-4-border-radius">11.4  Border radius</h3>
+<ul>
+<li>Cards, panels: 8px (<code>--border-radius-md</code>)</li>
+<li>Badges, tags: 4px</li>
+<li>Buttons: 6px</li>
+<li>Tooltips: 4px</li>
+</ul>
+<h3 id="11-5-shadows">11.5  Shadows</h3>
+<p>No decorative shadows. Focus rings only: <code>box-shadow: 0 0 0 2px var(--color-blue)</code> on focused form elements.</p>
+<hr />
+<p><em>— Assay WebUI Detailed Design · AlphaBench Project —</em></p>

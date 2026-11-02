@@ -1,0 +1,80 @@
+<h1 class="doc-title">Python SDK</h1>
+<p>该 SDK（<code>import assay</code>）是延迟最低的界面 —— 进程内、无序列化。首次使用时它会从环境
+自动初始化。</p>
+<pre><code class="language-python">import assay
+assay.init()          # optional; reads AssayConfig.from_env(); backtest() auto-inits otherwise
+</code></pre>
+<p>公开接口（<code>assay.__all__</code>）：<code>init</code>、<code>backtest</code>、<code>batch_backtest</code>、<code>backtest_portfolio</code>、
+<code>stream</code>、<code>Session</code>、<code>library</code>，以及 <code>AssayConfig</code>、<code>MassiveConfig</code>、<code>AssayService</code>。</p>
+<h2 id="单因子评估">单因子评估</h2>
+<pre><code class="language-python">report = assay.backtest(
+    &quot;ts_corr(close, volume, 20)&quot;,
+    universe   = &quot;NASDAQ100&quot;,
+    period     = (&quot;2025-01-02&quot;, &quot;2026-06-09&quot;),
+    horizons   = [1, 5, 10, 20],
+    execution  = &quot;next_open&quot;,      # next_open | next_close  (no vwap)
+    neutralize = None,             # [&quot;sector&quot;] needs group data (absent for US)
+    as_of      = &quot;2026-06-09&quot;,     # PIT: only data known by this date
+    adj        = &quot;split&quot;,          # none | split | total
+)
+
+report.rank_ic, report.rank_icir          # headline IC
+report.ic_by_horizon                       # {1: .., 5: .., ...}
+report.decay_halflife_days
+report.turnover_1d, report.redundancy_score
+report.lookahead_detected, report.failure_mode, report.suggestion
+report.diagnostics                         # structured ASSAY-* diagnostics on failure/warning
+report.to_dict(); report.to_json(); report.to_dataframe()   # JSON-safe / IC time series
+</code></pre>
+<p>表达式接受<strong>两种语法</strong>（它们都被降解到同一个 AST）：</p>
+<pre><code class="language-python">assay.backtest(&quot;Corr($close, $volume, 20)&quot;)        # qlib
+assay.backtest(&quot;ts_corr(close, volume, 20)&quot;)       # function-call / Alpha-101
+</code></pre>
+<h2 id="批量评估">批量评估</h2>
+<pre><code class="language-python">factors = [&quot;ts_returns(close, 20)&quot;, &quot;ts_corr(close, volume, 20)&quot;,
+           &quot;cs_rank(ts_std(close, 20))&quot;]
+reports = assay.batch_backtest(factors, universe=&quot;NASDAQ100&quot;,
+                               period=(&quot;2025-01-02&quot;, &quot;2026-06-09&quot;), sort_by=&quot;rank_icir&quot;)
+for r in reports[:5]:
+    print(f&quot;{r.expr:&lt;40} ICIR={r.rank_icir:.2f}&quot;)
+</code></pre>
+<h2 id="会话-session-摊销面板加载">会话（Session，摊销面板加载）</h2>
+<p>一个会话只加载一次价格面板和前向收益；后续因子会复用它们。</p>
+<pre><code class="language-python">with assay.Session(universe=&quot;NASDAQ100&quot;, period=(&quot;2025-01-02&quot;, &quot;2026-06-09&quot;)) as sess:
+    r1 = sess.backtest(&quot;ts_returns(close, 20)&quot;)        # loads the panel
+    r2 = sess.backtest(&quot;ts_corr(close, volume, 20)&quot;)   # reuses it (much faster)
+    reports = sess.batch_backtest(factors)
+</code></pre>
+<h2 id="流式-异步">流式（异步）</h2>
+<pre><code class="language-python">import asyncio
+async def watch():
+    async for ev in assay.stream(&quot;ts_corr(close, volume, 20)&quot;, universe=&quot;NASDAQ100&quot;):
+        if ev[&quot;event&quot;] == &quot;eval.complete&quot;:
+            print(ev[&quot;data&quot;][&quot;rank_icir&quot;])
+asyncio.run(watch())
+</code></pre>
+<p>事件按顺序到达：<code>eval.started</code>、<code>eval.ic_series</code>、<code>eval.decay</code>、<code>eval.groups</code>、
+<code>eval.complete</code>（附带完整报告）。所有帧都是 NaN 安全的 JSON。</p>
+<h2 id="因子库">因子库</h2>
+<pre><code class="language-python">assay.library.save(report)
+factors = assay.library.list(min_rank_icir=0.5, sort_by=&quot;rank_icir&quot;, limit=20)
+r       = assay.library.get(factor_id)
+corr    = assay.library.correlation_matrix([f.factor_id for f in factors])
+assay.library.prune(threshold=0.7, dry_run=True)
+assay.library.delete([factor_id])
+</code></pre>
+<h2 id="组合回测">组合回测</h2>
+<pre><code class="language-python">from assay.portfolio import PortfolioBacktestConfig
+cfg = PortfolioBacktestConfig(universe=&quot;NASDAQ100&quot;,
+                              period_start=&quot;2025-01-02&quot;, period_end=&quot;2026-06-09&quot;,
+                              market=&quot;US&quot;, rebalance_type=&quot;monthly&quot;,
+                              weight_method=&quot;signal_prop&quot;, long_short=False)
+pf = assay.backtest_portfolio(&quot;cs_rank(ts_returns(close, 20))&quot;, cfg)
+print(pf.sharpe, pf.max_drawdown, pf.annual_turnover, pf.cost_drag, pf.n_rebalances)
+</code></pre>
+<p><code>backtest_portfolio(expr, config=None, **config_kwargs)</code> —— 传入一个
+<code>PortfolioBacktestConfig</code> 或关键字字段。参见<a href="/doc/guide/portfolio-backtest">组合回测指南</a>。</p>
+<h2 id="自定义配置">自定义配置</h2>
+<pre><code class="language-python">from assay.config import AssayConfig
+svc = assay.init(AssayConfig.from_env())          # or AssayConfig.for_tests(tmp_dir) offline
+</code></pre>

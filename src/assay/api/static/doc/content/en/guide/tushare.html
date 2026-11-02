@@ -1,0 +1,246 @@
+<h1 class="doc-title">Tushare data source (China A-share + Hong Kong)</h1>
+<p>Raw market-data mirror for Chinese A-share and Hong Kong equities, downloaded
+from the <a href="https://tushare.pro/" target="_blank" rel="noopener noreferrer">Tushare Pro</a> HTTP API. This is the China/HK
+analogue of the <code>massive</code> (Polygon, US equities) source: it lands <strong>raw</strong>
+provider data on disk, which the Assay ingesters can later normalize into the
+canonical <code>price_raw</code> / <code>adj_events</code> / <code>universe_snapshots</code> parquet stores
+(<code>market=CN</code> / <code>market=HK</code>).</p>
+<h2 id="scope">Scope</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Market</th>
+<th>Universe</th>
+<th>Membership history</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A-share</td>
+<td>union of <strong>CSI300</strong> (<code>000300.SH</code>), <strong>CSI500</strong> (<code>000905.SH</code>), <strong>CSI1000</strong> (<code>000852.SH</code>) constituents</td>
+<td>✅ point-in-time, monthly (<code>index_weight</code>)</td>
+</tr>
+<tr>
+<td>Hong Kong</td>
+<td><strong>whole market</strong> (every name that traded), ranked into <strong>HK100</strong></td>
+<td>✅ point-in-time, monthly (turnover-ranked)</td>
+</tr>
+<tr>
+<td>Hong Kong</td>
+<td><strong>H-shares</strong> (mainland-incorporated issuers), ranked into <strong>HSHARE100</strong></td>
+<td>✅ point-in-time, monthly (ISIN <code>CNE</code> + turnover)</td>
+</tr>
+<tr>
+<td>Hong Kong</td>
+<td><strong>HSI</strong> + <strong>Hang Seng TECH</strong> constituents</td>
+<td>⚠️ current snapshot only (see limitations)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Default date range: <strong>2010-01-01 → today</strong>.</p>
+<blockquote>
+<p><strong>CSI300 membership</strong> is stitched from two provider codes: <code>000300.SH</code> carries
+weights only from 2016-01, so the SZSE mirror <code>399300.SZ</code> supplies the
+2010-2015 history. They are merged (canonical code wins on overlap) into a
+single <code>cn/index_weight/CSI300.parquet</code>. CSI500/CSI1000 need only one code each
+(CSI1000's series starts at its 2014-10 inception).</p>
+</blockquote>
+<h2 id="endpoint-and-credentials">Endpoint and credentials</h2>
+<p>By default the token is spent against <code>https://api.tushare.pro</code>. Set
+<code>TUSHARE_API_URL</code> (or <strong>Data Settings → Tushare → API Endpoint</strong> in the WebUI) to
+route the same calls through a relay/cache gateway that speaks the identical
+<code>{api_name, params, fields}</code> protocol. Gateways authenticate on an <code>X-API-Key</code>
+header rather than the body <code>token</code>; the client sends the credential both ways,
+so one configuration works against either endpoint.</p>
+<p>This matters because <strong>the HK price endpoints are not permissioned on a plain
+Tushare token</strong> — <code>hk_daily</code>, <code>hk_adjfactor</code> and <code>hk_daily_adj</code> all need an
+entitled endpoint. Without one, only the HK index value series is reachable.</p>
+<h2 id="running">Running</h2>
+<pre><code class="language-bash"># from the repo root, with the project venv
+TUSHARE_TOKEN=xxxx TUSHARE_API_URL=https://your-gateway/v1/tushare/query PYTHONPATH=src \
+  /data/haoluo/_assay_venv/bin/python scripts/download_tushare.py --markets hk
+</code></pre>
+<p>The job is <strong>resumable</strong>: each per-symbol / per-index parquet is skipped if it
+already exists, so re-running the same command continues an interrupted backfill.
+Pass <code>--force</code> to overwrite. Useful flags:</p>
+<blockquote>
+<p><strong>Incremental daily refresh.</strong> Because resume skips existing per-symbol files, this
+standalone script only <em>backfills</em> — it will not extend a symbol's file with new dates.
+For an incremental update, use the WebUI <strong>Data → Update</strong> job (or <code>orchestrate.run(..., mode=&quot;update&quot;)</code>): it fetches the new window <strong>by trade-date</strong> (all symbols per API call)
+via <code>run_cn_by_date</code> and <strong>appends</strong> to the raw files — a few calls instead of one per
+symbol. See <a href="/doc/guide/data-pipeline">Data Pipeline → Data Manager</a>.</p>
+</blockquote>
+<ul>
+<li><code>--markets cn,hk</code> — pick markets (or use <code>--steps</code> for fine control)</li>
+<li><code>--steps cn_universe,cn_prices,...</code> — explicit step list (see <code>ALL_STEPS</code>)</li>
+<li><code>--start 20100101 --end 20260627</code> — date window</li>
+<li><code>--rate 380 --workers 8</code> — API calls/min budget and concurrency</li>
+<li><code>--api-url URL</code> — endpoint override (default <code>$TUSHARE_API_URL</code>)</li>
+<li><code>--limit-symbols N</code> — cap the universe for a quick smoke test</li>
+</ul>
+<p>Set <code>--rate</code> to the endpoint's real per-minute ceiling. A gateway that answers
+HTTP 429 is telling you the budget is too high; the client waits out the
+<code>Retry-After</code> rather than backing off exponentially, but a chronically
+over-budget rate still costs throughput.</p>
+<h2 id="on-disk-layout-tushare_data_dir-default-data-tushare_data">On-disk layout (<code>$TUSHARE_DATA_DIR</code>, default <code>/data/tushare_data</code>)</h2>
+<pre><code>_manifest.json                       run config, row counts, failures, history
+meta/
+  stock_basic.parquet                A-share listings (L + D + P) — names, list/delist dates
+  hk_basic.parquet                   HK listings (L + D — delisted included, no survivorship bias)
+  trade_cal.parquet                  SSE trading calendar
+  hk_trade_cal.parquet               HKEX trading calendar
+cn/
+  index_weight/CSI300.parquet        monthly constituent + weight history ...
+  index_weight/CSI500.parquet
+  index_weight/CSI1000.parquet
+  universe.parquet                   deduped union (ts_code, indices, first_date, last_date)
+  daily/{ts_code}.parquet            raw OHLCV (unadjusted): open/high/low/close/pre_close/vol/amount
+  adj_factor/{ts_code}.parquet       split/merge adjustment factor (for qfq/hfq)
+  daily_basic/{ts_code}.parquet      PE/PB/PS/turnover/total_mv/circ_mv/total_share/float_share/...
+  dividend/{ts_code}.parquet         cash + stock dividends and split ratios
+hk/
+  index_global/HSI.parquet           index value series
+  index_global/HSTECH.parquet
+  constituents.parquet               current-snapshot HSI/HSTECH membership (ts_code, index, name)
+  daily/{YYYY}/{YYYYMMDD}.parquet       raw HK OHLCV (unadjusted), whole market per date
+  adj_factor/{YYYY}/{YYYYMMDD}.parquet  cum_adjfactor + close_price, whole market per date
+  daily_adj/{YYYY}/{YYYYMMDD}.parquet   total_mv/free_mv/total_share/turnover_ratio per date
+logs/
+  failures_*.txt                     per-step symbol failures (if any)
+</code></pre>
+<p>Files are zstd-compressed parquet (project convention). Columns are the <strong>raw
+Tushare fields</strong>, unmodified, for fidelity — adjustment/normalization happens
+downstream in the Assay ingest layer, not here.</p>
+<h3 id="why-cn-is-sharded-per-symbol-and-hk-per-date">Why CN is sharded per symbol and HK per date</h3>
+<p>CN membership is known up front (<code>index_weight</code>), so the downloader can iterate a
+symbol list. HK has <strong>no membership API at all</strong>, so there is no list to iterate:
+the tradable universe has to be discovered from whole-market by-date responses.
+Storing those responses as-is costs one API call per trading day per endpoint
+(~4,100 days x 3 = ~12,300 calls for 2010→today) and yields a mirror that is
+<strong>survivorship-free by construction</strong> — a name that delisted in 2014 is still in
+every file up to its last trading day.</p>
+<p>It also makes resume and incremental update the same code path: a date whose file
+exists is skipped, so re-running only fetches the new tail.</p>
+<h2 id="adjustment-splits-dividends-merges">Adjustment (splits / dividends / merges)</h2>
+<p>A-share prices in <code>cn/daily</code> are <strong>unadjusted</strong>. To build forward/back-adjusted
+series, combine them with <code>cn/adj_factor</code> (Tushare's cumulative factor) or derive
+events from <code>cn/dividend</code> (<code>stk_div</code>, <code>stk_bo_rate</code>, <code>stk_co_rate</code> for
+splits/bonus, <code>cash_div</code> for cash). This matches Assay's <code>adj_events</code> model,
+which recomputes the cumulative factor from primitive events rather than trusting
+a provider's cumulative number.</p>
+<h2 id="hk-corporate-actions">HK corporate actions</h2>
+<p>Tushare gives HK <strong>no dividend or split records</strong> — only a cumulative
+<code>hk_adjfactor</code>. The ingest layer therefore reconstructs events from its steps:
+where the factor moves from <code>f_prev</code> to <code>f</code>, the total price ratio is
+<code>r = f / f_prev</code>, and prices strictly before that date scale by <code>1 / r</code>.</p>
+<p>Two vendor artifacts make a naive reading of the factor wrong, so each step is
+cross-checked against <code>hk_daily.pre_close</code> (which is restated onto the
+post-action basis on an action day) and dropped unless the two agree within 1%:</p>
+<ul>
+<li>the factor is occasionally <strong>re-anchored</strong> on a date with no corporate action,
+which would otherwise fabricate a double-digit dividend;</li>
+<li><code>pre_close</code> itself <strong>drifts a tick</strong> off the prior close on sub-HK$1 names, so
+it is used only as a corroborating witness, never for the magnitude.</li>
+</ul>
+<p>Surviving steps are attributed to a share change (<code>split_ratio = r</code>) when the
+factor fell, when <code>hk/daily_adj</code>'s share count moved materially, <strong>or when that
+share count is unavailable</strong>; only a step whose share count is known and flat
+becomes a cash distribution of <code>close_prev * (1 - 1/r)</code>.</p>
+<p>Defaulting to a share event is the safe way to be wrong. The total-return series
+is exact under either attribution, but <code>adj=&quot;split&quot;</code> is the <em>default</em> read basis
+(<code>AssayConfig.default_adj</code>), and misreading a 2-for-1 split as a dividend would
+book half the share price as cash and leave the raw split gap in the split-only
+panel — every factor would then read a fabricated -50% return. The opposite error
+merely over-adjusts the split-only view by a dividend. The ingester logs a warning
+counting any steps it could not attribute from share data.</p>
+<p>Two hard preconditions follow from <code>adj_events</code> being an upsert-only store — a
+bad event cannot be withdrawn by a later run, only by deleting the store:</p>
+<ul>
+<li><code>hk/daily</code> <strong>must</strong> be present or no events are written at all (without
+<code>pre_close</code> there is nothing to corroborate against, and a vendor re-anchor
+would become a permanent double-digit phantom dividend);</li>
+<li>an incomplete <code>hk/daily_adj</code> degrades the split/total distinction but never
+fabricates a payout.</li>
+</ul>
+<p>Note that <code>hk_daily_adj</code>'s own <code>close</code>/<code>adj_factor</code> columns are <em>not</em> a usable
+adjusted series: they do not compose across share consolidations. Use
+<code>hk_adjfactor</code>, whose <code>close_price</code> reconciles exactly with <code>hk_daily.close</code>.</p>
+<p>A consolidation is normally executed while the stock is <strong>halted</strong>, so the steps
+with the largest ratios are exactly the ones with no <code>hk_daily</code> bar to witness
+them. Those are corroborated against the factor feed's own restated <code>close_price</code>
+instead, and accepted only when the ratio is extreme enough (≥2x either way) to be
+unambiguously a share change — a near-1 ratio on a non-trading day cannot be told
+apart from a re-anchor, and skipping a small dividend is a 2% error where missing
+a consolidation is a 40x one.</p>
+<h3 id="measured-accuracy">Measured accuracy</h3>
+<p>Against the exchange's own daily returns (<code>close / pre_close</code>), over the 487 names
+that have ever been in HK100, 2010-2026, 1.45M bars:</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>deviation</th>
+<th>bars</th>
+<th>share</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>&gt; 0.1%</td>
+<td>1,892</td>
+<td>0.13%</td>
+</tr>
+<tr>
+<td>&gt; 1%</td>
+<td>1,117</td>
+<td>0.077%</td>
+</tr>
+<tr>
+<td>&gt; 20%</td>
+<td>23</td>
+<td>0.0016%</td>
+</tr>
+</tbody>
+</table></div>
+<p>Restricted to a recent month's 300 most-traded names, <strong>0 mismatches</strong> (max 6e-05).</p>
+<p>The 23 worst are split roughly evenly between two causes, both inherent to the
+vendor feed rather than to the reconstruction:</p>
+<ul>
+<li><strong><code>pre_close</code> is simply wrong</strong> on some thin days (e.g. <code>01063.HK</code> reported a
+HK$0.01 prior close for a stock trading at HK$0.22). Here the reconstructed
+series is the correct one and the <em>reference</em> is the bad number.</li>
+<li><strong><code>cum_adjfactor</code> misses an action that <code>pre_close</code> did record</strong> — spin-offs in
+particular (e.g. <code>00004.HK</code>'s November 2017 demerger). Because events are
+sourced from factor steps, an action absent from the factor feed is absent from
+<code>adj_events</code> too, leaving the raw gap. Sourcing events from <code>pre_close</code>
+restatements as well would close this, and is the obvious next improvement.</li>
+</ul>
+<p>Neither residual is material to a ranked factor (the default <code>signal_transform</code>
+is <code>rank</code>), but both matter to anything that consumes raw returns.</p>
+<h2 id="known-limitations">Known limitations</h2>
+<ol>
+<li>
+<p><strong>HK index membership is a current snapshot, not history.</strong> Tushare exposes
+<strong>no</strong> index-membership interface for HSI or Hang Seng TECH
+(<code>index_member</code> / <code>index_basic market=HK</code> return nothing). Those two universes
+are therefore a single <strong>current</strong> constituent list vendored in
+<code>src/assay/data/tushare/constituents.py</code> (captured 2026-06-27), and backtests
+over them are <strong>survivorship-biased</strong>. Prefer <strong>HK100</strong>, which the ingest layer
+derives point-in-time from realised turnover (see
+<a href="/doc/guide/multi-market">Multi-market</a>).</p>
+</li>
+<li>
+<p><strong>No HK industry classification.</strong> <code>hk_basic</code> carries no industry field and
+Tushare has no HK equivalent of the A-share classification, so no
+<code>security_groups</code> store is written for <code>market=HK</code>. Sector neutralization is
+honestly unavailable there rather than silently a no-op.</p>
+</li>
+<li>
+<p><strong>Hang Seng TECH index code.</strong> On <code>index_global</code> the Hang Seng TECH value
+series is <code>HKTECH</code> (not <code>HSTECH</code>, which returns nothing). The friendly name
+<code>HSTECH</code> is used for the on-disk file and constituent list.</p>
+</li>
+<li>
+<p><strong>HK prices are HKD only.</strong> No FX book exists, so a HK backtest's NAV is in
+HKD and is not comparable to a US or CN run without converting outside Assay.</p>
+</li>
+</ol>

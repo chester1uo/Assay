@@ -1,0 +1,221 @@
+<h1 class="doc-title">Assay — Portfolio Backtest Design</h1>
+<p><strong>Version:</strong> 0.1 · Draft → <strong>Implemented</strong> (market-agnostic core)
+<strong>Scope:</strong> Factor-driven portfolio simulation with full A-share constraint support
+<strong>Depends on:</strong> Assay FactorEngine, DataStore PIT layer, evaluator</p>
+<blockquote>
+<p><strong>Implementation status (2026-06): ✅ implemented</strong> at <a href="https://github.com/QFinVerse/Assay/tree/main/src/assay/portfolio" target="_blank" rel="noopener noreferrer"><code>src/assay/portfolio/</code></a>
+(config, report, signal, rebalance, weights, constraints, costs, execution, accounting,
+metrics, backtester) and wired into <code>AssayService.backtest_portfolio</code>, the SDK
+(<code>assay.backtest_portfolio</code>), REST <code>POST /v1/portfolio/backtest</code>, and CLI <code>assay portfolio</code>.
+745+ tests green; a real NASDAQ-100 backtest runs end-to-end (see <a href="/doc/guide/portfolio-backtest">the usage guide</a>).</p>
+<p><strong>Grounded to reality.</strong> The market-agnostic core runs today on the only data we have —
+<strong>US equities (NASDAQ-100, OHLCV)</strong>. The A-share <em>price-mechanical</em> rules (T+1 settlement,
+price-limit blocking, the stamp-duty/commission/transfer-fee cost model) are <strong>config that
+activates when its inputs are supplied</strong>. The A-share <em>data-dependent</em> filters (ST filter,
+suspension handling, index-reconstitution avoidance, northbound flow, sector-neutral) are
+scaffolded as optional inputs that <strong>no-op gracefully</strong> because that data is not in the
+store. The benchmark is an <strong>equal-weight-universe proxy</strong> (Assay has no index price series).
+Status legend: ✅ implemented · 🔶 active only with the right inputs · 📋 needs data we lack.</p>
+</blockquote>
+<hr />
+<h2 id="1-overview">1. Overview</h2>
+<p>Portfolio backtesting answers a question IC analysis cannot: <em>given a factor signal, real
+trading constraints, and market costs, what net return is achievable?</em> The module consumes a
+factor <strong>expression</strong> (re-evaluated to a <code>(T, N)</code> matrix) and simulates position-taking,
+rebalancing, cost-charging, and mark-to-market over the evaluation period, emitting a
+structured <code>PortfolioReport</code>.</p>
+<h3 id="1-1-pipeline">1.1 Pipeline</h3>
+<pre><code>factor expression
+    │  evaluate -&gt; (T, N) factor matrix + close/open prices
+    ▼
+UniverseFilter        eligible = finite factor &amp; finite price (&amp; tradable mask)   ✅
+    ▼
+SignalProcessor       winsorize · neutralize · normalize (rank/zscore/raw)         ✅
+    ▼
+RebalanceScheduler    calendar · threshold · signal-autocorr                       ✅
+    ▼
+WeightConstructor     equal · signal_prop · quantile · mean-variance · risk-parity ✅
+    ▼
+ConstraintApplicator  position/count caps · turnover cap · gross/net · sector-neut ✅ / 🔶
+    ▼
+ExecutionSimulator    slippage · ADV cap · price limits · T+1 settlement           ✅ / 🔶
+    ▼
+PortfolioAccountant   weight drift · daily MTM NAV · costs · trade/position log    ✅
+    ▼
+PortfolioReport       Sharpe · drawdown · turnover · cost drag · benchmark · A-share ✅
+</code></pre>
+<p>The optimization rebalancer uses <strong>scipy</strong> (<code>scipy.optimize.minimize</code>, SLSQP) and a numpy
+Ledoit-Wolf shrinkage — <code>cvxpy</code>/<code>scikit-learn</code> are intentionally <em>not</em> dependencies.</p>
+<hr />
+<h2 id="2-configuration">2. Configuration</h2>
+<p>All parameters live on one <code>PortfolioBacktestConfig</code> (72 fields). <code>PortfolioBacktestConfig.preset('US'|'A'|'HK')</code>
+applies the market table (§6) cost/limit defaults. Fields marked 🔶 are A-share price-mechanics
+(active with the right inputs); 📋 need A-share data absent from the store.</p>
+<p><strong>Evaluation period</strong> — <code>period_start</code>, <code>period_end</code>, <code>oos_split_date</code>, <code>warmup_days</code></p>
+<p><strong>Universe &amp; market</strong> — <code>universe</code> (default <code>NASDAQ100</code>), <code>market</code> (default <code>US</code>),
+<code>custom_symbols</code>, <code>as_of_date</code>, <code>include_delisted</code></p>
+<p><strong>Rebalance</strong> — <code>rebalance_type</code> (daily/weekly/monthly/quarterly/threshold/signal),
+<code>rebalance_day</code>, <code>threshold_rank_shift</code>, <code>threshold_weight_drift</code>, <code>signal_autocorr_floor</code>,
+<code>min_rebalance_interval</code>, <code>execution_offset_days</code> (≥1; 0 is look-ahead bias)</p>
+<p><strong>Weight construction</strong> — <code>weight_method</code> (equal/signal_prop/mv/risk_parity/quintile/decile/bl),
+<code>long_short</code>, <code>gross_exposure</code>, <code>net_exposure</code>, <code>signal_transform</code>, <code>quintile_long_n</code>,
+<code>quintile_short_n</code>, <code>mv_risk_aversion</code>, <code>cov_window</code>, <code>cov_method</code>, <code>bl_tau</code></p>
+<p><strong>Constraints</strong> — <code>max_single_weight</code>, <code>min_single_weight</code>, <code>max_sector_weight</code> 📋,
+<code>sector_neutral</code> 📋, <code>market_neutral</code>, <code>max_turnover_per_period</code>, <code>max_annual_turnover</code>,
+<code>min_stock_count</code>, <code>max_stock_count</code>, <code>benchmark_tracking_err</code>, <code>capacity_adv_limit</code></p>
+<p><strong>A-share (§2.6)</strong> — price-mechanical 🔶: <code>t_plus_1</code>, <code>price_limit_pct</code>, <code>star_chinext_limit</code>,
+<code>enforce_limit_price</code>, <code>stamp_duty_rate</code>, <code>commission_rate</code>, <code>commission_min</code>,
+<code>transfer_fee_rate</code>; data-dependent 📋: <code>st_filter</code>, <code>new_listing_lockout_days</code>/<code>ipo_lockout_days</code>,
+<code>suspend_handling</code>, <code>rebalance_around_index</code>, <code>inclusion_anticipation</code>, <code>northbound_flow_filter</code>,
+<code>sz_sh_connect_only</code></p>
+<p><strong>Execution</strong> — <code>execution_price</code> (next_open/next_close/vwap/arrival), <code>slippage_model</code>
+(sqrt/linear/zero/almgren_chriss), <code>slippage_k</code>, <code>adv_window</code>, <code>max_adv_fraction</code>,
+<code>partial_fill_handling</code> (defer/cancel/force), <code>include_bid_ask</code></p>
+<p><strong>Benchmark &amp; attribution</strong> — <code>benchmark</code> (index→equal-weight proxy/cash/custom/none),
+<code>benchmark_symbol</code>, <code>risk_free_rate</code>, <code>attribution_model</code>, <code>attribution_factors</code></p>
+<p><strong>Output</strong> — <code>output_frequency</code>, <code>save_trade_log</code>, <code>save_position_log</code>, <code>compute_attribution</code>,
+<code>bootstrap_sharpe</code>, <code>n_bootstrap</code></p>
+<hr />
+<h2 id="3-rebalance-algorithms">3. Rebalance algorithms</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Type</th>
+<th>When to use</th>
+<th>Typical annual turnover</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>daily</code></td>
+<td>fast-decay factors (half-life &lt; 5d)</td>
+<td>400–1200%</td>
+</tr>
+<tr>
+<td><code>weekly</code></td>
+<td>half-life 5–20d (momentum / reversal)</td>
+<td>100–400%</td>
+</tr>
+<tr>
+<td><code>monthly</code></td>
+<td>half-life 20–60d (most fundamental/quality)</td>
+<td>50–150%</td>
+</tr>
+<tr>
+<td><code>quarterly</code></td>
+<td>half-life &gt; 60d (value, balance sheet)</td>
+<td>20–60%</td>
+</tr>
+<tr>
+<td><code>threshold</code></td>
+<td>stable factor; rebalance on rank-shift or weight-drift</td>
+<td>varies</td>
+</tr>
+<tr>
+<td><code>signal</code></td>
+<td>rebalance when factor rank-autocorr drops below a floor</td>
+<td>varies</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>min_rebalance_interval</code> is enforced for every type. <em>Size the rebalance frequency to the
+factor's half-life, not to the maximum technically possible.</em></p>
+<hr />
+<h2 id="4-performance-metrics">4. Performance metrics</h2>
+<p><strong>Returns</strong> — total, annualized (×252/T), excess (vs benchmark), gross (pre-cost), net.
+<strong>Risk-adjusted</strong> — Sharpe, Sortino, Calmar, information ratio, max drawdown (+start/end/recovery),
+beta, CAPM alpha, tracking error.
+<strong>Turnover &amp; cost</strong> — one-way / annual turnover, cost drag (gross − net), implied avg holding days.
+<strong>A-share (<code>market='A'</code>)</strong> — limit-hit rate, forced-hold ratio (T+1), suspension impact,
+ST-exposure days, index-recon alpha, northbound-flow correlation. <em>(Populated only where the
+underlying inputs exist; on US data only limit-hit/forced-hold are meaningful and are inert.)</em></p>
+<p>All annualization uses 252 trading days.</p>
+<hr />
+<h2 id="5-portfolioreport-schema">5. PortfolioReport schema</h2>
+<p>Mirrors <code>FactorReport</code>: machine-readable JSON for agent consumption. Identity (<code>run_id</code>
+= sha256[:12] of factor_id + config hash, <code>factor_id</code>, <code>config</code>); period (<code>period_start/end</code>,
+<code>n_trading_days</code>, <code>n_rebalances</code>); returns (<code>total/annual/gross/excess_return</code>); risk
+(<code>sharpe</code>, <code>sortino</code>, <code>calmar</code>, <code>information_ratio</code>, <code>max_drawdown</code> + <code>_start</code>/<code>_end</code>/
+<code>drawdown_recovery_days</code>, <code>beta</code>, <code>alpha_capm</code>, <code>tracking_error</code>); cost (<code>annual_turnover</code>,
+<code>cost_drag</code>, <code>avg_holding_days</code>); detail (<code>nav_series</code>, <code>nav_dates</code>, <code>benchmark_series</code>,
+<code>monthly_returns</code>, <code>trade_log</code>, <code>position_log</code>, <code>attribution</code>, <code>a_share_metrics</code>); provenance
+(<code>lineage.{data_snapshot, eval_timestamp, adj_version}</code>). <code>to_dict()</code>/<code>to_json()</code> are JSON-safe
+(NaN→None); <code>from_dict()</code> round-trips.</p>
+<hr />
+<h2 id="6-market-comparison">6. Market comparison</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Parameter</th>
+<th>A-share (SSE/SZSE)</th>
+<th>US (NYSE/NASDAQ)</th>
+<th>HK (HKEX)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Settlement</td>
+<td>T+1</td>
+<td>T+2</td>
+<td>T+2</td>
+</tr>
+<tr>
+<td>Price limits</td>
+<td>±10% (main), ±20% (STAR)</td>
+<td>none</td>
+<td>none</td>
+</tr>
+<tr>
+<td>Stamp duty</td>
+<td>0.10% sell</td>
+<td>0%</td>
+<td>0.13% both</td>
+</tr>
+<tr>
+<td>Commission</td>
+<td>0.03% both, min ¥5</td>
+<td>0.01–0.05%</td>
+<td>0.03–0.05%</td>
+</tr>
+<tr>
+<td>Transfer fee</td>
+<td>0.002% (SSE only)</td>
+<td>0%</td>
+<td>0.003%</td>
+</tr>
+<tr>
+<td>Index rebalance</td>
+<td>semiannual (Jun/Dec)</td>
+<td>quarterly</td>
+<td>quarterly</td>
+</tr>
+<tr>
+<td>Sector classification</td>
+<td>CSRC</td>
+<td>GICS</td>
+<td>GICS / Hang Seng</td>
+</tr>
+<tr>
+<td>Market impact <code>k</code></td>
+<td>0.20</td>
+<td>0.10</td>
+<td>0.15</td>
+</tr>
+</tbody>
+</table></div>
+<p>Only the <strong>US</strong> column is exercised by the current data. A/HK presets are fully specified and
+activate when the corresponding market data is ingested.</p>
+<hr />
+<h2 id="7-correctness-notes">7. Correctness notes</h2>
+<ul>
+<li><strong>Survivorship bias</strong> — the download universe is the PIT union over the range
+(de-listed/removed names included); never use today's composition for a historical backtest.</li>
+<li><strong>Corporate-action alignment</strong> — the <code>adj_factor</code> is versioned and queried as-of the backtest
+date. (The current dataset has no <code>adj_events</code>, so a few real splits survive unadjusted — see
+the <a href="/doc/guide/portfolio-backtest">usage guide</a> caveats; backfill corp-actions to fix.)</li>
+<li><strong>Cost = rate × notional</strong> — the cost model returns a <em>rate</em>; the executor multiplies by the
+traded weight fraction. (A regression of this exact bug was caught and fixed.)</li>
+</ul>
+<hr />
+<p><em>The original Word source is kept alongside this file as <code>portfolio-backtest.docx</code>.</em>
+<em>— Assay · Portfolio Backtest Design · AlphaBench Project —</em></p>

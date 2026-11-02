@@ -44,7 +44,6 @@ import * as combination from "./pages/combination.js";
 import * as portfolio from "./pages/portfolio.js";
 import * as chart from "./pages/chart.js";
 import * as dataManager from "./pages/data.js";
-import * as docs from "./pages/docs.js";
 
 const appEl = document.getElementById("app");
 
@@ -75,7 +74,7 @@ function makeCtx(extra = {}) {
 
 // --------------------------------------------------------------- i18n chrome ----
 
-// Localize the static shell (top nav, control labels, language button, status dot)
+// Localize the static shell (sidebar, context bar, language button, status)
 // from data-i18n* attributes. Called on boot and on every language switch.
 function localizeChrome() {
   document.querySelectorAll("[data-i18n]").forEach((node) => {
@@ -87,18 +86,49 @@ function localizeChrome() {
   document.querySelectorAll("[data-i18n-aria]").forEach((node) => {
     node.setAttribute("aria-label", t(node.getAttribute("data-i18n-aria")));
   });
-  document.title = "Assay — " + t("nav.factor");
+  highlightTab(router.current() || "/dashboard");
 }
 
-// ---------------------------------------------------------------- TopNav ----
+// --------------------------------------------------------------- sidebar ----
 
+// Marks the sidebar link of the current page and names the page in the context bar
+// and the browser tab.
 function highlightTab(path) {
-  const tabs = document.querySelectorAll(".topnav-tab");
-  tabs.forEach((tab) => {
-    const route = tab.getAttribute("data-route") || "";
-    const base = "#" + path.split("/").slice(0, 2).join("/"); // '#/factor/x' -> '#/factor'
-    tab.classList.toggle("is-active", route === base);
+  const base = "#" + path.split("/").slice(0, 2).join("/"); // '#/factor/x' -> '#/factor'
+  let label = "";
+  document.querySelectorAll(".sidenav-link[data-route]").forEach((link) => {
+    const on = link.getAttribute("data-route") === base;
+    link.classList.toggle("is-active", on);
+    if (on) {
+      link.setAttribute("aria-current", "page");
+      label = link.textContent.trim();
+    } else {
+      link.removeAttribute("aria-current");
+    }
   });
+  const title = document.getElementById("page-title");
+  if (title) title.textContent = label;
+  document.title = label ? `${label} · Assay` : "Assay · QFinVerse";
+  // Folded, the label is only in the tooltip.
+  document.querySelectorAll(".sidenav-link[data-route]").forEach((link) => {
+    link.title = document.documentElement.classList.contains("nav-folded") ? link.textContent.trim() : "";
+  });
+}
+
+const FOLD_KEY = "assay-sidebar-folded";
+
+function wireSidebar() {
+  const btn = document.getElementById("nav-fold");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    const folded = !document.documentElement.classList.contains("nav-folded");
+    document.documentElement.classList.toggle("nav-folded", folded);
+    try { localStorage.setItem(FOLD_KEY, folded ? "1" : "0"); } catch (_) {}
+    btn.title = t(folded ? "ctrl.expand" : "ctrl.collapse");
+    highlightTab(router.current() || "/dashboard");
+    window.dispatchEvent(new Event("resize"));   // charts re-measure their width
+  });
+  btn.title = t(document.documentElement.classList.contains("nav-folded") ? "ctrl.expand" : "ctrl.collapse");
 }
 
 const KNOWN_UNIVERSES = [
@@ -227,10 +257,12 @@ function wireTopNav() {
 async function refreshStatus() {
   const dot = document.getElementById("status-dot");
   if (!dot) return;
-  const setState = (cls, title) => {
-    dot.className = "status-dot status-dot--" + cls;
+  const text = document.getElementById("status-text");
+  const setState = (cls, title, short) => {
+    dot.className = "status-pill status-pill--" + cls;
     dot.title = t("status.title") + ": " + title;
     dot.setAttribute("aria-label", t("status.title") + ": " + title);
+    if (text) text.textContent = short || t("status." + (cls === "fresh" ? "online" : cls === "stale" ? "stale" : cls === "error" ? "offline" : "unknown"));
   };
   try {
     const status = await api.systemStatus();
@@ -242,6 +274,7 @@ async function refreshStatus() {
       store.applyDataDefaultPeriod(data.first_date, data.last_date);
     }
     const lastSync = data.last_sync || data.lastSync || null;
+    const asOf = data.last_date ? `${t("status.asOf")} ${data.last_date}` : "";
     const since = lastSync ? ` — ${t("status.lastSync")} ${lastSync}` : "";
     if (status && (status.degraded || status.status === "degraded")) {
       setState("stale", t("status.degraded") + since);
@@ -253,24 +286,32 @@ async function refreshStatus() {
         setState("stale", t("status.stale") + since);
         return;
       }
-      setState("fresh", t("status.fresh") + since);
+      setState("fresh", t("status.fresh") + since, asOf);
       return;
     }
-    setState("fresh", t("status.online"));
+    setState("fresh", t("status.online"), asOf);
   } catch (err) {
     setState("error", t("status.error"));
   }
 }
 
+// "Build <commit>" of the running deployment (as in QFinVerse); the tooltip adds the
+// engine version and when it was deployed.
 async function showVersion() {
   const node = document.getElementById("app-version");
   if (!node) return;
   try {
     const h = await api.health();
-    const v = h && h.engine_version;
-    if (v) node.textContent = "v" + v;
+    const build = (h && h.build) || {};
+    node.textContent = `Build ${build.id || "—"}`;
+    node.title = [
+      `${t("build.engine")}: v${h.engine_version || "—"}`,
+      `${t("build.commit")}: ${build.commit || "—"}`,
+      build.deployed_at ? `${t("build.deployed")}: ${build.deployed_at}` : "",
+    ].filter(Boolean).join("\n");
   } catch (_) {
-    /* health unreachable — leave the badge blank */
+    node.textContent = "Build —";
+    node.title = t("build.unavailable");
   }
 }
 
@@ -313,7 +354,7 @@ function registerRoutes() {
     .route("#/portfolio/:id", ({ params, path }) => mount(portfolio, params, path))
     .route("#/chart", ({ path }) => mount(chart, {}, path))
     .route("#/data", ({ path }) => mount(dataManager, {}, path))
-    .route("#/docs", ({ path }) => mount(docs, {}, path))
+    .route("#/docs", () => { location.href = "/doc/"; })
     .notFound(({ path }) => mount(dashboard, {}, path));
 }
 
@@ -345,8 +386,10 @@ function currentTheme() {
 }
 
 function refreshThemeLabel() {
-  const btn = document.getElementById("theme-toggle");
-  if (btn) btn.textContent = t("ctrl.theme." + currentTheme());
+  const theme = currentTheme();
+  document.querySelectorAll("#theme-switch button").forEach((b) => {
+    b.setAttribute("aria-checked", String(b.dataset.theme === theme));
+  });
 }
 
 function applyTheme(theme) {
@@ -357,13 +400,15 @@ function applyTheme(theme) {
 
 function wireThemeToggle() {
   applyTheme(currentTheme());
-  const btn = document.getElementById("theme-toggle");
-  if (btn) btn.addEventListener("click", () => {
-    const next = THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length];
+  document.querySelectorAll("#theme-switch button").forEach((b) => b.addEventListener("click", () => {
+    const next = b.dataset.theme;
+    if (next === currentTheme()) return;
     try { localStorage.setItem(THEME_KEY, next); } catch (_) {}
+    const wasDark = document.documentElement.classList.contains("dark");
     applyTheme(next);
-    location.reload();            // charts read their colours once (palette.js)
-  });
+    // charts read their colours once (palette.js), so a real switch reloads
+    if (document.documentElement.classList.contains("dark") !== wasDark) location.reload();
+  }));
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (currentTheme() === "system") location.reload();
   });
@@ -405,6 +450,7 @@ let lastUniverses = [];
 function boot() {
   localizeChrome();
   wireTopNav();
+  wireSidebar();
   wireLangToggle();
   wireThemeToggle();
   registerRoutes();
