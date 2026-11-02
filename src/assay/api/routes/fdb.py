@@ -36,8 +36,7 @@ def submit(request: Request, body: dict = Body(...), _k=Depends(get_api_key)):
     if len(exprs) > 5000:
         raise HTTPException(413, "at most 5000 expressions per submit")
     svc, owner = _svc(), _owner(request)
-    left = svc.budget(owner)["left_seconds"]
-    if left <= 0:
+    if svc.over_budget(owner):
         raise HTTPException(429, "daily compute budget used up; already-scored factors stay queryable")
     if not body.get("universe") or not body.get("start"):
         raise HTTPException(422, "universe and start are required")

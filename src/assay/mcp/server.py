@@ -556,7 +556,7 @@ def fdb_submit(exprs: list[str], universe: str, start: str, end: str | None = No
                ctx: Context | None = None) -> dict[str, Any]:
     def run():
         svc, owner = _fdb(), _owner(ctx)
-        if svc.budget(owner)["left_seconds"] <= 0:
+        if svc.over_budget(owner):
             return {"error": {"code": "BUDGET", "message": "daily compute budget used up"}}
         return svc.submit(owner, exprs[:5000], universe=universe, start=start, end=end,
                           horizons=horizons or (1, 5, 10, 20), execution=execution,

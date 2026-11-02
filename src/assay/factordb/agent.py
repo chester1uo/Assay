@@ -82,7 +82,7 @@ def _ranks(x: np.ndarray) -> np.ndarray:
 
 
 class FactorService:
-    def __init__(self, db: FactorDB, registry: Registry, *, daily_budget_s: float = 3600.0, ades=None):
+    def __init__(self, db: FactorDB, registry: Registry, *, daily_budget_s: float = 0.0, ades=None):
         self.db, self.reg, self.ades = db, registry, ades
         self.daily_budget_s = daily_budget_s
         self._queues: "OrderedDict[str, deque]" = OrderedDict()   # owner -> deque of (job_id, exprs)
@@ -355,9 +355,16 @@ class FactorService:
                 "mean": _f(np.nanmean(row)) if len(ok) else None}
 
     def budget(self, owner: str | None) -> dict:
+        """Compute used today; ``limit_seconds`` / ``left_seconds`` are ``None`` when uncapped."""
         u = self.reg.usage_today(owner)
+        if not self.daily_budget_s or self.daily_budget_s <= 0:
+            return {**u, "limit_seconds": None, "left_seconds": None}
         return {**u, "limit_seconds": self.daily_budget_s,
                 "left_seconds": max(0.0, self.daily_budget_s - u["seconds"])}
+
+    def over_budget(self, owner: str | None) -> bool:
+        left = self.budget(owner)["left_seconds"]
+        return left is not None and left <= 0
 
     @staticmethod
     def operators() -> dict:

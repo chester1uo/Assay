@@ -124,6 +124,9 @@ def test_agent_submit_dedup_and_query(tmp_path, db):
     rows = svc.query(spec=out["spec"])["factors"]
     assert {r["expr"] for r in rows} >= {"ts_delta(close, 2)"}
     assert svc.budget("ann")["seconds"] > 0
+    assert svc.budget("ann")["left_seconds"] is None and not svc.over_budget("ann")   # no cap by default
+    svc.daily_budget_s = 1e-9                                                         # an explicit cap still works
+    assert svc.over_budget("ann") and svc.budget("ann")["left_seconds"] == 0.0
 
 
 def test_column_chunk_fits_the_worker_memory():

@@ -9,7 +9,8 @@ FactorDB is on when ``ASSAY_FACTORDB_DIR`` and ``ASSAY_QFV_PANEL_DIR`` are both 
 ``ASSAY_FACTORDB_WORKERS``     compute processes (default: cores - 1)
 ``ASSAY_FACTORDB_DOMAIN``      universes whose members make up the grid (default
                                ``TOP3000,SP500,NASDAQ100``)
-``ASSAY_FACTORDB_BUDGET_S``    compute seconds per owner per day (default 3600)
+``ASSAY_FACTORDB_BUDGET_S``    optional cap on compute seconds per owner per day (default 0:
+                               no cap; owners are interleaved fairly either way)
 ``ASSAY_ADES``                 ``1``: this process is the ADES controller; slices go to the
                                task queue (``<dir>/ades.sqlite3``) for remote workers
 ``ASSAY_ADES_LEASE_S``         seconds a worker holds a task between heartbeats (default 120)
@@ -58,6 +59,6 @@ def get() -> FactorService:
 
                 ades = TaskQueue(root / "ades.sqlite3", lease_s=float(os.environ.get("ASSAY_ADES_LEASE_S", "120")))
             _service = FactorService(db, Registry(root / "registry.sqlite3"),
-                                     daily_budget_s=float(os.environ.get("ASSAY_FACTORDB_BUDGET_S", "3600")),
+                                     daily_budget_s=float(os.environ.get("ASSAY_FACTORDB_BUDGET_S") or 0),
                                      ades=ades)
         return _service
