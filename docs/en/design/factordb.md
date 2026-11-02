@@ -131,7 +131,7 @@ Designed for many agents sharing one server:
 | Small, stable payloads | top-k tables with fixed keys; values only on request, sampled |
 | Actionable errors | every rejection carries a code, the location in the expression and a hint |
 | Novelty built in | correlation against the library computed from stored values |
-| Fair use | per-owner job queue and compute budget; one agent cannot starve the rest |
+| Fair use | per-owner job queue served round-robin, so one agent cannot starve the rest; an optional daily compute cap (`ASSAY_FACTORDB_BUDGET_S`, off by default) |
 | Provenance | every factor records who proposed it, when, from which parent factors, with tags |
 
 ### 4.1 MCP tools (v2)
