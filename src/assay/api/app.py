@@ -210,7 +210,8 @@ def create_app() -> FastAPI:
     except Exception:  # pragma: no cover
         pass
 
-    app = FastAPI(title="Assay API", version=assay.__version__)
+    mcp_app, mcp_lifespan = _mcp_http()
+    app = FastAPI(title="Assay API", version=assay.__version__, lifespan=mcp_lifespan)
 
     # ASSAY_CORS_ORIGINS: comma-separated origins allowed to call the API from a
     # browser (default: any origin, without credentials).
@@ -228,7 +229,7 @@ def create_app() -> FastAPI:
     # Routers import `get_service` from this module, so import them here (after the
     # accessor + handlers are defined) to keep a clean one-way dependency.
     from assay.api.routes import (
-        account, admin, combination, data_admin, factor, legacy, library, market, portfolio,
+        account, admin, combination, data_admin, factor, fdb, legacy, library, market, portfolio,
         session, system,
     )
 
@@ -241,6 +242,7 @@ def create_app() -> FastAPI:
     app.include_router(portfolio.router, prefix="/v1/portfolio", tags=["Portfolio"])
     app.include_router(session.router, prefix="/v1/session", tags=["Session"])
     app.include_router(system.router, prefix="/v1/system", tags=["System"])
+    app.include_router(fdb.router, prefix="/v1/fdb", tags=["FactorDB"])
     # Unlinked operations console at GET /admin (also installs the request-log
     # middleware + WARNING-level log capture it renders). Reached by URL only.
     from fastapi import Depends
@@ -267,6 +269,8 @@ def create_app() -> FastAPI:
     # backend-only checkout) so importing the app never fails.
     static_dir = Path(__file__).resolve().parent / "static"
     _mount_doc_hub(app, static_dir / "doc")
+    if mcp_app is not None:
+        app.mount("/mcp", _McpAuth(mcp_app))
 
     @app.get("/login", include_in_schema=False)
     async def login_page():
@@ -278,6 +282,63 @@ def create_app() -> FastAPI:
         app.mount("/", _NoCacheStaticFiles(directory=static_dir, html=True), name="webui")
 
     return app
+
+
+def _mcp_http():
+    """The MCP server as a streamable-HTTP ASGI app for ``/mcp/`` (or ``(None, None)``).
+
+    Stateless (no per-client session state), so any worker can answer any call. The
+    host check of the MCP SDK is off: the app sits behind the reverse proxy and every
+    call is authenticated by :class:`_McpAuth`. ``ASSAY_MCP_HTTP=0`` turns it off."""
+    if os.environ.get("ASSAY_MCP_HTTP", "1") == "0":
+        return None, None
+    try:
+        from contextlib import asynccontextmanager
+
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        from assay.mcp.server import mcp
+    except Exception as exc:  # noqa: BLE001 — the API runs without the optional mcp extra
+        logger.info("MCP over HTTP is off (%s)", exc)
+        return None, None
+    mcp.settings.streamable_http_path = "/"
+    mcp.settings.stateless_http = True
+    mcp.settings.transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    asgi = mcp.streamable_http_app()
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        async with mcp.session_manager.run():
+            yield
+
+    return asgi, lifespan
+
+
+class _McpAuth:
+    """Authenticate ``/mcp/`` calls like the REST API (session cookie, personal or service key)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            from assay.api.auth import _presented, auth_enabled, resolve_user
+
+            request = Request(scope, receive)
+            user = None
+            if auth_enabled():
+                try:
+                    user = resolve_user(request, _presented(request.headers.get("x-api-key"),
+                                                            request.headers.get("authorization")))
+                except StarletteHTTPException:
+                    user = None
+                if user is None:
+                    resp = JSONResponse({"error": "sign in or send an API key (X-API-Key or Bearer)"}, status_code=401,
+                                        headers={"WWW-Authenticate": "Bearer"})
+                    await resp(scope, receive, send)
+                    return
+            scope.setdefault("state", {})["user"] = user
+        await self.app(scope, receive, send)
 
 
 def _mount_doc_hub(app: FastAPI, doc_dir: Path) -> None:
