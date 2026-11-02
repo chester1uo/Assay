@@ -88,34 +88,39 @@
    "headings": {
     "en": [
      {
+      "id": "use-the-hosted-site",
+      "text": "Use the hosted site",
+      "level": 2
+     },
+     {
+      "id": "run-it-yourself",
+      "text": "Run it yourself",
+      "level": 2
+     },
+     {
       "id": "1-install",
       "text": "1. Install",
-      "level": 2
+      "level": 3
      },
      {
-      "id": "2-configure-the-data-source-output-dir",
-      "text": "2. Configure the data source & output dir",
-      "level": 2
+      "id": "2-point-it-at-data",
+      "text": "2. Point it at data",
+      "level": 3
      },
      {
-      "id": "3-transfer-data",
-      "text": "3. Transfer data",
-      "level": 2
+      "id": "3-evaluate-a-factor",
+      "text": "3. Evaluate a factor",
+      "level": 3
      },
      {
-      "id": "4-evaluate-a-factor",
-      "text": "4. Evaluate a factor",
-      "level": 2
+      "id": "4-backtest-a-portfolio",
+      "text": "4. Backtest a portfolio",
+      "level": 3
      },
      {
-      "id": "5-run-a-portfolio-backtest",
-      "text": "5. Run a portfolio backtest",
-      "level": 2
-     },
-     {
-      "id": "6-start-the-surfaces",
-      "text": "6. Start the surfaces",
-      "level": 2
+      "id": "5-start-the-server",
+      "text": "5. Start the server",
+      "level": 3
      },
      {
       "id": "where-to-go-next",
@@ -125,43 +130,48 @@
     ],
     "zh": [
      {
+      "id": "使用线上站点",
+      "text": "使用线上站点",
+      "level": 2
+     },
+     {
+      "id": "自己部署",
+      "text": "自己部署",
+      "level": 2
+     },
+     {
       "id": "1-安装",
       "text": "1. 安装",
-      "level": 2
+      "level": 3
      },
      {
-      "id": "2-配置数据源与输出目录",
-      "text": "2. 配置数据源与输出目录",
-      "level": 2
+      "id": "2-配置数据",
+      "text": "2. 配置数据",
+      "level": 3
      },
      {
-      "id": "3-传输数据",
-      "text": "3. 传输数据",
-      "level": 2
+      "id": "3-评估一个因子",
+      "text": "3. 评估一个因子",
+      "level": 3
      },
      {
-      "id": "4-评估一个因子",
-      "text": "4. 评估一个因子",
-      "level": 2
+      "id": "4-组合回测",
+      "text": "4. 组合回测",
+      "level": 3
      },
      {
-      "id": "5-运行一次组合回测",
-      "text": "5. 运行一次组合回测",
-      "level": 2
+      "id": "5-启动服务",
+      "text": "5. 启动服务",
+      "level": 3
      },
      {
-      "id": "6-启动各个界面",
-      "text": "6. 启动各个界面",
-      "level": 2
-     },
-     {
-      "id": "接下来去哪",
-      "text": "接下来去哪",
+      "id": "接下来",
+      "text": "接下来",
       "level": 2
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "guide/webui": {
    "group": "start",
@@ -172,50 +182,50 @@
    "headings": {
     "en": [
      {
-      "id": "run",
-      "text": "Run",
+      "id": "layout",
+      "text": "Layout",
       "level": 2
      },
      {
-      "id": "screens",
-      "text": "Screens",
+      "id": "pages",
+      "text": "Pages",
       "level": 2
      },
      {
-      "id": "usage-tips",
-      "text": "Usage tips",
+      "id": "accounts",
+      "text": "Accounts",
       "level": 2
      },
      {
-      "id": "not-wired-no-backend",
-      "text": "Not wired (no backend)",
+      "id": "tips",
+      "text": "Tips",
       "level": 2
      }
     ],
     "zh": [
      {
-      "id": "运行",
-      "text": "运行",
+      "id": "布局",
+      "text": "布局",
       "level": 2
      },
      {
-      "id": "界面",
-      "text": "界面",
+      "id": "页面",
+      "text": "页面",
       "level": 2
      },
      {
-      "id": "使用技巧",
-      "text": "使用技巧",
+      "id": "账户",
+      "text": "账户",
       "level": 2
      },
      {
-      "id": "未接入-无后端",
-      "text": "未接入（无后端）",
+      "id": "提示",
+      "text": "提示",
       "level": 2
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "guide/cli": {
    "group": "start",
@@ -551,7 +561,7 @@
      }
     ]
    },
-   "updated": "2026-08-01"
+   "updated": "2026-11-02"
   },
   "guide/multi-market": {
    "group": "data",
@@ -1061,6 +1071,11 @@
       "level": 2
      },
      {
+      "id": "account-endpoints",
+      "text": "Account endpoints",
+      "level": 3
+     },
+     {
       "id": "endpoints",
       "text": "Endpoints",
       "level": 2
@@ -1098,6 +1113,11 @@
       "level": 2
      },
      {
+      "id": "账户接口",
+      "text": "账户接口",
+      "level": 3
+     },
+     {
       "id": "端点",
       "text": "端点",
       "level": 2
@@ -1129,7 +1149,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "guide/python-sdk": {
    "group": "api",
@@ -1267,7 +1287,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "design/architecture": {
    "group": "design",
@@ -1499,7 +1519,7 @@
      },
      {
       "id": "8-2-service-topology",
-      "text": "8.2  Service topology 📋",
+      "text": "8.2  Service topology",
       "level": 3
      },
      {
@@ -1736,7 +1756,7 @@
      },
      {
       "id": "8-2-服务拓扑",
-      "text": "8.2  服务拓扑 📋",
+      "text": "8.2  服务拓扑",
       "level": 3
      },
      {
@@ -1751,7 +1771,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "design/engineering": {
    "group": "design",
@@ -2255,7 +2275,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "design/portfolio-backtest": {
    "group": "design",
@@ -2349,7 +2369,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "design/minute-backtesting": {
    "group": "design",
@@ -3028,13 +3048,18 @@
       "level": 3
      },
      {
-      "id": "2-2-topnav-component",
-      "text": "2.2  TopNav component",
+      "id": "2-2-sidebar",
+      "text": "2.2  Sidebar",
       "level": 3
      },
      {
-      "id": "2-3-topnav-props-and-behaviour",
-      "text": "2.3  TopNav props and behaviour",
+      "id": "2-3-context-bar",
+      "text": "2.3  Context bar",
+      "level": 3
+     },
+     {
+      "id": "2-4-sign-in",
+      "text": "2.4  Sign-in",
       "level": 3
      },
      {
@@ -3285,8 +3310,8 @@
       "level": 2
      },
      {
-      "id": "2-全局外壳",
-      "text": "2. 全局外壳",
+      "id": "2-全局框架",
+      "text": "2. 全局框架",
       "level": 2
      },
      {
@@ -3295,13 +3320,18 @@
       "level": 3
      },
      {
-      "id": "2-2-topnav-组件",
-      "text": "2.2  TopNav 组件",
+      "id": "2-2-侧栏",
+      "text": "2.2  侧栏",
       "level": 3
      },
      {
-      "id": "2-3-topnav-属性与行为",
-      "text": "2.3  TopNav 属性与行为",
+      "id": "2-3-上下文栏",
+      "text": "2.3  上下文栏",
+      "level": 3
+     },
+     {
+      "id": "2-4-登录",
+      "text": "2.4  登录",
       "level": 3
      },
      {
@@ -3320,8 +3350,8 @@
       "level": 3
      },
      {
-      "id": "3-3-kpi-行",
-      "text": "3.3  KPI 行",
+      "id": "3-3-指标卡",
+      "text": "3.3  指标卡",
       "level": 3
      },
      {
@@ -3541,7 +3571,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "reports/alpha101": {
    "group": "reports",

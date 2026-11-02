@@ -131,29 +131,26 @@
 </table></div>
 <h3 id="2-2-data-flow">2.2  Data Flow</h3>
 <p>A single factor evaluation request traverses the following path:</p>
-<pre><code>User / Agent
-    │  factor_expr: str
-    ▼
-ExprParser          ← parses qlib or Python syntax into unified AST
-    │  AST: OpNode tree
-    ▼
-FactorEngine         ← checks L2 factor string cache
-    │  cache miss → walk AST, check L1 per-operator cache
-    ▼
-OperatorRegistry     ← executes uncached nodes via Polars / Numba
-    │  raw factor DataFrame (T × N)
-    ▼
-BatchFactorBT        ← aligns factor with ForwardReturns
-    │  aligned (factor, returns) pair
-    ▼
-ICAnalyzer           ← computes IC, RankIC, ICIR, decay (Numba parallel)
-    │
-    ▼
-FactorReport         ← assembles structured JSON result
-    │  FactorReport JSON
-    ▼
-User / Agent
-</code></pre>
+<figure class="doc-fig"><svg xmlns="http://www.w3.org/2000/svg" class="fig" viewBox="0 0 760 502" width="760" height="502" role="img" aria-label="Path of one factor evaluation"><style>
+.f-box{fill:var(--fig-box,#FFFFFF);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-group{fill:var(--fig-group,#F4F6FA);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-acc{fill:var(--fig-accent-bg,#E3F6F2);stroke:var(--fig-accent,#00A38B);stroke-width:1.2}
+.f-warm{fill:var(--fig-warm-bg,#FFF0E6);stroke:var(--fig-warm,#E8590C);stroke-width:1.2}
+.f-gold{fill:var(--fig-gold-bg,#FDF4DF);stroke:var(--fig-gold,#B7791F);stroke-width:1.2}
+.f-t{fill:var(--fig-text,#1A1D2E);font:600 13px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-h{fill:var(--fig-muted,#5A6477);font:600 10.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.f-s{fill:var(--fig-muted,#5A6477);font:400 11.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-m{fill:var(--fig-text,#1A1D2E);font:500 11.5px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ms{fill:var(--fig-muted,#5A6477);font:400 11px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ta{fill:var(--fig-accent,#00A38B);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tw{fill:var(--fig-warm,#E8590C);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tg{fill:var(--fig-gold,#B7791F);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-a{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4}
+.f-ad{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4;stroke-dasharray:4 3}
+.f-head{fill:var(--fig-arrow,#8A93A6)}
+.f-dot-ok{fill:var(--fig-accent,#00A38B)} .f-dot-part{fill:var(--fig-gold,#B7791F)} .f-dot-plan{fill:none;stroke:var(--fig-muted,#5A6477);stroke-width:1.2}
+@media (prefers-color-scheme:dark){svg.fig{--fig-box:#1F232E;--fig-line:#3A3F4C;--fig-group:#171B25;--fig-text:#D7DAE1;--fig-muted:#8A8F9C;--fig-arrow:#6E7484;--fig-accent:#00D6B3;--fig-accent-bg:#11302C;--fig-warm:#FF7A3D;--fig-warm-bg:#3A2418;--fig-gold:#E3B341;--fig-gold-bg:#352B14}}
+</style><rect x="150" y="20" width="220" height="40" rx="8" class="f-acc"/><text x="260" y="45" class="f-m" text-anchor="middle">User / Agent</text><text x="392" y="45" class="f-s" text-anchor="start">factor_expr: str</text><path d="M260,60 L260,84" class="f-a"/><path d="M260.0,84.0 L256.5,76.8 L263.5,76.8 Z" class="f-head"/><text x="130" y="77" class="f-ms" text-anchor="end">AST</text><rect x="150" y="86" width="220" height="40" rx="8" class="f-box"/><text x="260" y="111" class="f-m" text-anchor="middle">ExprParser</text><text x="392" y="111" class="f-s" text-anchor="start">qlib or Python syntax → one AST</text><path d="M260,126 L260,150" class="f-a"/><path d="M260.0,150.0 L256.5,142.8 L263.5,142.8 Z" class="f-head"/><text x="130" y="143" class="f-ms" text-anchor="end">cache miss</text><rect x="150" y="152" width="220" height="40" rx="8" class="f-box"/><text x="260" y="177" class="f-m" text-anchor="middle">FactorEngine</text><text x="392" y="177" class="f-s" text-anchor="start">L2 factor cache, then L1 operator cache</text><path d="M260,192 L260,216" class="f-a"/><path d="M260.0,216.0 L256.5,208.8 L263.5,208.8 Z" class="f-head"/><text x="130" y="209" class="f-ms" text-anchor="end">T × N matrix</text><rect x="150" y="218" width="220" height="40" rx="8" class="f-box"/><text x="260" y="243" class="f-m" text-anchor="middle">OperatorRegistry</text><text x="392" y="243" class="f-s" text-anchor="start">uncached nodes via Polars / Numba</text><path d="M260,258 L260,282" class="f-a"/><path d="M260.0,282.0 L256.5,274.8 L263.5,274.8 Z" class="f-head"/><text x="130" y="275" class="f-ms" text-anchor="end">(factor, returns)</text><rect x="150" y="284" width="220" height="40" rx="8" class="f-box"/><text x="260" y="309" class="f-m" text-anchor="middle">BatchFactorBT</text><text x="392" y="309" class="f-s" text-anchor="start">aligns the factor with forward returns</text><path d="M260,324 L260,348" class="f-a"/><path d="M260.0,348.0 L256.5,340.8 L263.5,340.8 Z" class="f-head"/><rect x="150" y="350" width="220" height="40" rx="8" class="f-box"/><text x="260" y="375" class="f-m" text-anchor="middle">ICAnalyzer</text><text x="392" y="375" class="f-s" text-anchor="start">IC, RankIC, ICIR, decay (Numba, parallel)</text><path d="M260,390 L260,414" class="f-a"/><path d="M260.0,414.0 L256.5,406.8 L263.5,406.8 Z" class="f-head"/><text x="130" y="407" class="f-ms" text-anchor="end">JSON</text><rect x="150" y="416" width="220" height="40" rx="8" class="f-acc"/><text x="260" y="441" class="f-m" text-anchor="middle">FactorReport</text><text x="392" y="441" class="f-s" text-anchor="start">structured result for the caller</text></svg></figure>
 <h3 id="2-3-key-design-decisions">2.3  Key Design Decisions</h3>
 <h4 id="strict-pit-enforcement">Strict PIT enforcement</h4>
 <p>All <code>DataStore</code> queries require an explicit <code>as_of_date</code> parameter. The store raises an error if called without one, making look-ahead bias a compile-time rather than runtime concern. Adjustment factors and universe membership are stored with both <code>event_time</code> and <code>knowledge_time</code> columns (bi-temporal model).</p>
@@ -171,18 +168,26 @@ User / Agent
 <h3 id="3-1-massive-integration-us-equities">3.1  Massive Integration (US Equities)</h3>
 <p>Phase 1 uses Massive as the primary data provider for US equities. Massive provides daily OHLCV, adjustment factors, corporate action events, and index constituent history. The integration layer normalizes Massive's delivery format into Assay's internal storage schema.</p>
 <h4 id="ingestion-pipeline">Ingestion pipeline</h4>
-<pre><code>MassiveConnector
-    ├── fetch_ohlcv(symbols, start, end)      → raw price DataFrame
-    ├── fetch_adj_events(symbols, start, end) → corporate action log
-    ├── fetch_universe(index, date)            → constituent snapshot
-    └── fetch_financials(symbols, as_of)      → PIT financial data
-
-DataIngester
-    ├── validate_schema()    ← reject malformed rows, log to quarantine
-    ├── deduplicate()        ← exact duplicate rows
-    ├── normalize_timezone() ← all timestamps to NYSE calendar
-    └── write_parquet()      ← append to DataStore partition
-</code></pre>
+<figure class="doc-fig"><svg xmlns="http://www.w3.org/2000/svg" class="fig" viewBox="0 0 760 260" width="760" height="260" role="img" aria-label="Ingestion: vendor connector to the Parquet store"><style>
+.f-box{fill:var(--fig-box,#FFFFFF);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-group{fill:var(--fig-group,#F4F6FA);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-acc{fill:var(--fig-accent-bg,#E3F6F2);stroke:var(--fig-accent,#00A38B);stroke-width:1.2}
+.f-warm{fill:var(--fig-warm-bg,#FFF0E6);stroke:var(--fig-warm,#E8590C);stroke-width:1.2}
+.f-gold{fill:var(--fig-gold-bg,#FDF4DF);stroke:var(--fig-gold,#B7791F);stroke-width:1.2}
+.f-t{fill:var(--fig-text,#1A1D2E);font:600 13px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-h{fill:var(--fig-muted,#5A6477);font:600 10.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.f-s{fill:var(--fig-muted,#5A6477);font:400 11.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-m{fill:var(--fig-text,#1A1D2E);font:500 11.5px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ms{fill:var(--fig-muted,#5A6477);font:400 11px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ta{fill:var(--fig-accent,#00A38B);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tw{fill:var(--fig-warm,#E8590C);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tg{fill:var(--fig-gold,#B7791F);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-a{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4}
+.f-ad{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4;stroke-dasharray:4 3}
+.f-head{fill:var(--fig-arrow,#8A93A6)}
+.f-dot-ok{fill:var(--fig-accent,#00A38B)} .f-dot-part{fill:var(--fig-gold,#B7791F)} .f-dot-plan{fill:none;stroke:var(--fig-muted,#5A6477);stroke-width:1.2}
+@media (prefers-color-scheme:dark){svg.fig{--fig-box:#1F232E;--fig-line:#3A3F4C;--fig-group:#171B25;--fig-text:#D7DAE1;--fig-muted:#8A8F9C;--fig-arrow:#6E7484;--fig-accent:#00D6B3;--fig-accent-bg:#11302C;--fig-warm:#FF7A3D;--fig-warm-bg:#3A2418;--fig-gold:#E3B341;--fig-gold-bg:#352B14}}
+</style><rect x="12" y="12" width="340" height="236" rx="10" class="f-group"/><text x="28" y="36" class="f-m" text-anchor="start">MassiveConnector</text><rect x="28" y="52" width="308" height="38" rx="8" class="f-box"/><text x="40" y="68" class="f-m" text-anchor="start">fetch_ohlcv()</text><text x="40" y="83" class="f-s" text-anchor="start">→ raw OHLCV frame</text><rect x="28" y="98" width="308" height="38" rx="8" class="f-box"/><text x="40" y="114" class="f-m" text-anchor="start">fetch_adj_events()</text><text x="40" y="129" class="f-s" text-anchor="start">→ corporate action log</text><rect x="28" y="144" width="308" height="38" rx="8" class="f-box"/><text x="40" y="160" class="f-m" text-anchor="start">fetch_universe()</text><text x="40" y="175" class="f-s" text-anchor="start">→ constituent snapshot</text><rect x="28" y="190" width="308" height="38" rx="8" class="f-box"/><text x="40" y="206" class="f-m" text-anchor="start">fetch_financials()</text><text x="40" y="221" class="f-s" text-anchor="start">→ point-in-time financials</text><path d="M352,130 L392,130" class="f-a"/><path d="M392.0,130.0 L384.8,133.5 L384.8,126.5 Z" class="f-head"/><rect x="394" y="12" width="220" height="236" rx="10" class="f-group"/><text x="410" y="36" class="f-m" text-anchor="start">DataIngester</text><rect x="410" y="52" width="188" height="38" rx="8" class="f-box"/><text x="422" y="68" class="f-m" text-anchor="start">validate_schema()</text><text x="422" y="83" class="f-s" text-anchor="start">reject bad rows to quarantine</text><path d="M504,90 L504,98" class="f-a"/><rect x="410" y="98" width="188" height="38" rx="8" class="f-box"/><text x="422" y="114" class="f-m" text-anchor="start">deduplicate()</text><text x="422" y="129" class="f-s" text-anchor="start">drop exact duplicates</text><path d="M504,136 L504,144" class="f-a"/><rect x="410" y="144" width="188" height="38" rx="8" class="f-box"/><text x="422" y="160" class="f-m" text-anchor="start">normalize_timezone()</text><text x="422" y="175" class="f-s" text-anchor="start">NYSE trading calendar</text><path d="M504,182 L504,190" class="f-a"/><rect x="410" y="190" width="188" height="38" rx="8" class="f-box"/><text x="422" y="206" class="f-m" text-anchor="start">write_parquet()</text><text x="422" y="221" class="f-s" text-anchor="start">append to a partition</text><path d="M614,130 L642,130" class="f-a"/><path d="M642.0,130.0 L634.8,133.5 L634.8,126.5 Z" class="f-head"/><path d="M646,100 v64 a50.0,10 0 0 0 100,0 v-64" class="f-acc"/><ellipse cx="696.0" cy="100" rx="50.0" ry="10" class="f-acc"/><text x="696.0" y="138" class="f-t" text-anchor="middle">DataStore</text><text x="696.0" y="154" class="f-s" text-anchor="middle">Parquet</text></svg></figure>
 <h4 id="field-mapping">Field mapping</h4>
 <div class="table-wrap"><table class="doc-table">
 <thead>
@@ -597,22 +602,26 @@ class OpNode:                # internal: operator application
 <h2 id="5-cache-system">5. Cache System</h2>
 <p>The cache system is Assay's primary performance mechanism. It operates at two levels and exploits the structural properties of append-only temporal panel data to maintain cached results with O(1) daily updates.</p>
 <h3 id="5-1-architecture-overview">5.1  Architecture Overview</h3>
-<pre><code>┌─────────────────────────────────────────────────────────────┐
-│  L2 Factor String Cache (disk — Parquet, ~1MB/factor)       │
-│  key: hash(expr + universe + date_range + adj_version)      │
-│  stores: complete (T × N) factor result matrix              │
-│  invalidation: on adj_factor version bump                   │
-├─────────────────────────────────────────────────────────────┤
-│  L1 Operator Cache (RAM — Arena blocks, float32)            │
-│  key: (op, field, window, market, universe, date_range)     │
-│  stores: intermediate operator results, e.g. ts_mean(c,20)  │
-│  eviction: LFU with EMA heat scoring                        │
-├─────────────────────────────────────────────────────────────┤
-│  Incremental Maintenance Layer                              │
-│  daily append: O(1) update for linear sliding window ops    │
-│  topo scheduler: update dependents in correct order         │
-└─────────────────────────────────────────────────────────────┘
-</code></pre>
+<figure class="doc-fig"><svg xmlns="http://www.w3.org/2000/svg" class="fig" viewBox="0 0 760 330" width="760" height="330" role="img" aria-label="Cache layers, checked top to bottom"><style>
+.f-box{fill:var(--fig-box,#FFFFFF);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-group{fill:var(--fig-group,#F4F6FA);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-acc{fill:var(--fig-accent-bg,#E3F6F2);stroke:var(--fig-accent,#00A38B);stroke-width:1.2}
+.f-warm{fill:var(--fig-warm-bg,#FFF0E6);stroke:var(--fig-warm,#E8590C);stroke-width:1.2}
+.f-gold{fill:var(--fig-gold-bg,#FDF4DF);stroke:var(--fig-gold,#B7791F);stroke-width:1.2}
+.f-t{fill:var(--fig-text,#1A1D2E);font:600 13px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-h{fill:var(--fig-muted,#5A6477);font:600 10.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.f-s{fill:var(--fig-muted,#5A6477);font:400 11.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-m{fill:var(--fig-text,#1A1D2E);font:500 11.5px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ms{fill:var(--fig-muted,#5A6477);font:400 11px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ta{fill:var(--fig-accent,#00A38B);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tw{fill:var(--fig-warm,#E8590C);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tg{fill:var(--fig-gold,#B7791F);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-a{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4}
+.f-ad{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4;stroke-dasharray:4 3}
+.f-head{fill:var(--fig-arrow,#8A93A6)}
+.f-dot-ok{fill:var(--fig-accent,#00A38B)} .f-dot-part{fill:var(--fig-gold,#B7791F)} .f-dot-plan{fill:none;stroke:var(--fig-muted,#5A6477);stroke-width:1.2}
+@media (prefers-color-scheme:dark){svg.fig{--fig-box:#1F232E;--fig-line:#3A3F4C;--fig-group:#171B25;--fig-text:#D7DAE1;--fig-muted:#8A8F9C;--fig-arrow:#6E7484;--fig-accent:#00D6B3;--fig-accent-bg:#11302C;--fig-warm:#FF7A3D;--fig-warm-bg:#3A2418;--fig-gold:#E3B341;--fig-gold-bg:#352B14}}
+</style><rect x="110" y="16" width="634" height="86" rx="10" class="f-acc"/><text x="130" y="42" class="f-t" text-anchor="start">L2 factor cache · disk, Parquet (~1 MB per factor)</text><text x="130" y="62" class="f-s" text-anchor="start">key: hash(expression, universe, dates, adjustment version)</text><text x="130" y="78" class="f-s" text-anchor="start">stores the full T × N factor matrix</text><text x="130" y="94" class="f-s" text-anchor="start">dropped when the adjustment version changes</text><circle cx="62" cy="59" r="22" class="f-acc"/><text x="62" y="64" class="f-t" text-anchor="middle">L2</text><rect x="110" y="116" width="634" height="86" rx="10" class="f-box"/><text x="130" y="142" class="f-t" text-anchor="start">L1 operator cache · RAM arena blocks, float32</text><text x="130" y="162" class="f-s" text-anchor="start">key: (operator, field, window, market, universe, dates)</text><text x="130" y="178" class="f-s" text-anchor="start">stores intermediate results such as ts_mean(close, 20)</text><text x="130" y="194" class="f-s" text-anchor="start">eviction: LFU with EMA heat score</text><circle cx="62" cy="159" r="22" class="f-box"/><text x="62" y="164" class="f-t" text-anchor="middle">L1</text><rect x="110" y="216" width="634" height="86" rx="10" class="f-group"/><text x="130" y="242" class="f-t" text-anchor="start">Incremental maintenance</text><text x="130" y="262" class="f-s" text-anchor="start">daily append: O(1) update for linear sliding-window operators</text><text x="130" y="278" class="f-s" text-anchor="start">topological scheduler updates dependents in order</text><circle cx="62" cy="259" r="22" class="f-group"/><text x="62" y="264" class="f-t" text-anchor="middle">Δ</text><path d="M62,65 L62,137" class="f-a"/><path d="M62.0,137.0 L58.5,129.8 L65.5,129.8 Z" class="f-head"/><path d="M62,165 L62,237" class="f-a"/><path d="M62.0,237.0 L58.5,229.8 L65.5,229.8 Z" class="f-head"/><text x="20" y="104" class="f-ms" text-anchor="start">miss</text><text x="20" y="204" class="f-ms" text-anchor="start">miss</text></svg></figure>
 <h3 id="5-2-l1-operator-cache">5.2  L1 Operator Cache</h3>
 <h4 id="key-design">Key design</h4>
 <p>L1 cache keys are frozen dataclasses. Python caches the <code>__hash__</code> result after the first call, making repeated dict lookups O(1) with no serialization overhead.</p>

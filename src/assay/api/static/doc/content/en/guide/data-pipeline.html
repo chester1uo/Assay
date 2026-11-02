@@ -3,6 +3,12 @@
 parquet stores. Nothing is downloaded — the pipeline reads pre-downloaded files from disk. The
 data layer is the correctness foundation: every read takes an explicit <code>as_of_date</code>, so
 look-ahead bias is structurally impossible.</p>
+<blockquote>
+<p>When <code>ASSAY_QFV_PANEL_DIR</code> is set (as on assay.qfinverse.com), US universes read the
+QFinVerse daily panel instead and this pipeline is not needed for US data. See
+<a href="/doc/guide/qfv-data">US data from QFinVerse</a>. A-share and Hong Kong data still come from
+<a href="/doc/guide/tushare">Tushare</a>.</p>
+</blockquote>
 <h2 id="local-source">Local source</h2>
 <p><code>MASSIVE_DATA_DIR</code> (default <code>/data/massive_data</code>) is the root of the local mirror, produced
 out-of-band by the <code>downloader_*</code> scripts. Expected layout:</p>

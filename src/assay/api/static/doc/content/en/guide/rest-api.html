@@ -8,8 +8,93 @@
 <li>The WebUI is served at <code>/</code> (see the <a href="/doc/guide/webui">WebUI guide</a>).</li>
 </ul>
 <h2 id="auth">Auth</h2>
-<p>Optional API-key auth. Set <code>ASSAY_API_KEYS</code> (comma-separated) to require an <code>X-API-Key</code> header;
-<strong>unset = open</strong> (works out of the box). Same-origin WebUI needs no key.</p>
+<p>A server runs in one of three modes:</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Mode</th>
+<th>Set</th>
+<th>Callers identify with</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Open</td>
+<td>nothing</td>
+<td>nothing — every request is allowed (local use)</td>
+</tr>
+<tr>
+<td>Service keys</td>
+<td><code>ASSAY_API_KEYS</code> (comma-separated), optionally <code>ASSAY_ADMIN_KEYS</code></td>
+<td><code>X-API-Key</code> header</td>
+</tr>
+<tr>
+<td>Accounts</td>
+<td><code>ASSAY_ACCOUNTS=1</code></td>
+<td>the browser session, or a personal key in <code>X-API-Key</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>With accounts on (as on assay.qfinverse.com), people join by invitation, sign in at <code>/login</code>,
+and create personal keys (<code>asy_...</code>) on the <strong>Account</strong> page. A key acts as its owner and is
+shown once. Send it as <code>X-API-Key</code> (or <code>Authorization: Bearer</code>). Service keys keep working next
+to accounts. Admin routes (<code>/v1/admin/*</code>, <code>/auth/users</code>, <code>/auth/invites</code>) need an admin account
+or an admin service key.</p>
+<pre><code class="language-bash">export ASSAY_KEY=asy_...        # from the Account page
+curl -s -H &quot;X-API-Key: $ASSAY_KEY&quot; https://assay.qfinverse.com/v1/system/universes
+</code></pre>
+<h3 id="account-endpoints">Account endpoints</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/auth/status</code> · <code>/auth/me</code></td>
+<td>Server mode; who is signed in</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/auth/login</code> · <code>/auth/logout</code></td>
+<td>Start / end a browser session</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/auth/register</code> · <code>/auth/reset-password</code></td>
+<td>Sign up with an invitation; set a password from a reset link</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/auth/password</code> · <code>PATCH /auth/profile</code></td>
+<td>Change own password / name</td>
+</tr>
+<tr>
+<td><code>GET/POST/DELETE</code></td>
+<td><code>/auth/keys</code></td>
+<td>Own API keys (create from a signed-in browser only)</td>
+</tr>
+<tr>
+<td><code>GET/PATCH/DELETE</code></td>
+<td><code>/auth/users</code></td>
+<td>Admins: users, roles, disabling</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/auth/users/{id}/reset</code></td>
+<td>Admins: one-time password reset link</td>
+</tr>
+<tr>
+<td><code>GET/POST/DELETE</code></td>
+<td><code>/auth/invites</code></td>
+<td>Admins: invitations (role, uses, expiry)</td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="endpoints">Endpoints</h2>
 <div class="table-wrap"><table class="doc-table">
 <thead>

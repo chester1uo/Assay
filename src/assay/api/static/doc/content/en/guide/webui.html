@@ -1,36 +1,58 @@
 <h1 class="doc-title">WebUI</h1>
-<p>A <strong>zero-install, zero-build</strong> web app served directly by the FastAPI backend — vanilla JS +
-hand-rolled SVG charts, no framework, no bundler, no CDN. Lives at
-<a href="https://github.com/QFinVerse/Assay/tree/main/src/assay/api/static" target="_blank" rel="noopener noreferrer"><code>src/assay/api/static/</code></a>.</p>
-<blockquote>
-<p>The production React/Vite/Recharts/Monaco stack in <a href="/doc/design/webui">the WebUI design doc</a>
-is the documented target; this shipped UI is the runnable equivalent (npm isn't available in
-the build environment).</p>
-</blockquote>
-<h2 id="run">Run</h2>
-<pre><code class="language-bash">python -m assay.cli serve-api --port 8000
-# open http://localhost:8000
+<p>The console is served by the API server itself: no install, no build step. The code is in
+<a href="https://github.com/QFinVerse/Assay/tree/main/src/assay/api/static" target="_blank" rel="noopener noreferrer"><code>src/assay/api/static/</code></a>; the design notes are in
+<a href="/doc/design/webui">the WebUI design doc</a>.</p>
+<pre><code class="language-bash">python -m assay.cli serve-api --port 8000      # then open http://localhost:8000
 </code></pre>
-<p>It auto-adopts the ingested data range as the default evaluation period (from
-<code>/v1/system/status</code>), so factors evaluate over dates that actually have data. Hard-refresh
-after upgrading to pick up new assets.</p>
-<h2 id="screens">Screens</h2>
+<p>On assay.qfinverse.com you sign in first; see <a href="#accounts">Accounts</a> below.</p>
+<h2 id="layout">Layout</h2>
+<figure class="doc-shot"><img src="/doc/content/assets/screens/en/dashboard.png" alt="Dashboard" loading="lazy" /><figcaption>Sidebar on the left, context bar on top</figcaption></figure>
 <ul>
-<li><strong>Dashboard</strong> — data status bar, KPI cards, factor leaderboard, data-calendar heatmap.</li>
-<li><strong>Factor Library</strong> — filterable list, factor detail, correlation-matrix heatmap + prune preview.</li>
-<li><strong>Single Factor Test</strong> — a lightweight expression editor with <strong>live lint/AST</strong> (via
-<code>POST /v1/factor/lint</code>), a qlib↔Python convert button, config row, and <strong>progressive
-SSE-streamed charts</strong> (IC time series, decay, group returns, IC heatmap) plus a summary panel
-with save-to-library.</li>
+<li><strong>Sidebar.</strong> Pages in three groups (Research, Data, Admin), then QFinVerse, theme, language,
+your account and <em>Collapse</em>. <em>Docs</em> opens the Doc Hub in a new tab. The bottom line shows
+the running build.</li>
+<li><strong>Context bar.</strong> Universe and period apply to every page. The pill on the right shows how
+far the data goes; amber or red means stale or unreachable.</li>
+<li>Theme (system, light, dark) is shared with QFinVerse. Charts redraw after a switch.</li>
 </ul>
-<h2 id="usage-tips">Usage tips</h2>
+<h2 id="pages">Pages</h2>
+<p><strong>Dashboard.</strong> Data status, four KPI cards, the factor leaderboard (sort, minimum ICIR,
+source, hide redundant), the top factors and a calendar of trading days with data.</p>
+<p><strong>Single Factor Test.</strong> Write an expression in qlib or Python syntax; it is checked as you
+type and the parse tree is one click away. <em>Evaluate</em> (or Cmd/Ctrl+Enter) streams the
+results: IC and RankIC over time, decay by horizon, quintile returns, IC by month, turnover,
+and a summary with a suggestion. <em>Save</em> puts the report in the library; <em>Portfolio backtest</em>
+opens the next step with the same factor.</p>
+<figure class="doc-shot"><img src="/doc/content/assets/screens/en/factor.png" alt="Single Factor Test" loading="lazy" /><figcaption>Results of one evaluation</figcaption></figure>
+<p><strong>Factor Library.</strong> Every saved factor, with search and filters. Tabs: factor detail,
+correlation matrix (with a prune preview), alpha-space map, IC heatmap and lineage.</p>
+<figure class="doc-shot"><img src="/doc/content/assets/screens/en/library.png" alt="Factor Library" loading="lazy" /></figure>
+<p><strong>Factor Combination.</strong> Pick factors, choose a method (equal weight, IC-weighted, linear and
+tree models where installed) and score the composite on train, validation and test
+periods. Runs can be saved and reloaded.</p>
+<p><strong>Portfolio Backtest.</strong> Turns a factor into a long or long-short book with rebalancing,
+weights, limits and costs, and reports NAV, Sharpe, drawdown, turnover and cost drag.</p>
+<figure class="doc-shot"><img src="/doc/content/assets/screens/en/portfolio.png" alt="Portfolio Backtest" loading="lazy" /></figure>
+<p><strong>Chart.</strong> Daily bars for one symbol, with the adjustment mode and a factor overlay.</p>
+<p><strong>Data Manager</strong> (admins). Sources, ingest jobs, schedules and the cache. On a server that
+reads US data from QFinVerse, US needs no jobs here.</p>
+<h2 id="accounts">Accounts</h2>
+<p>When the server runs with accounts (<code>ASSAY_ACCOUNTS=1</code>, as on assay.qfinverse.com):</p>
 <ul>
-<li>Evaluating needs ingested data. With a short window factor (e.g. <code>cs_rank(close)</code>) you'll see
-charts immediately; a 20-day-window factor needs ≥ 20 days of history or it's all-NaN (the UI
-shows the diagnostic rather than failing silently).</li>
-<li>Optional API key: stored in <code>localStorage.assay_api_key</code> and sent as <code>X-API-Key</code> (only needed
-if the server sets <code>ASSAY_API_KEYS</code>).</li>
+<li><strong>Sign-up is by invitation.</strong> Open the link an admin sent, pick a username and a password of
+at least 10 characters.</li>
+<li><strong>Account</strong> (click your name in the sidebar): change your name and password, and manage API
+keys. A new key is shown once; send it as <code>X-API-Key</code> from scripts and agents.</li>
+<li><strong>Users</strong> (admins): create invitations (role, number of uses, days valid), change roles,
+disable or delete accounts, and issue one-time password reset links.</li>
 </ul>
-<h2 id="not-wired-no-backend">Not wired (no backend)</h2>
-<p>The live agent feed, Alpha-Space UMAP map, Lineage DAG, and IC-heatmap library mode are gated
-as &quot;not available yet&quot; rather than faked — those need backend endpoints / data that don't exist.</p>
+<figure class="doc-shot"><img src="/doc/content/assets/screens/en/account.png" alt="Account" loading="lazy" /><figcaption>Account page with API keys</figcaption></figure>
+<figure class="doc-shot"><img src="/doc/content/assets/screens/en/users.png" alt="Users" loading="lazy" /><figcaption>Invitations and accounts</figcaption></figure>
+<h2 id="tips">Tips</h2>
+<ul>
+<li>An evaluation needs data for the whole window: a 20-day factor needs 20 days of history
+before the first date, or it comes back empty with an <code>ALL_NAN</code> diagnostic.</li>
+<li>After a deployment, a reload picks up the new build (assets are revalidated on every load).</li>
+<li>The live agent feed on the Dashboard is not wired yet; the right column shows the top
+factors instead.</li>
+</ul>

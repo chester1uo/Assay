@@ -78,10 +78,24 @@ only tools that touch price data need MASSIVE creds.</p>
 }
 </code></pre>
 <h2 id="typical-agent-loop">Typical agent loop</h2>
-<pre><code>assay_library_list(limit=10)         → what high-quality factors already exist?
-assay_batch([...candidate exprs...]) → sorted results; top factor's rank_icir / redundancy
-assay_library_correlation([...])     → is the new factor redundant with existing ones?
-assay_library_save(best_report)      → keep the unique, high-ICIR factor
-assay_library_prune(dry_run=true)    → propose removing dominated factors
-</code></pre>
+<figure class="doc-fig"><svg xmlns="http://www.w3.org/2000/svg" class="fig" viewBox="0 0 760 232" width="760" height="232" role="img" aria-label="A typical agent loop over the MCP tools"><style>
+.f-box{fill:var(--fig-box,#FFFFFF);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-group{fill:var(--fig-group,#F4F6FA);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-acc{fill:var(--fig-accent-bg,#E3F6F2);stroke:var(--fig-accent,#00A38B);stroke-width:1.2}
+.f-warm{fill:var(--fig-warm-bg,#FFF0E6);stroke:var(--fig-warm,#E8590C);stroke-width:1.2}
+.f-gold{fill:var(--fig-gold-bg,#FDF4DF);stroke:var(--fig-gold,#B7791F);stroke-width:1.2}
+.f-t{fill:var(--fig-text,#1A1D2E);font:600 13px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-h{fill:var(--fig-muted,#5A6477);font:600 10.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.f-s{fill:var(--fig-muted,#5A6477);font:400 11.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-m{fill:var(--fig-text,#1A1D2E);font:500 11.5px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ms{fill:var(--fig-muted,#5A6477);font:400 11px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ta{fill:var(--fig-accent,#00A38B);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tw{fill:var(--fig-warm,#E8590C);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tg{fill:var(--fig-gold,#B7791F);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-a{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4}
+.f-ad{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4;stroke-dasharray:4 3}
+.f-head{fill:var(--fig-arrow,#8A93A6)}
+.f-dot-ok{fill:var(--fig-accent,#00A38B)} .f-dot-part{fill:var(--fig-gold,#B7791F)} .f-dot-plan{fill:none;stroke:var(--fig-muted,#5A6477);stroke-width:1.2}
+@media (prefers-color-scheme:dark){svg.fig{--fig-box:#1F232E;--fig-line:#3A3F4C;--fig-group:#171B25;--fig-text:#D7DAE1;--fig-muted:#8A8F9C;--fig-arrow:#6E7484;--fig-accent:#00D6B3;--fig-accent-bg:#11302C;--fig-warm:#FF7A3D;--fig-warm-bg:#3A2418;--fig-gold:#E3B341;--fig-gold-bg:#352B14}}
+</style><rect x="16" y="40" width="128" height="92" rx="8" class="f-box"/><text x="28" y="64" class="f-ta" text-anchor="start">1</text><text x="28" y="84" class="f-m" text-anchor="start">library_list</text><text x="28" y="104" class="f-s" text-anchor="start">what good factors</text><text x="28" y="119" class="f-s" text-anchor="start">exist already?</text><path d="M144,86 L164,86" class="f-a"/><path d="M164.0,86.0 L156.8,89.5 L156.8,82.5 Z" class="f-head"/><rect x="166" y="40" width="128" height="92" rx="8" class="f-box"/><text x="178" y="64" class="f-ta" text-anchor="start">2</text><text x="178" y="84" class="f-m" text-anchor="start">batch</text><text x="178" y="104" class="f-s" text-anchor="start">score many</text><text x="178" y="119" class="f-s" text-anchor="start">candidates, sorted</text><path d="M294,86 L314,86" class="f-a"/><path d="M314.0,86.0 L306.8,89.5 L306.8,82.5 Z" class="f-head"/><rect x="316" y="40" width="128" height="92" rx="8" class="f-box"/><text x="328" y="64" class="f-ta" text-anchor="start">3</text><text x="328" y="84" class="f-m" text-anchor="start">correlation</text><text x="328" y="104" class="f-s" text-anchor="start">redundant with</text><text x="328" y="119" class="f-s" text-anchor="start">the library?</text><path d="M444,86 L464,86" class="f-a"/><path d="M464.0,86.0 L456.8,89.5 L456.8,82.5 Z" class="f-head"/><rect x="466" y="40" width="128" height="92" rx="8" class="f-acc"/><text x="478" y="64" class="f-ta" text-anchor="start">4</text><text x="478" y="84" class="f-m" text-anchor="start">library_save</text><text x="478" y="104" class="f-s" text-anchor="start">keep the unique,</text><text x="478" y="119" class="f-s" text-anchor="start">high-ICIR factor</text><path d="M594,86 L614,86" class="f-a"/><path d="M614.0,86.0 L606.8,89.5 L606.8,82.5 Z" class="f-head"/><rect x="616" y="40" width="128" height="92" rx="8" class="f-box"/><text x="628" y="64" class="f-ta" text-anchor="start">5</text><text x="628" y="84" class="f-m" text-anchor="start">library_prune</text><text x="628" y="104" class="f-s" text-anchor="start">propose removing</text><text x="628" y="119" class="f-s" text-anchor="start">dominated factors</text><path d="M680,132 L680,196 L80,196 L80,134" class="f-ad"/><path d="M80.0,134.0 L83.5,141.2 L76.5,141.2 Z" class="f-head"/><text x="380" y="218" class="f-s" text-anchor="middle">next round: new candidates from what was learned</text><text x="16" y="24" class="f-h" text-anchor="start">Agent loop (MCP tools)</text></svg></figure>
 <p>Design contract: <a href="/doc/design/architecture">architecture.md</a> §6.</p>
