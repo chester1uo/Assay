@@ -44,8 +44,13 @@ import * as combination from "./pages/combination.js";
 import * as portfolio from "./pages/portfolio.js";
 import * as chart from "./pages/chart.js";
 import * as dataManager from "./pages/data.js";
+import * as account from "./pages/account.js";
+import * as users from "./pages/users.js";
 
 const appEl = document.getElementById("app");
+
+// {accounts, user}: whether the server runs on accounts, and who is signed in.
+let session = { accounts: false, user: null };
 
 // Shared context handed to every page render.
 function makeCtx(extra = {}) {
@@ -68,6 +73,7 @@ function makeCtx(extra = {}) {
     lang: getLang(),
     params: {},
     path: router.current(),
+    session,
     ...extra,
   };
 }
@@ -106,8 +112,11 @@ function highlightTab(path) {
       link.removeAttribute("aria-current");
     }
   });
-  const title = document.getElementById("page-title");
-  if (title) title.textContent = label;
+  const userLink = document.querySelector(".sidenav-user-link");
+  if (userLink) {
+    userLink.classList.toggle("is-active", base === "#/account");
+    if (base === "#/account") label = t("nav.account");
+  }
   document.title = label ? `${label} · Assay` : "Assay · QFinVerse";
   // Folded, the label is only in the tooltip.
   document.querySelectorAll(".sidenav-link[data-route]").forEach((link) => {
@@ -354,6 +363,8 @@ function registerRoutes() {
     .route("#/portfolio/:id", ({ params, path }) => mount(portfolio, params, path))
     .route("#/chart", ({ path }) => mount(chart, {}, path))
     .route("#/data", ({ path }) => mount(dataManager, {}, path))
+    .route("#/account", ({ path }) => mount(account, {}, path))
+    .route("#/users", ({ path }) => mount(users, {}, path))
     .route("#/docs", () => { location.href = "/doc/"; })
     .notFound(({ path }) => mount(dashboard, {}, path));
 }
@@ -367,6 +378,7 @@ function wireLangToggle() {
   // (universe "soon" labels + status), and re-render the active page in the new language.
   onLang(() => {
     localizeChrome();
+    paintUser();
     refreshThemeLabel();          // the theme button text is dynamic, not a data-i18n node
     populateUniverseSelect(lastUniverses);
     refreshStatus();
@@ -443,12 +455,64 @@ function askForKey(rejected) {
   input.focus();
 }
 
-window.addEventListener("assay:auth-required", (e) => askForKey(Boolean(e.detail && e.detail.hadKey)));
+window.addEventListener("assay:auth-required", (e) => {
+  if (session.accounts) toLogin();
+  else askForKey(Boolean(e.detail && e.detail.hadKey));
+});
+
+// ---------------------------------------------------------------- session ----
+// With accounts on, a signed-out visitor goes to /login and comes back here after.
+function toLogin() {
+  const next = location.pathname + location.search + location.hash;
+  location.replace("/login?next=" + encodeURIComponent(next));
+}
+
+function paintUser() {
+  const user = session.user;
+  // Without accounts (service keys or open) every page shows, as before.
+  document.documentElement.classList.toggle("is-admin", !session.accounts || Boolean(user && user.role === "admin"));
+  const box = document.getElementById("nav-user");
+  if (!box) return;
+  box.hidden = !user;
+  if (!user) return;
+  const name = user.display_name || user.username;
+  document.getElementById("nav-avatar").textContent = name.slice(0, 1).toUpperCase();
+  document.getElementById("nav-name").textContent = name;
+  document.getElementById("nav-role").textContent = t("role." + user.role);
+}
+
+async function loadSession() {
+  try {
+    const me = await api.me();
+    session.accounts = Boolean(me && me.accounts);
+    session.user = (me && me.user) || null;
+  } catch (_) {
+    session.accounts = false;
+    session.user = null;
+  }
+  if (session.accounts) {
+    try { localStorage.removeItem("assay_api_key"); } catch (_) {}
+    if (!session.user) { toLogin(); return false; }
+  }
+  paintUser();
+  return true;
+}
+
+function wireSession() {
+  const out = document.getElementById("nav-logout");
+  if (out) out.addEventListener("click", async () => {
+    try { await api.logout(); } catch (_) { /* cookie is gone either way */ }
+    location.replace("/login");
+  });
+  window.addEventListener("assay:session-changed", () => loadSession());
+}
 
 let lastUniverses = [];
 
-function boot() {
+async function boot() {
   localizeChrome();
+  wireSession();
+  if (!(await loadSession())) return;
   wireTopNav();
   wireSidebar();
   wireLangToggle();

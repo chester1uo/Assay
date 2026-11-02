@@ -228,9 +228,11 @@ def create_app() -> FastAPI:
     # Routers import `get_service` from this module, so import them here (after the
     # accessor + handlers are defined) to keep a clean one-way dependency.
     from assay.api.routes import (
-        admin, combination, data_admin, factor, legacy, library, market, portfolio,
+        account, admin, combination, data_admin, factor, legacy, library, market, portfolio,
         session, system,
     )
+
+    app.include_router(account.router, tags=["Accounts"])
 
     app.include_router(factor.router, prefix="/v1/factor", tags=["Factor"])
     app.include_router(library.router, prefix="/v1/library", tags=["Library"])
@@ -265,6 +267,13 @@ def create_app() -> FastAPI:
     # backend-only checkout) so importing the app never fails.
     static_dir = Path(__file__).resolve().parent / "static"
     _mount_doc_hub(app, static_dir / "doc")
+
+    @app.get("/login", include_in_schema=False)
+    async def login_page():
+        """Sign in, sign up with an invitation (``?invite=``), reset (``?reset=``), first setup."""
+        from fastapi.responses import FileResponse
+
+        return FileResponse(static_dir / "login.html", headers={"Cache-Control": "no-cache"})
     if static_dir.is_dir():
         app.mount("/", _NoCacheStaticFiles(directory=static_dir, html=True), name="webui")
 

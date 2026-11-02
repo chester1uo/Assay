@@ -86,7 +86,10 @@ There are two ways to populate RAW:
 | `TUSHARE_API_URL` | endpoint override — a relay gateway speaking the Tushare protocol (default `api.tushare.pro`); required for the HK price endpoints |
 | `ASSAY_DATA_DIR` / `ASSAY_DATA_DIR_CN` / `ASSAY_DATA_DIR_HK` | output root(s) for the prepared stores |
 | `ASSAY_QFV_PANEL_DIR` | read US data from a QFinVerse daily panel store instead (see below) |
-| `ASSAY_API_KEYS` / `ASSAY_ADMIN_KEYS` | keys for the API; admin keys alone may use `/admin` and `/v1/admin/*` |
+| `ASSAY_ACCOUNTS` | `1`: user accounts — invite-only sign-up, sign-in at `/login`, personal API keys (`asy_...`), user admin; the first admin is created with the token in `<state>/setup_token` |
+| `ASSAY_STATE_DIR` | where the account database, session secret and setup token live (default `$ASSAY_DATA_DIR/_state`; keep it on a local disk) |
+| `ASSAY_SECRET_KEY` / `ASSAY_SESSION_DAYS` | session signing secret (default: generated into the state dir) / sign-in lifetime (default 7) |
+| `ASSAY_API_KEYS` / `ASSAY_ADMIN_KEYS` | keys for the API; admin keys alone may use `/admin` and `/v1/admin/*` (service keys; they keep working next to accounts) |
 | `ASSAY_CORS_ORIGINS` | origins allowed to call the API from a browser (default any, without credentials) |
 
 ### US data from QFinVerse

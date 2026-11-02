@@ -37,6 +37,8 @@
     <symbol id="i-languages" viewBox="0 0 24 24"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></symbol>
     <symbol id="i-fold" viewBox="0 0 24 24"><path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/></symbol>
     <symbol id="i-unfold" viewBox="0 0 24 24"><path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></symbol>
     <symbol id="i-qfv" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
     <symbol id="i-out" viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></symbol>
   </svg>
@@ -62,8 +64,10 @@
         <a class="sidenav-link" data-route="#/portfolio" href="#/portfolio"><svg class="ico"><use href="#i-briefcase"/></svg><span data-i18n="nav.portfolio">Portfolio Backtest</span></a>
         <div class="sidenav-heading" data-i18n="nav.groupData">Data</div>
         <a class="sidenav-link" data-route="#/chart" href="#/chart"><svg class="ico"><use href="#i-candles"/></svg><span data-i18n="nav.chart">Chart</span></a>
-        <a class="sidenav-link" data-route="#/data" href="#/data"><svg class="ico"><use href="#i-database"/></svg><span data-i18n="nav.data">Data Manager</span></a>
+        <a class="sidenav-link admin-only" data-route="#/data" href="#/data"><svg class="ico"><use href="#i-database"/></svg><span data-i18n="nav.data">Data Manager</span></a>
         <a class="sidenav-link" href="/doc/" target="_blank" rel="noopener" data-i18n-title="nav.docsHint" title="Doc Hub"><svg class="ico"><use href="#i-book"/></svg><span data-i18n="nav.docs">Docs</span><svg class="ico ico-out"><use href="#i-out"/></svg></a>
+        <div class="sidenav-heading admin-only" data-i18n="nav.groupAdmin">Admin</div>
+        <a class="sidenav-link admin-only" data-route="#/users" href="#/users"><svg class="ico"><use href="#i-users"/></svg><span data-i18n="nav.users">Users</span></a>
       </nav>
 
       <div class="sidenav-foot">
@@ -84,6 +88,13 @@
           <svg class="ico"><use href="#i-languages"/></svg><span data-i18n="ctrl.langName">English</span>
           <span class="sidenav-aside" data-i18n="ctrl.lang">中文</span>
         </button>
+        <div class="sidenav-user" id="nav-user" hidden>
+          <a class="sidenav-user-link" href="#/account" data-route="#/account" data-i18n-title="nav.account" title="Account">
+            <span class="avatar" id="nav-avatar"></span>
+            <span class="sidenav-user-text"><span class="sidenav-user-name" id="nav-name"></span><span class="sidenav-user-role" id="nav-role"></span></span>
+          </a>
+          <button type="button" class="sidenav-iconbtn" id="nav-logout" data-i18n-title="nav.logout" title="Sign out"><svg class="ico"><use href="#i-logout"/></svg></button>
+        </div>
         <button type="button" id="nav-fold" class="sidenav-fold" data-i18n-title="ctrl.collapse" title="Collapse">
           <svg class="ico ico-fold"><use href="#i-fold"/></svg><svg class="ico ico-unfold"><use href="#i-unfold"/></svg>
           <span data-i18n="ctrl.collapse">Collapse</span>

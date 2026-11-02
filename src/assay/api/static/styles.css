@@ -270,6 +270,24 @@ html.nav-folded .sidenav-link .ico-out { display: none; }
 .ico-unfold { display: none; }
 .sidenav-version { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
 
+/* signed-in user, admin-only links */
+html:not(.is-admin) .admin-only { display: none; }
+.sidenav-user { display: flex; align-items: center; gap: 4px; margin-top: 4px; padding: 4px 2px; }
+.sidenav-user-link { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 2px 4px; border-radius: var(--radius-btn); color: var(--text); }
+.sidenav-user-link:hover { background: var(--accent-bg); text-decoration: none; }
+.sidenav-user-link.is-active { background: var(--primary-soft); }
+.sidenav-user-text { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.sidenav-user-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidenav-user-role { font-size: 11px; color: var(--text-muted); }
+.sidenav-iconbtn { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border: 0; border-radius: var(--radius-btn);
+  background: transparent; color: var(--text-muted); cursor: pointer; }
+.sidenav-iconbtn:hover { background: var(--accent-bg); color: var(--text); }
+.sidenav-iconbtn .ico { width: 16px; height: 16px; }
+.avatar { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 50%;
+  background: var(--primary-soft); color: var(--blue); font-size: 12px; font-weight: 600; }
+html.nav-folded .sidenav-user { flex-direction: column; }
+html.nav-folded .sidenav-user-text { display: none; }
+
 /* folded: icons only */
 html.nav-folded .sidenav { width: 60px; }
 html.nav-folded .sidenav-brand { justify-content: center; padding: 0; }
@@ -527,6 +545,33 @@ html.nav-folded .ico-unfold { display: block; }
 .chart-legend { display: flex; gap: var(--sp-4); flex-wrap: wrap; font-size: 12px; }
 .chart-legend-item { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--text-muted); }
 .chart-legend-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+/* ------------------------------------------------------- account / users --- */
+.form-card { display: flex; flex-direction: column; gap: var(--sp-3); }
+.form-card .card-title { font-size: 15px; font-weight: 600; font-family: var(--font-sans); }
+.form-field { display: grid; gap: 4px; }
+.form-field .input, .form-field .select { height: 34px; }
+.form-actions { display: flex; align-items: center; gap: var(--sp-3); }
+.form-msg { font-size: 13px; color: var(--text-muted); }
+.inline-form { display: flex; align-items: flex-end; gap: var(--sp-2); }
+.inline-form.wrap { flex-wrap: wrap; }
+.inline-form > .input { flex: 1 1 auto; max-width: 320px; height: 32px; }
+.inline-form .grow { flex: 1 1 200px; }
+.input-num { width: 84px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px var(--sp-4); align-items: center; font-size: 13.5px; }
+.hint { margin: 0; font-size: 13px; line-height: 1.55; }
+.secret-box { display: grid; gap: 6px; padding: var(--sp-3); border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--border));
+  border-radius: var(--radius-card); background: var(--primary-soft); }
+.secret-note { font-size: 12.5px; color: var(--text); font-weight: 500; }
+.secret-row { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.secret-row .btn, .row-actions .btn, .confirm-wrap .btn { white-space: nowrap; flex: 0 0 auto; }
+.secret-value { flex: 1 1 auto; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 6px 8px; border-radius: var(--radius-btn);
+  background: var(--surface); border: 1px solid var(--border); font-size: 12.5px; }
+.table-scroll { overflow-x: auto; }
+.user-cell { display: flex; align-items: center; gap: 10px; }
+.small { font-size: 11.5px; }
+.row-actions, .confirm-wrap { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.confirm-q { font-size: 12px; }
 
 /* --------------------------------------------------------------- utilities --- */
 .flex { display: flex; }
