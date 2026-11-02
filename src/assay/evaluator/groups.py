@@ -48,10 +48,9 @@ def group_returns(
         order = np.argsort(fvals, kind="mergesort")  # ascending: low factor first
         # Equal-count buckets via positional edges (handles ragged remainders).
         edges = (np.arange(m) * n_groups) // m  # bucket id per sorted position
-        for pos in range(m):
-            g = edges[pos]
-            sums[t, g] += rvals[order[pos]]
-            counts[t, g] += 1.0
+        # bincount adds in sorted order, the same sums as a loop over positions
+        sums[t] = np.bincount(edges, weights=rvals[order], minlength=n_groups)
+        counts[t] = np.bincount(edges, minlength=n_groups)
 
     # Per-date bucket means, then average over dates (ignoring empty dates).
     with np.errstate(invalid="ignore"):

@@ -39,9 +39,37 @@ def _rank01_row(row: np.ndarray) -> np.ndarray:
     return out
 
 
+def _rank01_block(x: np.ndarray) -> np.ndarray:
+    """:func:`_rank01_row` for every row of ``x`` at once (same values, bit for bit).
+
+    A stable sort puts NaNs last; a run of equal values from sorted position ``i``
+    to ``j-1`` gets the average rank ``(i + j - 1) / 2``, scaled by ``n - 1``."""
+    t_n, n = x.shape
+    order = np.argsort(x, axis=1, kind="stable")
+    srt = np.take_along_axis(x, order, axis=1)
+    pos = np.broadcast_to(np.arange(n), (t_n, n))
+    new = np.ones((t_n, n), dtype=bool)
+    new[:, 1:] = srt[:, 1:] != srt[:, :-1]
+    last = np.ones((t_n, n), dtype=bool)
+    last[:, :-1] = new[:, 1:]
+    start = np.maximum.accumulate(np.where(new, pos, 0), axis=1)
+    end = np.minimum.accumulate(np.where(last, pos, n - 1)[:, ::-1], axis=1)[:, ::-1]
+    cnt = np.isfinite(x).sum(axis=1, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        r = np.where(cnt == 1, 0.5, ((start + end) / 2.0) / (cnt - 1))
+    out = np.empty((t_n, n))
+    np.put_along_axis(out, order, r, axis=1)
+    out[np.isnan(x)] = np.nan
+    return out
+
+
 def cs_rank(x):
     x = as2d(x)
-    return np.vstack([_rank01_row(x[t]) for t in range(x.shape[0])])
+    out = np.empty(x.shape)
+    step = max(1, (8 << 20) // max(1, x.shape[1]))     # ~64 MB of int64 temporaries per block
+    for a in range(0, x.shape[0], step):
+        out[a:a + step] = _rank01_block(x[a:a + step])
+    return out
 
 
 def cs_demean(x):
@@ -91,7 +119,7 @@ def _group_apply(x, labels, reduce_to_residual: bool, rank: bool):
             cols = np.flatnonzero(labels == label)
             sub = x[:, cols]
             if rank:
-                out[:, cols] = np.vstack([_rank01_row(sub[t]) for t in range(sub.shape[0])])
+                out[:, cols] = cs_rank(sub)
             elif reduce_to_residual:
                 out[:, cols] = sub - np.nanmean(sub, axis=1, keepdims=True)
             else:
