@@ -24,6 +24,7 @@ from collections import OrderedDict, deque
 import numpy as np
 
 from assay import evaluator
+from assay.evaluator.metrics import row_orders
 from assay.engine import operators
 from assay.engine.parsing import parse
 from assay.factordb import canonical as cn
@@ -45,7 +46,8 @@ def _f(x, nd=5):
 
 def score(values: np.ndarray, fwd: dict[int, np.ndarray]) -> dict:
     """Compact metrics for one factor (the fields agents sort and filter on)."""
-    m = evaluator.evaluate_ic(values, fwd)
+    order = row_orders(values)                 # sorted once: every horizon and the lag
+    m = evaluator.evaluate_ic(values, fwd, order=order)
     h0 = min(fwd)
     groups = evaluator.group_returns(values, fwd[h0])
     q = groups.get("quintile_returns") if isinstance(groups, dict) else None
@@ -56,7 +58,7 @@ def score(values: np.ndarray, fwd: dict[int, np.ndarray]) -> dict:
         "ic": _f(m.get("ic")), "icir": _f(m.get("icir")),
         "ic_by_horizon": {int(h): _f(v) for h, v in (m.get("ic_by_horizon") or {}).items()},
         "decay_halflife": _f(evaluator.decay_halflife(m.get("ic_by_horizon") or {}), 2),
-        "turnover": _f(evaluator.turnover(values)), "coverage": _f(coverage, 4),
+        "turnover": _f(evaluator.turnover(values, order=order)), "coverage": _f(coverage, 4),
         "long_short": _f(long_short),
     }
 

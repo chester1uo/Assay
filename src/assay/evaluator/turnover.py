@@ -17,14 +17,15 @@ import numpy as np
 
 from assay._native import kernels as _native
 
-from .metrics import rank_ic_series
+from .metrics import rank_ic_series, row_orders
 
 
-def rank_autocorr(factor: np.ndarray, lag: int = 1) -> np.ndarray:
+def rank_autocorr(factor: np.ndarray, lag: int = 1, *, order=None) -> np.ndarray:
     """Per-date Spearman rank autocorrelation between ``factor[t-lag]`` and ``factor[t]``.
 
     Returns ``(T,)`` float64; the first ``lag`` entries are ``NaN`` (no prior
-    cross-section). Reuses the NaN-aware Spearman kernel from :mod:`.metrics`.
+    cross-section). Reuses the NaN-aware Spearman kernel from :mod:`.metrics`;
+    ``order`` is :func:`.metrics.row_orders` of ``factor`` when already computed.
     """
     factor = np.ascontiguousarray(factor, dtype=np.float64)
     if factor.ndim != 2:
@@ -37,7 +38,8 @@ def rank_autocorr(factor: np.ndarray, lag: int = 1) -> np.ndarray:
     if lag >= t_n:
         return out
     if _native is not None:                 # no shifted copy: the kernel reads row t - lag
-        return _native.rank_ic_series(factor, factor, lag)
+        order = order if order is not None else row_orders(factor)
+        return _native.rank_ic_ordered(factor, *order, factor, *order, lag)
     # Correlate prior cross-section (shifted down by lag) against current.
     prior = np.full((t_n, n_sym), np.nan)
     prior[lag:] = factor[: t_n - lag]
@@ -46,14 +48,14 @@ def rank_autocorr(factor: np.ndarray, lag: int = 1) -> np.ndarray:
     return out
 
 
-def turnover(factor: np.ndarray, lag: int = 1) -> float:
+def turnover(factor: np.ndarray, lag: int = 1, *, order=None) -> float:
     """Average factor turnover: ``1 - mean cross-sectional rank autocorr``.
 
     A value near 0 means a near-static ranking (low trading); near 1 means the
     ranking is reshuffled each period. ``NaN`` if no date has a defined
     autocorrelation.
     """
-    ac = rank_autocorr(factor, lag=lag)
+    ac = rank_autocorr(factor, lag=lag, order=order)
     finite = ac[np.isfinite(ac)]
     if finite.size == 0:
         return float("nan")

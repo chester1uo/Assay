@@ -66,3 +66,34 @@ def test_group_sums(python_side):
         per = np.where(counts > 0, sums / counts, np.nan)
     q = [float(per[:, g][np.isfinite(per[:, g])].mean()) for g in range(5)]
     assert q == [ref_sums["quantile_returns"][f"Q{g + 1}"] for g in range(5)]
+
+
+def test_rank_ic_from_orders(python_side):
+    x, y = _panel(6), _panel(7)
+    xo, yo = native.row_orders(x), native.row_orders(y)
+    assert xo[1].tolist() == np.isfinite(x).sum(axis=1).tolist()
+    # same ranks, same Pearson sums: bit for bit the sort-per-pair kernel
+    np.testing.assert_array_equal(native.rank_ic_ordered(x, *xo, y, *yo), native.rank_ic_series(x, y))
+    np.testing.assert_array_equal(native.rank_ic_ordered(x, *xo, x, *xo, 2), native.rank_ic_series(x, x, 2))
+    m = python_side["metrics"]
+    np.testing.assert_allclose(native.rank_ic_ordered(x, *xo, y, *yo), m.rank_ic_series(x, y), rtol=0, atol=1e-12)
+    with pytest.raises(ValueError):
+        native.rank_ic_ordered(x, *xo, y, xo[0][:5], yo[1])
+
+
+def test_evaluate_ic_reuses_orders():
+    from assay import _native, evaluator
+    from assay.evaluator import metrics
+
+    if _native.kernels is None:
+        pytest.skip("native kernels switched off (ASSAY_KERNELS)")
+
+    x, y = _panel(8), _panel(9)
+    fwd = {1: y, 5: y[::-1].copy()}
+    a = evaluator.evaluate_ic(x, fwd)
+    b = evaluator.evaluate_ic(x, fwd, order=metrics.row_orders(x))
+    assert a["ic_by_horizon"] == b["ic_by_horizon"] and id(y) in metrics._FWD_ORDERS
+    assert evaluator.turnover(x) == evaluator.turnover(x, order=metrics.row_orders(x))
+    key = id(fwd[5])
+    del fwd, a, b, y
+    assert key not in metrics._FWD_ORDERS              # dropped with its array

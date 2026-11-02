@@ -34,6 +34,7 @@ from typing import Any, AsyncGenerator, Iterable
 import numpy as np
 
 from assay import evaluator
+from assay.evaluator.metrics import row_orders
 from assay.cache import L2FactorCache, SessionCache, SessionRegistry
 from assay.config import AssayConfig
 from assay.engine import FactorEngine, parse
@@ -462,10 +463,11 @@ class AssayService:
             )
 
         # --- predictive quality (factor ranked once, reused across horizons) ---
-        metrics = evaluator.evaluate_ic(factor_values, fwd_by_h)
+        order = row_orders(factor_values)
+        metrics = evaluator.evaluate_ic(factor_values, fwd_by_h, order=order)
         decay = evaluator.decay_halflife(metrics["ic_by_horizon"])
         groups = evaluator.group_returns(factor_values, fwd_by_h[min(horizons)])
-        turn = evaluator.turnover(factor_values)
+        turn = evaluator.turnover(factor_values, order=order)
 
         # --- redundancy: cheap best-effort, never re-scores the whole library ---
         # TODO(redundancy): wire library.correlation_matrix on a shared engine when a

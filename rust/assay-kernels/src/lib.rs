@@ -8,7 +8,7 @@
 //! masks, same tie rule, same summation order), so results agree with them; the
 //! tests in `tests/engine/test_native_kernels.py` check that.
 
-use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -164,6 +164,125 @@ fn rank_ic_series<'py>(
     Ok(PyArray1::from_vec_bound(py, out))
 }
 
+/// Per row, the column indices of the finite entries sorted by value (stable), and
+/// how many there are: `(order (T, N) uint32, count (T,) uint32)`. Sorting once lets
+/// [`rank_ic_ordered`] rank a factor against several horizons (and its own lag) by
+/// a linear scan instead of a sort per pair.
+#[pyfunction]
+fn row_orders<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<'py, f64>,
+) -> PyResult<(Bound<'py, PyArray2<u32>>, Bound<'py, PyArray1<u32>>)> {
+    let (s, t, n) = rows(&x)?;
+    if n > u32::MAX as usize {
+        return Err(PyValueError::new_err("too many columns"));
+    }
+    let mut order = vec![0u32; t * n];
+    let mut count = vec![0u32; t];
+    py.allow_threads(|| {
+        order.par_chunks_mut(n.max(1)).zip(count.par_iter_mut()).enumerate().for_each(|(row, (o, c))| {
+            let src = &s[row * n..row * n + n];
+            let mut m = 0;
+            for (j, v) in src.iter().enumerate() {
+                if v.is_finite() {
+                    o[m] = j as u32;
+                    m += 1;
+                }
+            }
+            o[..m].sort_by(|&a, &b| src[a as usize].partial_cmp(&src[b as usize]).unwrap());
+            *c = m as u32;
+        });
+    });
+    Ok((PyArray1::from_vec_bound(py, order).reshape([t, n])?, PyArray1::from_vec_bound(py, count)))
+}
+
+/// Average ranks (as [`avg_ranks`]) of the entries of `vals` with `keep[j]`, read off
+/// the precomputed value `order`; written to `out[j]`.
+fn ranks_from_order(vals: &[f64], order: &[u32], keep: &[bool], out: &mut [f64]) {
+    let m = order.len();
+    let (mut pos, mut i) = (0usize, 0usize);
+    while i < m {
+        let v = vals[order[i] as usize];
+        let (mut end, mut cnt) = (i, 0usize);
+        while end < m && vals[order[end] as usize] == v {
+            cnt += keep[order[end] as usize] as usize;
+            end += 1;
+        }
+        if cnt > 0 {
+            let avg = ((pos + pos + cnt - 1) as f64) / 2.0;
+            for &j in &order[i..end] {
+                if keep[j as usize] {
+                    out[j as usize] = avg;
+                }
+            }
+            pos += cnt;
+        }
+        i = end;
+    }
+}
+
+/// [`rank_ic_series`] with the per-row orders of `x` and `y` from [`row_orders`]:
+/// the same ranks and the same Pearson sums, so the same values bit for bit.
+#[pyfunction]
+#[pyo3(signature = (x, xo, xc, y, yo, yc, lag=0))]
+#[allow(clippy::too_many_arguments)]
+fn rank_ic_ordered<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<'py, f64>,
+    xo: PyReadonlyArray2<'py, u32>,
+    xc: PyReadonlyArray1<'py, u32>,
+    y: PyReadonlyArray2<'py, f64>,
+    yo: PyReadonlyArray2<'py, u32>,
+    yc: PyReadonlyArray1<'py, u32>,
+    lag: usize,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    same_shape(&x, &y)?;
+    let (xs, t, n) = rows(&x)?;
+    let (ys, _, _) = rows(&y)?;
+    let bad = || PyValueError::new_err("orders must come from row_orders of the same matrices");
+    if xo.shape() != [t, n] || yo.shape() != [t, n] || xc.len() != t || yc.len() != t {
+        return Err(bad());
+    }
+    let (xo, yo) = (xo.as_slice().map_err(|_| bad())?, yo.as_slice().map_err(|_| bad())?);
+    let (xc, yc) = (xc.as_slice().map_err(|_| bad())?, yc.as_slice().map_err(|_| bad())?);
+    if xc.iter().chain(yc).any(|&c| c as usize > n) {
+        return Err(bad());
+    }
+    let mut out = vec![f64::NAN; t];
+    py.allow_threads(|| {
+        out.par_iter_mut().enumerate().for_each_init(
+            || (vec![false; n], vec![0.0f64; n], vec![0.0f64; n], Vec::new(), Vec::new()),
+            |(keep, rx, ry, a, b), (row, o)| {
+                if row < lag {
+                    return;
+                }
+                let xr0 = (row - lag) * n;
+                let (xr, yr) = (&xs[xr0..xr0 + n], &ys[row * n..row * n + n]);
+                let mut m = 0;
+                for j in 0..n {
+                    keep[j] = xr[j].is_finite() && yr[j].is_finite();
+                    m += keep[j] as usize;
+                }
+                if m < 2 {
+                    return;
+                }
+                ranks_from_order(xr, &xo[xr0..xr0 + xc[row - lag] as usize], keep, rx);
+                ranks_from_order(yr, &yo[row * n..row * n + yc[row] as usize], keep, ry);
+                a.clear();
+                b.clear();
+                for j in 0..n {
+                    if keep[j] {
+                        a.push(rx[j]);
+                        b.push(ry[j]);
+                    }
+                }
+                *o = pearson(a, b);
+            },
+        );
+    });
+    Ok(PyArray1::from_vec_bound(py, out))
+}
+
 /// Per-row Pearson IC over the entries finite in both rows.
 #[pyfunction]
 fn ic_series<'py>(
@@ -313,6 +432,8 @@ fn assay_kernels(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cs_rank, m)?)?;
     m.add_function(wrap_pyfunction!(rank_ic_series, m)?)?;
     m.add_function(wrap_pyfunction!(ic_series, m)?)?;
+    m.add_function(wrap_pyfunction!(row_orders, m)?)?;
+    m.add_function(wrap_pyfunction!(rank_ic_ordered, m)?)?;
     m.add_function(wrap_pyfunction!(group_sums, m)?)?;
     m.add_function(wrap_pyfunction!(ts_rolling, m)?)?;
     m.add_function(wrap_pyfunction!(ts_rolling2, m)?)?;
