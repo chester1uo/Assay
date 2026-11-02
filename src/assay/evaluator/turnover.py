@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from assay._native import kernels as _native
+
 from .metrics import rank_ic_series
 
 
@@ -34,6 +36,8 @@ def rank_autocorr(factor: np.ndarray, lag: int = 1) -> np.ndarray:
     out = np.full(t_n, np.nan)
     if lag >= t_n:
         return out
+    if _native is not None:                 # no shifted copy: the kernel reads row t - lag
+        return _native.rank_ic_series(factor, factor, lag)
     # Correlate prior cross-section (shifted down by lag) against current.
     prior = np.full((t_n, n_sym), np.nan)
     prior[lag:] = factor[: t_n - lag]

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from assay._native import kernels as _native
+
 
 def group_returns(
     factor: np.ndarray, fwd: np.ndarray, n_groups: int = 5
@@ -38,7 +40,9 @@ def group_returns(
     sums = np.zeros((t_n, n_groups), dtype=np.float64)
     counts = np.zeros((t_n, n_groups), dtype=np.float64)
 
-    for t in range(t_n):
+    if _native is not None:
+        sums, counts = _native.group_sums(np.ascontiguousarray(factor), np.ascontiguousarray(fwd), n_groups)
+    for t in range(t_n if _native is None else 0):
         mask = np.isfinite(factor[t]) & np.isfinite(fwd[t])
         m = int(mask.sum())
         if m < n_groups:  # not enough names to populate every bucket

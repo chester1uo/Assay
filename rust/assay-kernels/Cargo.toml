@@ -1,0 +1,20 @@
+[package]
+name = "assay-kernels"
+version = "0.1.0"
+edition = "2021"
+description = "Native cross-sectional kernels for Assay (ranks, IC, quantile buckets)"
+license = "Apache-2.0"
+
+[lib]
+name = "assay_kernels"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py311"] }
+numpy = "0.22"
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

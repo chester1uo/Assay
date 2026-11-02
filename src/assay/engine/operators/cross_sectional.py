@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from assay._native import kernels as _native
+
 from ._base import as2d, quiet_numeric
 from .registry import register
 
@@ -54,7 +56,7 @@ def _rank01_block(x: np.ndarray) -> np.ndarray:
     last[:, :-1] = new[:, 1:]
     start = np.maximum.accumulate(np.where(new, pos, 0), axis=1)
     end = np.minimum.accumulate(np.where(last, pos, n - 1)[:, ::-1], axis=1)[:, ::-1]
-    cnt = np.isfinite(x).sum(axis=1, keepdims=True)
+    cnt = (~np.isnan(x)).sum(axis=1, keepdims=True)    # +-inf take part, as in _rank01_row
     with np.errstate(invalid="ignore", divide="ignore"):
         r = np.where(cnt == 1, 0.5, ((start + end) / 2.0) / (cnt - 1))
     out = np.empty((t_n, n))
@@ -65,6 +67,8 @@ def _rank01_block(x: np.ndarray) -> np.ndarray:
 
 def cs_rank(x):
     x = as2d(x)
+    if _native is not None and x.size:
+        return _native.cs_rank(np.ascontiguousarray(x))
     out = np.empty(x.shape)
     step = max(1, (8 << 20) // max(1, x.shape[1]))     # ~64 MB of int64 temporaries per block
     for a in range(0, x.shape[0], step):

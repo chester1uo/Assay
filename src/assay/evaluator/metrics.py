@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from assay._native import kernels as _native
+
 # --- optional numba acceleration -------------------------------------------
 # We define plain-Python reference kernels, then try to njit them. Any import
 # or compile failure falls back to the pure-numpy implementations below so the
@@ -225,6 +227,8 @@ def ic_series(factor: np.ndarray, fwd: np.ndarray) -> np.ndarray:
     fwd = np.ascontiguousarray(fwd, dtype=np.float64)
     if factor.shape != fwd.shape:
         raise ValueError("factor and fwd must share the same (T, N) shape")
+    if _native is not None:
+        return _native.ic_series(factor, fwd)
     return np.asarray(_ic_series_impl(factor, fwd), dtype=np.float64)
 
 
@@ -248,6 +252,8 @@ def rank_ic_series(factor: np.ndarray, fwd: np.ndarray) -> np.ndarray:
     fwd = np.ascontiguousarray(fwd, dtype=np.float64)
     if factor.shape != fwd.shape:
         raise ValueError("factor and fwd must share the same (T, N) shape")
+    if _native is not None:
+        return _native.rank_ic_series(factor, fwd)
     # factor_rank is recomputed per-date inside the kernel against the joint mask;
     # the precomputed-ranks argument is kept for the multi-horizon fast path below.
     factor_rank = _factor_ranks(factor)
@@ -288,8 +294,9 @@ def evaluate_ic(
     horizons = sorted(fwd_by_h.keys())
     head = horizons[0]
 
-    # Rank the factor once (per date) and reuse across all horizons.
-    factor_rank = _factor_ranks(factor)
+    # Rank the factor once (per date) and reuse across all horizons. (The native
+    # kernel ranks both sides on the joint mask itself, as the numba one does.)
+    factor_rank = None if _native is not None else _factor_ranks(factor)
 
     rank_ic_by_h: dict[int, float] = {}
     head_ic_series = None
@@ -298,9 +305,10 @@ def evaluate_ic(
         fwd = np.ascontiguousarray(fwd_by_h[h], dtype=np.float64)
         if fwd.shape != factor.shape:
             raise ValueError(f"fwd[{h}] shape {fwd.shape} != factor {factor.shape}")
-        rseries = np.asarray(
-            _rank_ic_series_impl(factor_rank, fwd, factor), dtype=np.float64
-        )
+        if _native is not None:
+            rseries = _native.rank_ic_series(factor, fwd)
+        else:
+            rseries = np.asarray(_rank_ic_series_impl(factor_rank, fwd, factor), dtype=np.float64)
         rank_ic_by_h[h] = ic_summary(rseries)[0]
         if h == head:
             head_rank_series = rseries

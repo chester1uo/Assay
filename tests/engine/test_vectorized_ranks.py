@@ -16,6 +16,7 @@ def _panel(seed=3, t=60, n=40):
     x[5] = np.nan                                      # empty row
     x[6, 1:] = np.nan                                  # one name
     x[7] = 2.0                                         # all tied
+    x[8, 0], x[8, 1] = np.inf, -np.inf                 # infinities are ranked, not dropped
     return x
 
 
