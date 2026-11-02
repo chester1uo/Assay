@@ -113,7 +113,9 @@ def normalize(x: np.ndarray, method: str = "rank") -> np.ndarray:
     if method == "raw":
         return x.copy()
     if method == "rank":
-        return np.vstack([_rank01_row(x[t]) for t in range(x.shape[0])])
+        from assay.engine.operators.cross_sectional import cs_rank
+
+        return cs_rank(x)            # same semantics as _rank01_row, vectorized
     if method == "zscore":
         with _quiet(), np.errstate(invalid="ignore", divide="ignore"):
             mean = np.nanmean(x, axis=1, keepdims=True)

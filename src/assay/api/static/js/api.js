@@ -1,7 +1,8 @@
 // api.js — ApiClient for the Assay /v1 REST surface + SSE evaluate streaming.
-// Same-origin; auth is open by default. If localStorage 'assay_api_key' is set it
-// is sent as the X-API-Key header. Non-2xx responses throw ApiError carrying the
-// parsed {error:{...}} envelope (architecture §4.6) when present.
+// Same-origin. With accounts on, the session cookie identifies the user; on servers
+// that use service keys instead, localStorage 'assay_api_key' is sent as X-API-Key.
+// A 401 fires "assay:auth-required" (app.js sends the user to /login). Non-2xx
+// responses throw ApiError carrying the parsed {error:{...}} envelope (§4.6).
 
 const API_KEY_STORAGE = "assay_api_key";
 
@@ -28,7 +29,15 @@ function authHeaders(extra = {}) {
   return headers;
 }
 
+function authRequired(res) {
+  if (res.status !== 401) return;
+  let hadKey = false;
+  try { hadKey = Boolean(localStorage.getItem(API_KEY_STORAGE)); } catch (_) {}
+  window.dispatchEvent(new CustomEvent("assay:auth-required", { detail: { hadKey } }));
+}
+
 async function parseError(res) {
+  authRequired(res);
   let envelope = null;
   let detailMsg = `${res.status} ${res.statusText}`;
   try {
@@ -271,6 +280,25 @@ export class ApiClient {
   adminCacheRebuild(market) { return request("POST", this._p("/v1/admin/cache/rebuild"), { body: { market } }); }
   adminDataUsage() { return request("GET", this._p("/v1/admin/data/usage")); }
   adminTestConnection(provider) { return request("POST", this._p("/v1/admin/data/test"), { body: { provider } }); }
+  // ---- accounts (/auth) ------------------------------------------------------
+  authStatus() { return request("GET", this._p("/auth/status")); }
+  me() { return request("GET", this._p("/auth/me")); }
+  logout() { return request("POST", this._p("/auth/logout")); }
+  changePassword(current_password, new_password) {
+    return request("POST", this._p("/auth/password"), { body: { current_password, new_password } });
+  }
+  updateProfile(display_name) { return request("PATCH", this._p("/auth/profile"), { body: { display_name } }); }
+  myKeys() { return request("GET", this._p("/auth/keys")); }
+  createKey(name) { return request("POST", this._p("/auth/keys"), { body: { name } }); }
+  revokeKey(id) { return request("DELETE", this._p(`/auth/keys/${id}`)); }
+  users() { return request("GET", this._p("/auth/users")); }
+  updateUser(id, patch) { return request("PATCH", this._p(`/auth/users/${id}`), { body: patch }); }
+  deleteUser(id) { return request("DELETE", this._p(`/auth/users/${id}`)); }
+  resetLink(id) { return request("POST", this._p(`/auth/users/${id}/reset`), { body: {} }); }
+  invites() { return request("GET", this._p("/auth/invites")); }
+  createInvite(body) { return request("POST", this._p("/auth/invites"), { body }); }
+  revokeInvite(id) { return request("DELETE", this._p(`/auth/invites/${id}`)); }
+
   adminScheduleGet() { return request("GET", this._p("/v1/admin/schedule")); }
   adminSchedulePut(schedule) { return request("PUT", this._p("/v1/admin/schedule"), { body: { schedule } }); }
 

@@ -1,32 +1,23 @@
 # Assay WebUI — 详细设计
 
-**版本：** 0.1 · 草稿  
-**范围：** 仪表盘 · 因子库分析 · 单因子测试  
-**技术栈：** React 18 · Recharts · Monaco Editor · Tailwind CSS
+**版本：** 0.2 · 2026-11  
+**范围：** 已上线控制台的全部页面  
+**技术栈（已上线）：** 原生 JS 模块 + 手写 SVG 图表，无需构建 —— [`src/assay/api/static/`](../../../src/assay/api/static/)
 
-> **实现状态（2026-06）：🔶 现已存在一个可运行的 WebUI——但它是一个零安装的
-> 纯 vanilla-JS 应用，而非本文所规定的 React/Vite 技术栈。** 由于构建
-> 环境无法访问 npm registry（代理 407），已交付的 UI 位于
-> [`src/assay/api/static/`](../../../src/assay/api/static/)，由 FastAPI 直接提供服务
-> （`python -m assay.cli serve-api` → `http://localhost:8000`）。它实现了下述三个
-> 界面——**仪表盘、因子库、单因子测试**——采用手写的 SVG
-> 图表、一个轻量级表达式编辑器（而非 Monaco）、qlib↔python 语法桥，以及
-> **SSE 流式 evaluate**，全部绑定到真实的 `/v1/*` API。它以一个
-> 全新的、无需数据的 **`POST /v1/factor/lint`** 端点（AST + 诊断）为编辑器提供支撑。
+> **现状（2026-11）。** 上线的控制台是由 FastAPI 直接提供的免构建应用，页面包括：仪表盘、
+> 因子库（详情、相关性矩阵、Alpha 空间图、IC 热力图、血缘）、单因子测试、因子合成、组合回测、
+> 行情、数据管理、账户和用户。界面与 QFinVerse 一致（左侧栏、浅色/深色、EN / 中文）；设置
+> `ASSAY_ACCOUNTS=1` 时启用邀请制账户。本文的截图都来自这个应用。
 >
-> 本文档仍是**生产级 React 18 + Vite + TS + Recharts +
-> Monaco + Tailwind** 重构版本的规范（📋，即文档记录的目标）。没有后端端点的功能
-> 在已交付的 UI 中被**省略/关闭**，而非伪造：实时 agent 信息流
-> （`/v1/events/session-stream`）、Alpha 空间图（UMAP）、血缘 DAG，以及 IC
-> 热力图模式。已交付的 UI 与后端现实保持一致：
+> 第 6–10 节（React 组件、状态、hooks、Monaco）描述的是最初规划的 React 版本，作为组件行为的
+> 参考保留，不是上线的代码。
 >
-> - **主股票池为 NASDAQ-100**（约 101 只标的），是唯一端到端打通的股票池。
->   SP500 / Russell 2000 是路线图中的选择器选项。
-> - MASSIVE 日聚合数据源提供 **OHLCV + 成交笔数，没有 `vwap`**——因此
->   `vwap` 目前既不是可选字段，也不是执行价格。
-> - 错误/诊断码和 `failure_mode` 取值来自已实现的
->   `assay.engine.diagnostics` 目录（`SYNTAX_ERROR` · `LOOKAHEAD` · `CONSTANT` ·
->   `ALL_NAN` · `RUNTIME_ERROR`；码为 `ASSAY-P###/E###/O###`）。
+> - 股票池：QFinVerse 数据上的 TOP500 / TOP1000 / TOP3000、SP500 和 NASDAQ100；导入了 Tushare
+>   数据时还有沪深300 / 500 / 1000 和 HK100。
+> - 美股日线只有 OHLCV 和成交笔数，没有 `vwap` 字段。
+> - 尚未接入：仪表盘上的实时 agent 信息流（还没有 session-stream 接口）。
+> - 诊断码和 `failure_mode` 取自 `assay.engine.diagnostics`（`SYNTAX_ERROR` · `LOOKAHEAD` ·
+>   `CONSTANT` · `ALL_NAN` · `RUNTIME_ERROR`；代码 `ASSAY-P###/E###/O###`）。
 
 ---
 
@@ -49,16 +40,18 @@
 ## 1. 信息架构
 
 ```
-assay-ui/
-├── /                           → redirect → /dashboard
-├── /dashboard                  → Dashboard
-├── /library                    → Factor Library (default: list view)
-│   ├── /library?mode=matrix    → Correlation matrix
-│   ├── /library?mode=map       → Alpha space map
-│   ├── /library?mode=heatmap   → IC heatmap
-│   └── /library?mode=lineage   → Factor lineage DAG
-├── /factor                     → Single Factor Test (blank editor)
-└── /factor/:factor_id          → Single Factor Test (pre-loaded)
+#/dashboard            仪表盘
+#/library              因子库（标签：详情、矩阵、Alpha 空间图、IC 热力图、血缘）
+#/factor               单因子测试（空白编辑器）
+#/factor/:factor_id    单因子测试（预载因子）
+#/combination          因子合成
+#/portfolio            组合回测（#/portfolio/:factor_id 预载因子）
+#/chart                行情
+#/data                 数据管理（管理员）
+#/account              账户：资料、密码、API 密钥
+#/users                用户与邀请（管理员）
+/login                 登录、凭邀请注册、重置密码、创建首个管理员
+/doc/                  Doc Hub（独立页面）
 ```
 
 所有路由共享的 URL 参数（全局状态，同步到 URL）：
@@ -71,52 +64,48 @@ assay-ui/
 
 ---
 
-## 2. 全局外壳
+## 2. 全局框架
+
+![仪表盘：侧栏、上下文栏、指标卡、排行榜、数据日历](../../assets/screens/cn/dashboard.png "QFinVerse 数据上的仪表盘（SP500，2019–2026）")
 
 ### 2.1  布局
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  TopNav                                                  [48px]  │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  <Outlet />     (page content, scrollable)                       │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+左侧是侧栏，右侧是页面，与 QFinVerse 控制台一致。每个页面顶部有一条吸顶的上下文栏。页面滚动时，侧栏和上下文栏保持不动。
 
-没有侧边栏。所有导航都位于顶栏中。页面为全宽并带有内部边距。
+### 2.2  侧栏
 
-### 2.2  TopNav 组件
+宽 224 px；点「收起」后只显示 60 px 宽的图标（按浏览器记住）。
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  ◆ ASSAY   │  Dashboard  │  Factor Library  │  Single Factor Test   │    │
-│            │                                                   [search]   │
-│                                       [NASDAQ100 ▾]  [2020–2024 ▾]  [●]   │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+| 元素 | 行为 |
+|---|---|
+| QFinVerse 标志 + "Assay" | 回到仪表盘 |
+| 仪表盘 | 顶部链接 |
+| 研究 | 因子库 · 单因子测试 · 因子合成 · 组合回测 |
+| 数据 | 行情 · 数据管理（管理员） · 文档（在新标签页打开 Doc Hub） |
+| 管理 | 用户（仅管理员） |
+| QFinVerse | 在新标签页打开 QFinVerse 控制台 |
+| 主题 | 跟随系统 / 浅色 / 深色；与 QFinVerse 共用（`qfv-theme`） |
+| 语言 | English / 中文 |
+| 用户行 | 显示名和角色，点击进入「账户」；旁边的图标退出登录 |
+| Build | 当前部署的 `Build <commit>`；悬停显示引擎版本和部署时间 |
 
-从左到右的元素：
+当前页面所在的行有底色和 3 px 的强调色竖条。
 
-| 元素 | 类型 | 行为 |
-|---|---|---|
-| `◆ ASSAY` | Logo + 文字 | 导航到 `/dashboard` |
-| `Dashboard` | 标签页 | 位于 `/dashboard` 时为激活状态 |
-| `Factor Library` | 标签页 | 位于 `/library` 时为激活状态 |
-| `Single Factor Test` | 标签页 | 位于 `/factor` 时为激活状态 |
-| 搜索框 | 输入框 | 对库中因子表达式的全文搜索；结果显示在下拉框中；选择后导航到 `/factor/:factor_id` |
-| 股票池选择器 | 下拉框 | 选项：NASDAQ100（默认，目前唯一打通的一个）、SP500、Russell2000（路线图——在导入前显示为禁用）；更新全局状态 |
-| 周期选择器 | 下拉框 | 预设：1Y、3Y、5Y + 自定义日期区间选择器；更新全局状态 |
-| 状态指示器 | 圆点图标 | 绿色 = 数据新鲜，琥珀色 = 陈旧（> 24h），红色 = 同步错误；工具提示显示上次同步时间；点击导航到仪表盘上的数据日历 |
+### 2.3  上下文栏
 
-### 2.3  TopNav 属性与行为
+| 元素 | 行为 |
+|---|---|
+| 股票池 | 有数据的股票池可选，其余标为「即将」 |
+| 区间 | 1Y / 3Y / 5Y 预设，或自定义起止日期 |
+| 状态标签 | 显示「数据至 <最后日期>」；绿色表示新鲜，黄色表示陈旧或降级，红色表示连不上。点击回到仪表盘 |
 
-更改股票池或周期时：
-1. 更新 Zustand 全局状态
-2. 使当前 session ID 失效（以新参数调用 `POST /v1/session/create`）
-3. 触发 React Query 对库查询的缓存失效
-4. **不会**重新运行任何进行中的评估——用户必须手动重新运行
+股票池和区间是全局的：保存在 URL 和浏览器里，所有页面都读它们。修改它们不会重跑正在进行的评估。
+
+### 2.4  登录
+
+开启账户后，未登录的访问会被引到 `/login`，登录后回到原页面。同一个页面还负责凭邀请注册（`?invite=`）、重置密码（`?reset=`），以及在新服务器上创建第一个管理员。
+
+![登录页](../../assets/screens/cn/login.png)
 
 ---
 
@@ -124,66 +113,25 @@ assay-ui/
 
 ### 3.1  页面布局
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  StatusBar                                               [48px]   │
-├──────────────────────────────────────────────────────────────────┤
-│  KPI Row  [4 cards]                                     [120px]   │
-├──────────────────┬───────────────────────────────────────────────┤
-│                  │                                               │
-│  Factor          │  Agent Activity Feed                          │
-│  Leaderboard     │                                               │
-│  [60%]           │  [40%]                            [~400px]   │
-│                  │                                               │
-├──────────────────┴───────────────────────────────────────────────┤
-│  Data Calendar                                          [160px]   │
-└──────────────────────────────────────────────────────────────────┘
-```
+页面见第 2 节的截图。
 
 ### 3.2  StatusBar
 
-仪表盘页面顶部（TopNav 下方）的一条 48px 细条。显示三项内容：
-
-```
-  ● Data current as of Dec 31 2024  ·  Last sync: 2 hours ago  ·  101 symbols  ·  ⚠ 2 warnings
-```
+仪表盘页面顶部的一条细栏：数据状态、最近同步、各市场覆盖、引擎版本和数据告警。
 
 - 绿点 = 完全同步，琥珀色 = 陈旧，红色 = 错误
 - 点击 "2 warnings" 会展开一个内联告警面板，列出具体的数据质量问题
 - 该条在仪表盘页面的滚动容器内保持固定（sticky）
 
-### 3.3  KPI 行
+### 3.3  指标卡
 
-四个等宽的指标卡片横向排列。
-
-```
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│  Total       │  │  Avg         │  │  Agent       │  │  Best IC     │
-│  factors     │  │  RankICIR    │  │  sessions    │  │  today       │
-│              │  │              │  │              │  │              │
-│  1,284       │  │  0.52        │  │  3           │  │  0.089       │
-│  ↑ 31 today  │  │  ↑ 0.03      │  │  284 factors │  │  ts_corr...  │
-└──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
-```
-
-每张卡片：
-- 数字上方为 13px 弱化文字的标签
-- 主指标为 28px / 中等字重
-- 副行：相对上一 session 的变化量（卡片 1、2）或上下文细节（卡片 3、4）
-- 背景：`--color-background-secondary`，无边框，8px 圆角
-- 卡片 1、3 可点击：卡片 1 导航到 `/library`，卡片 4 导航到 `/factor/:best_factor_id`
-
-轮询：KPI 行通过 React Query 每 30 秒重新获取一次。
+四张等宽的卡片：因子库中的因子总数、平均 RankICIR、最佳 RankICIR（附表达式）、活跃会话（附数据天数）。标签是小号大写的灰色文字，数值用等宽字体。
 
 ### 3.4  因子排行榜
 
 左列（60%），显示按 RankICIR 排序的前 100 个因子。
 
 #### 控件（表格上方）
-
-```
-[Sort: RankICIR ▾]  [Min ICIR: 0.0 ▾]  [Source: All ▾]  [Hide redundant: ○]
-```
 
 - 排序下拉框：RankICIR（默认）、IC、衰减半衰期、评估日期
 - 最小 ICIR 过滤器：滑块 + 数字输入框，0.0–2.0
@@ -214,26 +162,11 @@ assay-ui/
 
 #### Session 摘要面板（信息流顶部）
 
-```
-┌──────────────────────────────────────────────────┐
-│  Session #42   Started 14:30 · 23 min ago        │
-│                                                  │
-│  284 evaluated   ·   61% pass   ·   avg IC 0.041 │
-│  ▁▂▃▄▅▃▂▄▅▆▅▄▃▂ (IC sparkline)                  │
-└──────────────────────────────────────────────────┘
-```
+> 尚未接入：还没有 session-stream 接口。右栏目前显示因子库里 RankICIR 最高的因子（见第 2 节截图）。本节其余内容是目标设计。
 
 #### 信息流条目
 
 每个条目是一张卡片，包含：
-
-```
-┌────────────────────────────────────────────────────┐
-│  ts_corr(close, volume, 20)             0.047 IC   │
-│  RankICIR 0.61  ·  Decay 12d  ·  31ms             │
-│  "Consider shorter window for higher turnover..."  │
-└────────────────────────────────────────────────────┘
-```
 
 - 新条目从顶部动画进入（CSS 下滑过渡）
 - 最多可见 50 个条目；较旧的条目在底部淡出
@@ -246,13 +179,6 @@ assay-ui/
 ### 3.6  数据日历
 
 排行榜 + 信息流行下方的全宽条带。一个类 GitHub 贡献热力图，按交易日显示数据可用性。
-
-```
-       Jan  Feb  Mar  Apr  May  Jun  Jul  Aug  Sep  Oct  Nov  Dec
-2022   ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████
-2023   ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████
-2024   ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████
-```
 
 单元格颜色：
 - 深绿：100% 覆盖率（所有标的都有数据）
@@ -272,26 +198,13 @@ assay-ui/
 
 ### 4.1  页面布局
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│  [Analysis mode tabs]  [Bulk action bar — visible when selected]   │
-├──────────────────────┬─────────────────────────────────────────────┤
-│                      │                                             │
-│  Factor List         │  Analysis Panel                            │
-│  [35%]               │  [65%]                                     │
-│                      │                                             │
-│  (virtualised list)  │  (changes based on active mode tab)        │
-│                      │                                             │
-└──────────────────────┴─────────────────────────────────────────────┘
-```
+![因子库，详情模式](../../assets/screens/cn/library.png)
 
 左右分栏可调整大小——用户可在 25%–50% 之间拖动分隔条。
 
 ### 4.2  模式标签页
 
-```
-[Factor Detail]  [Correlation Matrix]  [Alpha Space Map]  [IC Heatmap]  [Lineage]
-```
+五个标签：因子详情、相关性矩阵、Alpha 空间图、IC 热力图、血缘。
 
 模式状态以 `?mode=matrix` 的形式持久化到 URL 中。
 
@@ -299,23 +212,11 @@ assay-ui/
 
 #### 过滤栏
 
-```
-[🔍 Search expressions...        ] [Source: All ▾] [Sort: RankICIR ▾]
-[Min ICIR ──●──────] [Max redundancy ──────●──] [× Clear filters]
-```
-
 - 全文搜索针对表达式字符串运行（小型库时在客户端，> 500 个因子时在服务端）
 - 滑块在释放时（而非拖动时）更新结果，以避免过多的 API 调用
 - "Clear filters" 按钮上带有激活过滤器数量徽章
 
 #### 列表项
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ☐  ts_corr(close, volume, 20)                              [AGENT]   │
-│    ████████████████░░░░░  0.61 ICIR  ·  12d decay  ·  ● unique      │
-└──────────────────────────────────────────────────────────────────────┘
-```
 
 - 用于多选的复选框
 - 等宽字体的表达式，截断显示，完整文本在工具提示中
@@ -330,10 +231,6 @@ assay-ui/
 
 #### 批量操作栏（当勾选 ≥ 1 项时出现）
 
-```
-  3 selected   [Export ↓]  [Tag ▾]  [Compare]  [Delete]  [× Clear]
-```
-
 - Export：为所选因子下载 FactorReport JSON 或 CSV
 - Tag：下拉框以添加标签（新建或选择已有）
 - Compare：切换到相关性矩阵模式，预填入所选因子
@@ -345,27 +242,7 @@ assay-ui/
 
 右面板布局：
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  ts_corr(close, volume, 20)                                         │
-│  Factor ID: abc123  ·  Evaluated: Jan 15 2025  ·  AGENT            │
-│                                                    [Open in tester →]│
-├───────────────────┬─────────────────────────────────────────────────┤
-│  RankIC   0.047   │  IC      0.032                                  │
-│  RankICIR 0.61    │  ICIR    0.43                                   │
-│  Decay    12d     │  Turnover  0.72                                  │
-│  Redundancy 0.31  │  Lookahead  ✓ Clean                             │
-├───────────────────┴─────────────────────────────────────────────────┤
-│  IC sparkline (last 252 trading days)                               │
-│  ▁▂▃▄▅▃▂▄▅▆▅▄▃▂▁▂▃▄▅▆▇▆▅▄▃▂▁▂▃▄▅                                  │
-├─────────────────────────────────────────────────────────────────────┤
-│  Suggestion                                                         │
-│  "Decay is moderate. Try ts_corr(close, volume, 10) for shorter..." │
-├─────────────────────────────────────────────────────────────────────┤
-│  ▶ Lineage  (collapsed by default)                                  │
-│  ▶ Full FactorReport JSON  (collapsed by default)                   │
-└─────────────────────────────────────────────────────────────────────┘
-```
+详情面板见 4.1 节的截图。
 
 "Open in tester →" 按钮导航到 `/factor/abc123`。
 
@@ -373,10 +250,7 @@ assay-ui/
 
 整个右面板是一张热力图。
 
-```
-Controls:
-  [Redundancy threshold: 0.70 ──●──────]  [Cluster: ○ On]  [Export matrix ↓]
-```
+![因子库，相关性矩阵](../../assets/screens/cn/library-matrix.png)
 
 热力图：
 - 行和列为因子表达式（截断显示）
@@ -387,10 +261,6 @@ Controls:
 - 点击任意单元格：打开两个因子每日值的散点图弹窗
 
 热力图下方的摘要：
-```
-  14 pairs above 0.70 threshold.  Pruning would remove 8 dominated factors.
-  [Preview pruning →]
-```
 
 "Preview pruning" 打开一个侧抽屉，列出将被移除的 8 个因子，在每一对中保留 RankICIR 较高的那个。
 
@@ -399,11 +269,6 @@ Controls:
 整个右面板是一张 2D 散点图。
 
 每个点的位置通过对成对秩相关距离矩阵（1 - |corr|）运行 UMAP 计算得出。行为相似的因子聚集在一起；正交的因子相距较远。
-
-```
-Controls:
-  [Color by: RankICIR ▾]  [Size by: IC ▾]  [Show gaps: ○]  [Reset zoom]
-```
 
 图形：
 - 每个点是一个因子
@@ -419,11 +284,6 @@ UMAP 在页面加载时或因子集变化时使用 `umap-js` 在客户端计算�
 ### 4.7  模式 D — IC 热力图
 
 整个右面板。一个矩阵，其中行 = 因子，列 = 交易日期，单元格 = 当天的 IC 值。
-
-```
-Controls:
-  [Date range: 2024 ▾]  [Color scale: ±0.15 ────●────]  [Sort rows: RankICIR ▾]
-```
 
 - 行是与左面板列表相同顺序的因子（遵循当前过滤器）
 - 列是交易日，按月分组
@@ -449,11 +309,6 @@ Controls:
 
 布局：使用 dagre 布局算法的自上而下 DAG。
 
-```
-Controls:
-  [Show: All factors / High quality only (ICIR > 0.5)]  [Zoom to fit]
-```
-
 交互：
 - 悬停节点：带完整细节的工具提示
 - 点击 `[FACTOR]` 节点：在左面板中选中，在模式 A 中显示详情
@@ -466,21 +321,7 @@ Controls:
 
 ### 5.1  页面布局
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Expression Editor                                        [~180px]  │
-├─────────────────────────────────────────────────────────────────────┤
-│  Config Row                                                [48px]   │
-├───────────────────────────────────────┬─────────────────────────────┤
-│                                       │                             │
-│  Results Grid  (2 columns)            │  Summary Panel             │
-│                                       │  [300px fixed]             │
-│  [IC Series]      [Decay Curve]       │                             │
-│  [Group Returns]  [Factor Heatmap]    │                             │
-│  [Turnover]       [Return Distrib]    │                             │
-│                                       │                             │
-└───────────────────────────────────────┴─────────────────────────────┘
-```
+![单因子测试的结果](../../assets/screens/cn/factor.png "评估完成后的单因子测试")
 
 在窄屏（< 1200px）上，摘要面板移动到结果网格下方，且结果网格变为 1 列。
 
@@ -489,10 +330,6 @@ Controls:
 一个占据约 180px 高度（4–6 行）的 Monaco 编辑器实例。可通过拖动底边调整大小。
 
 #### 编辑器上方的工具栏
-
-```
-[● qlib] [● Python]   [⇄ Convert syntax]   [⌘↵ Evaluate]   [↺ History]   [? Operator docs]
-```
 
 - 语法切换：显示当前激活的语法；点击可切换高亮模式
 - 转换语法：在 qlib 与 Python 语法之间重写当前表达式（在进程内调用 `syntax-bridge` 工具，无 API 调用）
@@ -510,27 +347,11 @@ Controls:
 
 #### AST 展开面板
 
-```
-▼ AST  (click to expand)
-
-BinOp(-)
-├── ts_corr
-│   ├── FieldNode(close)
-│   ├── FieldNode(volume)
-│   └── LitNode(20)
-└── cs_rank
-    └── FieldNode(close)
-```
-
 渲染为缩进树。节点类型使用不同颜色：FieldNode（青绿色）、LitNode（琥珀色）、OpNode（蓝色）、BinOp（灰色）。
 
 ### 5.3  配置行
 
 编辑器下方的一条水平条带，带有六个控件。控件紧凑（高度 36px）。
-
-```
-[NASDAQ100 ▾]  [2020–2024 ▾]  [next_open ▾]  [1d ✓  5d ✓  10d ✓  20d ✓]  [Neutralize: None ▾]  [Evaluate ▶]
-```
 
 | 控件 | 选项 | 备注 |
 |---|---|---|
@@ -546,16 +367,6 @@ BinOp(-)
 ### 5.4  结果网格
 
 以 2×3 网格排列的六张图表卡片。图表卡片共享一个通用的卡片外壳：
-
-```
-┌────────────────────────────────────────────────┐
-│  Card title           [interpretation hint]  ↓ │
-├────────────────────────────────────────────────┤
-│                                                │
-│  [chart area]                                  │
-│                                                │
-└────────────────────────────────────────────────┘
-```
 
 - 标题：14px，中等字重
 - 解读提示：12px 弱化文字，单行，根据结果更新
@@ -690,41 +501,6 @@ t-statistic:     2.34  (p < 0.02)
 
 #### 已填充状态
 
-```
-┌──────────────────────────────────────────────────┐
-│  Expression                                      │
-│  ts_corr(close, volume, 20)                      │
-├──────────────────────────────────────────────────┤
-│  Signal quality                                  │
-│  IC      0.032    ICIR    0.43                   │
-│  RankIC  0.047    RankICIR 0.61                  │
-│  Decay half-life  12 days                        │
-├──────────────────────────────────────────────────┤
-│  Diagnostics                                     │
-│  Look-ahead    ✓ Clean                           │
-│  Redundancy    0.31  (nearest: ts_corr_ret_v15)  │
-│  Failure       None                              │
-├──────────────────────────────────────────────────┤
-│  Suggestion                                      │
-│  Decay is moderate. Consider ts_corr(close,      │
-│  volume, 10) for shorter holding periods.        │
-├──────────────────────────────────────────────────┤
-│  Evaluation context                              │
-│  Universe  NASDAQ100  ·  101 symbols             │
-│  Period    2020-01-01 → 2024-12-31               │
-│  Execution next_open                             │
-│  Duration  342ms                                 │
-├──────────────────────────────────────────────────┤
-│  Lineage                                         │
-│  Snapshot  US_2024Q4_v3                          │
-│  Evaluated Jan 15 2025  14:32:07                │
-│  Source    AGENT (session #42)                   │
-├──────────────────────────────────────────────────┤
-│  [Save to library]   [Compare with library →]   │
-│  ▶ Full JSON  (collapsed)                        │
-└──────────────────────────────────────────────────┘
-```
-
 - "Save to library" 按钮：调用 `POST /v1/library/factors`，显示成功 toast
 - "Compare with library →" 按钮：导航到 `/library?mode=matrix`，将此因子预填入相关性矩阵，与库中 RankICIR 排名前 20 的因子对比
 - "Full JSON" 展开项：展开一个 `<pre>` 块，包含完整的 `FactorReport` JSON，带语法高亮和复制按钮
@@ -732,20 +508,6 @@ t-statistic:     2.34  (p < 0.02)
 #### 错误状态（当设置了 `failure_mode` 时）
 
 从引擎的 `FactorDiagnostics`（`diagnose().to_dict()` 的 `errors[]` / `warnings[]` 数组）渲染。头部是诊断 `title`，代码徽章是稳定的 `ASSAY-*` id，主体是 `message` + 插入符号 `snippet`，修复行是 `suggestion`。示例——一个真实的 `LOOKAHEAD_SHIFT`（`failure_mode: LOOKAHEAD`）：
-
-```
-┌──────────────────────────────────────────────────┐
-│  ⚠  Look-ahead shift              [ASSAY-E007]   │
-│                                                  │
-│  A negative look-back peeks into the future.     │
-│                                                  │
-│    ts_delay(close, -5)                           │
-│    ^^^^^^^^                                       │
-│                                                  │
-│  Fix: use a non-negative window, e.g.            │
-│  ts_delay(close, 5).                             │
-└──────────────────────────────────────────────────┘
-```
 
 `failure_mode` 是 `SYNTAX_ERROR` · `LOOKAHEAD` · `CONSTANT` · `ALL_NAN` ·
 `RUNTIME_ERROR` 之一；解析错误（`ASSAY-P###`）也会内联显示在编辑器中（§9）。

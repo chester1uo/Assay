@@ -51,12 +51,7 @@ only tools that touch price data need MASSIVE creds.
 
 ## Typical agent loop
 
-```
-assay_library_list(limit=10)         → what high-quality factors already exist?
-assay_batch([...candidate exprs...]) → sorted results; top factor's rank_icir / redundancy
-assay_library_correlation([...])     → is the new factor redundant with existing ones?
-assay_library_save(best_report)      → keep the unique, high-ICIR factor
-assay_library_prune(dry_run=true)    → propose removing dominated factors
-```
+![Agent loop](../../assets/figures/en/agent-loop.svg)
+
 
 Design contract: [architecture.md](../design/architecture.md) §6.

@@ -1,0 +1,191 @@
+<h1 class="doc-title">Precompute &amp; Common Sub-Expression Elimination (CSE)</h1>
+<p>When you evaluate <strong>many</strong> factors over the same panel — a sweep, a library
+re-score, a combination search — they share sub-expressions. <code>Sub(high, low)</code>,
+<code>Mean(volume, 20)</code>, <code>Ref(close, 1)</code> recur in <em>thousands</em> of otherwise-distinct
+factors. Computing each shared subtree once and reusing the result is the single
+biggest lever on batch throughput.</p>
+<p>Assay does this two ways, both keyed off the AST's stable
+<a href="/doc/design/engineering"><code>struct_hash</code></a>: two structurally identical subtrees —
+regardless of which surface syntax produced them — share a hash and are computed
+once.</p>
+<ol>
+<li><strong>In-process CSE</strong> — <code>FactorEngine.evaluate_many([...])</code> threads one
+structural-hash memo across every expression, so a subtree shared across the
+batch is evaluated exactly once. Zero setup, always correct.</li>
+<li><strong>Persistent precompute</strong> — <code>PrecomputeStore</code> mines the corpus's hottest
+subtrees, <strong>materialises each one for every asset</strong>, and stores the <code>(T, N)</code>
+matrix on disk. Subsequent batches load those subtrees instead of recomputing
+them — across <em>runs</em> and <em>processes</em>.</li>
+</ol>
+<p>Both are <strong>bit-for-bit identical</strong> to per-factor <code>evaluate()</code> (verified: <code>max|Δ| = 0</code>, identical NaN pattern).</p>
+<h3 id="measured">Measured</h3>
+<p>A 1,200-factor sample from the sweep corpus over a 400×150 panel (structural
+sharing ratio 2.3×):</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Path</th>
+<th>Throughput</th>
+<th>Speedup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>naive per-factor <code>evaluate()</code></td>
+<td>5 factors/s</td>
+<td>base</td>
+</tr>
+<tr>
+<td><code>evaluate_many()</code> (in-process CSE)</td>
+<td>6 factors/s</td>
+<td><strong>1.20×</strong></td>
+</tr>
+<tr>
+<td><code>evaluate_many(precompute=…)</code> warm</td>
+<td>6 factors/s</td>
+<td>1.18×</td>
+</tr>
+</tbody>
+</table></div>
+<p>The in-process CSE speedup <strong>scales with how much the corpus overlaps</strong> — a random
+1,200-factor sample shares less than the full 15k corpus, where the hottest subtrees
+recur thousands of times (<code>sub(high, low)</code> ×4,667). The persistent precompute pays
+off across <strong>repeated</strong> sweeps over a stable panel (build once at ~1s; reuse across
+runs and processes) and when <em>expensive</em> subtrees recur; for a single sweep whose
+shared subtrees are cheap it is roughly neutral (disk load ≈ recompute). Pick the
+tool to the workload — see the table at the end.</p>
+<hr />
+<h2 id="find-the-common-sub-expressions">Find the common sub-expressions</h2>
+<pre><code class="language-bash"># pure analysis — no data needed
+python -m assay.cli precompute top --corpus _assay_sweep/factors_canonical_unique.txt --top-k 15
+</code></pre>
+<pre><code>top 15 common sub-expressions in _assay_sweep/factors_canonical_unique.txt:
+  x4667   nodes=3   score=9334     sub(high, low)
+  x1872   nodes=3   score=3744     ts_delay(close, 1)
+  x1563   nodes=3   score=3126     ts_mean(volume, 20)
+  x1351   nodes=3   score=2702     ts_std(close, 20)
+  ...
+</code></pre>
+<ul>
+<li><strong>count</strong> — total occurrences across the corpus.</li>
+<li><strong>score</strong> — <code>count × (n_nodes − 1)</code>, the operator-evaluations saved by computing
+the subtree once and reusing it everywhere (the ranking key).</li>
+</ul>
+<p>SDK: <code>service.common_subexpressions(corpus, top_k=100)</code> →
+<code>[{expr, count, n_factors, n_nodes, score}]</code>.</p>
+<hr />
+<h2 id="build-the-precompute-store">Build the precompute store</h2>
+<pre><code class="language-bash">python -m assay.cli precompute build \
+  --corpus _assay_sweep/factors_canonical_unique.txt \
+  --universe NASDAQ100 --start 2025-01-02 --end 2026-06-09 --top-k 512
+python -m assay.cli precompute stats
+</code></pre>
+<p>This mines the top-<code>k</code> shared subtrees and computes each one for <strong>all assets</strong>,
+storing the matrices under <code>&lt;data_dir&gt;/precompute/</code>. Building is itself
+CSE-accelerated (nested shared subtrees compute once).</p>
+<p>SDK:</p>
+<pre><code class="language-python">import assay
+svc = assay.init()
+
+info = svc.build_precompute(
+    &quot;_assay_sweep/factors_canonical_unique.txt&quot;,
+    universe=&quot;NASDAQ100&quot;, period=(&quot;2025-01-02&quot;, &quot;2026-06-09&quot;), top_k=512,
+)
+print(info[&quot;built&quot;], &quot;subexprs |&quot;, info[&quot;est_evals_saved&quot;], &quot;evals saved / pass&quot;)
+</code></pre>
+<h3 id="auto-update-by-history">Auto-update by history</h3>
+<p>The on-disk key folds in <code>FactorEngine.panel_fingerprint()</code> — a digest of the
+panel's <strong>dates × symbols × fields</strong>. Ingest new history and the fingerprint
+changes, so stale entries simply stop matching (a miss) and the store rebuilds for
+the new panel. No manual invalidation; entries are stable and shared within a panel.</p>
+<h3 id="coupled-to-the-daily-data-update">Coupled to the daily data update</h3>
+<p>The hot cache is wired into the data pipeline so it stays aligned with the live
+data <strong>automatically</strong>:</p>
+<ul>
+<li>After a successful <strong>data-update job</strong> (<code>POST /v1/admin/data/jobs</code>), the same job
+refreshes the precompute store for that market's primary universe, over the
+<strong>freshly-ingested data range</strong>, mining the <strong>factor library</strong> as the corpus
+(<code>AssayService.refresh_precompute_for_market</code>). An <code>init</code> run refreshes every
+universe.</li>
+<li>Each build writes a <strong>manifest</strong> recording its validity period, <code>as_of</code>,
+fingerprint, build time and the latest ingested date — so freshness is a cheap
+date comparison (no panel load).</li>
+<li>The <strong>data manager page</strong> (Admin → Data Manager) shows a <em>Hot cache</em> card: per
+universe, the validity period, entry count, top sub-expressions, and a
+<strong>fresh / stale</strong> badge (stale = the data advanced since the cache was built).
+A <strong>Rebuild US / Rebuild CN</strong> button queues a full rebuild of every universe.</li>
+</ul>
+<pre><code>GET  /v1/admin/cache/status     -&gt; {store:{entries,bytes,dir}, scopes:[{universe, period, as_of,
+                                     fingerprint, built_at, data_latest, n_entries, fresh, top}]}
+POST /v1/admin/cache/rebuild     {market}  -&gt; queues a background rebuild job
+</code></pre>
+<p><code>precompute_status()</code> marks a scope <code>fresh</code> only when its recorded <code>data_latest</code>
+still equals the market's current latest ingested date — i.e. the cache is aligned
+to the live data validity period.</p>
+<hr />
+<h2 id="use-it-to-accelerate-a-sweep">Use it to accelerate a sweep</h2>
+<pre><code class="language-python"># raw factor VALUES for a big corpus, CSE + precompute accelerated
+results = svc.evaluate_many(exprs, universe=&quot;NASDAQ100&quot;,
+                            period=(&quot;2025-01-02&quot;, &quot;2026-06-09&quot;), use_precompute=True)
+for r in results:          # r is a FactorResult: r.values is the (T, N) matrix
+    ...
+</code></pre>
+<p>At the engine level (no service / data layer):</p>
+<pre><code class="language-python">from assay.engine import FactorEngine, PrecomputeStore
+
+eng = FactorEngine(panel)
+store = PrecomputeStore(&quot;/path/to/precompute&quot;)
+store.build(eng, corpus_exprs, top_k=512)          # once
+
+bound = store.bind(eng.panel_fingerprint())
+results = eng.evaluate_many(exprs, precompute=bound)  # warm: hot subtrees loaded, not recomputed
+print(f&quot;{bound.hit_rate:.0%} of subtree lookups served from precompute&quot;)
+</code></pre>
+<p><code>evaluate_many</code> returns one <code>FactorResult</code> per input (values only — no IC metrics).
+A malformed expression raises, exactly like <code>evaluate()</code>; pre-filter with
+<code>engine.diagnose()</code> if you need soft failures.</p>
+<hr />
+<h2 id="when-to-use-which">When to use which</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Situation</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>One factor</td>
+<td><code>evaluate()</code></td>
+</tr>
+<tr>
+<td>A batch, occasional</td>
+<td><code>evaluate_many()</code> (in-process CSE — free)</td>
+</tr>
+<tr>
+<td>Repeated sweeps over a stable panel</td>
+<td><code>precompute build</code> once, then <code>evaluate_many(..., use_precompute=True)</code></td>
+</tr>
+<tr>
+<td>Scoring (IC / decay / turnover), not raw values</td>
+<td><code>batch()</code> (per-factor metrics)</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="how-it-works-internals">How it works (internals)</h2>
+<ul>
+<li><code>assay.engine.cse.common_subexpressions(exprs)</code> — parse the corpus, walk every
+AST, aggregate subtrees by <code>struct_hash</code>, rank by recompute saved.</li>
+<li><code>FactorEngine._eval_cse(node, ctx, memo, precompute)</code> — memoised evaluation: each
+<code>OpNode</code> result is cached by its <code>struct_hash</code>; a bound <code>precompute</code> short-circuits
+a subtree by loading its matrix from disk. Leaves (fields / literals) cost nothing
+and are never cached.</li>
+<li><code>PrecomputeStore</code> — content-addressed <code>(hash, fingerprint) → (T, N).npy</code>, sharded
+and written atomically (temp file + <code>os.replace</code>), best-effort (a corrupt file
+reads as a miss). Mirrors the L2 factor cache.</li>
+</ul>
+<p>Correctness rests on operator <strong>purity</strong>: kernels return new arrays and never mutate
+inputs, so sharing one array object across many parents is safe — the same
+assumption the engine already makes when it reuses a field matrix across every
+reference within a single evaluation.</p>

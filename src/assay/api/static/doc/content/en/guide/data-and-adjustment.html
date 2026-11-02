@@ -1,0 +1,226 @@
+<h1 class="doc-title">Data &amp; Adjustment</h1>
+<p>This is the most important document for trusting a backtest: <strong>what data Assay stores,
+and exactly what prices a factor sees under corporate actions (splits, dividends).</strong>
+Get this wrong and every IC number is meaningless. Assay's design goal is that a factor
+can <em>never</em> see information that was not knowable on the query date, and that adjusted
+prices are reproducible from first principles.</p>
+<hr />
+<h2 id="1-two-layers-raw-assay">1. Two layers: RAW → ASSAY</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Layer</th>
+<th>What</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>RAW</strong></td>
+<td>Vendor data, as delivered, read in place</td>
+<td><code>MASSIVE_DATA_DIR</code> (US), <code>TUSHARE_DATA_DIR</code> (CN)</td>
+</tr>
+<tr>
+<td><strong>ASSAY</strong></td>
+<td>Normalized, point-in-time parquet stores the engine reads</td>
+<td><code>ASSAY_DATA_DIR</code> / <code>ASSAY_DATA_DIR_CN</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>The <strong>ingest</strong> step (<code>prepare_us</code> / <code>prepare_cn</code>) normalizes RAW into a fixed schema and
+writes the ASSAY stores. Nothing downstream ever reads RAW again — the engine, IC
+evaluation, portfolio backtest and WebUI all read the ASSAY stores through one interface,
+<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/data/store/datastore.py" target="_blank" rel="noopener noreferrer"><code>DataStore</code></a>.</p>
+<h3 id="the-assay-stores">The ASSAY stores</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Store</th>
+<th>Grain</th>
+<th>Key columns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>price_raw</code></td>
+<td>one row per (date, symbol)</td>
+<td><code>date, symbol, open, high, low, close, volume, transactions, as_of_date, source_id</code></td>
+</tr>
+<tr>
+<td><code>adj_events</code></td>
+<td>one row per corporate action</td>
+<td><code>symbol, ex_date, event_type, split_ratio, dividend_cash, as_of_date, provider_adj_factor</code></td>
+</tr>
+<tr>
+<td><code>universe_snapshots</code></td>
+<td>one row per membership change</td>
+<td><code>index_id, effective_date, symbols[], as_of_date</code></td>
+</tr>
+<tr>
+<td><code>trade_status</code> <em>(CN)</em></td>
+<td>one row per (date, symbol)</td>
+<td><code>date, symbol, up_limit, down_limit, limit_up_locked, limit_down_locked, close</code></td>
+</tr>
+<tr>
+<td><code>security_groups</code> <em>(CN)</em></td>
+<td>one row per symbol</td>
+<td><code>symbol, group, as_of_date</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Prices are stored <strong>raw / unadjusted</strong>. Corporate actions live <em>separately</em> in
+<code>adj_events</code>, and adjustment is applied <strong>at read time</strong> — never baked into storage. This
+is what makes any point-in-time slice reproducible: the same raw prices + only the events
+known as-of a date yield exactly one adjusted panel.</p>
+<hr />
+<h2 id="2-bi-temporal-date-vs-as_of_date">2. Bi-temporal: <code>date</code> vs <code>as_of_date</code></h2>
+<p>Every stored row carries two times:</p>
+<ul>
+<li><strong><code>date</code></strong> — <em>event time</em>: the day the bar/action happened.</li>
+<li><strong><code>as_of_date</code></strong> — <em>knowledge time</em>: the first day that row was knowable.</li>
+</ul>
+<p>Every read takes a <strong>required <code>as_of_date</code></strong>, and the store returns only rows with
+<code>as_of_date &lt;= as_of_date</code>. Look-ahead bias is therefore structurally impossible — you
+cannot query data that did not yet exist. Knowledge time per source:</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Source</th>
+<th><code>as_of_date</code> is…</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Price bar (EOD)</td>
+<td>the trading date (known at that day's close)</td>
+</tr>
+<tr>
+<td>Split / share change</td>
+<td>the ex / execution date</td>
+</tr>
+<tr>
+<td>Cash dividend</td>
+<td>the declaration date (falls back to ex-date)</td>
+</tr>
+<tr>
+<td>Universe membership</td>
+<td>the effective date</td>
+</tr>
+</tbody>
+</table></div>
+<pre><code class="language-python">panel = store.get_panel(
+    fields=[&quot;close&quot;, &quot;volume&quot;], symbols=universe,
+    start_date=&quot;2024-01-01&quot;, end_date=&quot;2024-06-28&quot;,
+    as_of_date=&quot;2024-06-28&quot;,   # REQUIRED — everything after this is invisible
+    adj=&quot;split&quot;,
+)
+</code></pre>
+<hr />
+<h2 id="3-how-factors-see-prices-under-splits-dividends">3. How factors see prices under splits &amp; dividends</h2>
+<p>A factor never touches <code>adj_events</code> directly. It sees the <code>(T, N)</code> price matrices that
+<code>DataStore.get_panel(..., adj=...)</code> returns, already adjusted. The math lives in
+<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/data/store/adjust.py" target="_blank" rel="noopener noreferrer"><code>adjust.py</code></a> and is <strong>forward (a.k.a. &quot;backward-
+adjusted to today&quot;)</strong>: history is rescaled onto the <strong>most recent date's basis</strong>, so the
+latest bar always equals the raw price and only the past is rescaled.</p>
+<h3 id="3-1-splits-share-changes">3.1 Splits &amp; share changes</h3>
+<p>A share-change event (split, reverse-split, merger ratio) with <strong>forward ratio</strong></p>
+<pre><code>r = split_to / split_from        # 2-for-1 split → r = 2 ; 1-for-10 reverse → r = 0.1
+</code></pre>
+<p>divides every price <strong>strictly before</strong> its ex-date by <code>r</code>, and multiplies the
+corresponding <strong>volume</strong> by <code>r</code>. The ex-date bar itself already reflects the split, so it
+is left unchanged. Multiple splits compose multiplicatively. Reverse splits (<code>r &lt; 1</code>) and
+merger share-changes use the same mechanism.</p>
+<blockquote>
+<p>Example: a 2-for-1 split on 2024-06-10. A close of <code>$400</code> on 2024-06-07 becomes <code>$200</code>
+after adjustment (÷2), lining up continuously with the ~<code>$200</code> bars from 2024-06-10 on.
+Volume on 2024-06-07 is doubled. Returns computed across the split are therefore correct.</p>
+</blockquote>
+<h3 id="3-2-cash-dividends-adj-total-only">3.2 Cash dividends (<code>adj=&quot;total&quot;</code> only)</h3>
+<p>In <code>total</code> mode, a cash dividend <code>D</code> with ex-date <code>e</code> multiplies every price <strong>strictly
+before</strong> <code>e</code> by</p>
+<pre><code>ratio = 1 − D / close_prev
+</code></pre>
+<p>where <code>close_prev</code> is the <strong>raw</strong> close on the session immediately before <code>e</code>. Because both
+<code>D</code> and <code>close_prev</code> are in raw price space, the dividend factor composes correctly with
+the split factor (<code>price_factor = split_factor × dividend_factor</code>). Two guards:</p>
+<ul>
+<li><strong>Prior-close gap</strong> — if the session before <code>e</code> is more than
+<code>_MAX_PRIOR_GAP_DAYS = 10</code> calendar days back (a data hole, or outside the loaded lead-in),
+the dividend is skipped rather than mis-scaled.</li>
+<li><strong>Dividend ≥ price</strong> — if <code>D ≥ close_prev</code> (ratio ≤ 0), the dividend is skipped rather
+than flipping the sign of history.</li>
+</ul>
+<h3 id="3-3-adjustment-modes-adj">3.3 Adjustment modes (<code>adj</code>)</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Mode</th>
+<th>Splits</th>
+<th>Dividends</th>
+<th>Use when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>none</code></td>
+<td>✗</td>
+<td>✗</td>
+<td>you want the literal traded price (e.g. price-limit logic)</td>
+</tr>
+<tr>
+<td><code>split</code> <em>(default)</em></td>
+<td>✓</td>
+<td>✗</td>
+<td>most alpha research — continuity across splits, no dividend drift</td>
+</tr>
+<tr>
+<td><code>total</code> (alias <code>forward</code>)</td>
+<td>✓</td>
+<td>✓</td>
+<td>total-return studies; dividends reinvested</td>
+</tr>
+</tbody>
+</table></div>
+<p>The provider's own <code>historical_adjustment_factor</code> is <strong>stored but not used</strong> for the math —
+adjustment is computed only from events known as-of the query date, so there is no leakage
+from a vendor factor that silently encodes future actions.</p>
+<h3 id="3-4-choosing-adj-for-a-factor">3.4 Choosing <code>adj</code> for a factor</h3>
+<ul>
+<li>Momentum / reversal / most price-shape factors → <strong><code>split</code></strong> (the default). You want a
+continuous series without dividend step-downs, but you do not want raw price jumps at
+splits.</li>
+<li>Anything comparing to a total-return benchmark, or explicitly modelling reinvested
+dividends → <strong><code>total</code></strong>.</li>
+<li>Execution-constraint / limit-up-down logic (CN) → <strong><code>none</code></strong> on the price you compare to
+the raw <code>up_limit</code> / <code>down_limit</code> bands (see §4).</li>
+</ul>
+<hr />
+<h2 id="4-china-a-share-specifics">4. China A-share specifics</h2>
+<p>CN data (Tushare) adds a few wrinkles the US path does not have:</p>
+<ul>
+<li><strong>送转 (bonus/transfer shares)</strong> are converted to a split ratio: &quot;10转15&quot; → <code>1 + 15/10 = 2.5</code>, i.e. treated as a share-change event with <code>r = 2.5</code>. Cash dividends flow into
+<code>adj_events.dividend_cash</code> (tax-inclusive value preferred).</li>
+<li><strong>Price limits (涨跌停)</strong> are stored in <code>trade_status</code> (<code>up_limit</code> / <code>down_limit</code> and the
+<code>*_locked</code> flags). Use them with <code>adj=&quot;none&quot;</code> prices for execution constraints — a name
+locked limit-up cannot be bought at the close.</li>
+<li><strong>Volume units</strong> — Tushare reports volume in 手 (100-share lots). It is normalized during
+ingest; the ASSAY <code>volume</code> column is in shares, consistent with the US path.</li>
+<li><strong>Incremental updates</strong> fetch <strong>by trade-date</strong> (all symbols per API call) and append to
+the per-symbol raw files, so a daily update is a handful of calls, not one per symbol.</li>
+</ul>
+<hr />
+<h2 id="5-reproduce-it-yourself">5. Reproduce it yourself</h2>
+<pre><code class="language-python">from assay.data.store import DataStore
+store = DataStore(cfg)
+
+raw   = store.get_panel([&quot;close&quot;], syms, s, e, as_of, adj=&quot;none&quot;)   # traded price
+split = store.get_panel([&quot;close&quot;], syms, s, e, as_of, adj=&quot;split&quot;)  # split-continuous
+total = store.get_panel([&quot;close&quot;], syms, s, e, as_of, adj=&quot;total&quot;)  # + dividends
+
+# The latest bar is identical across modes; only history is rescaled.
+</code></pre>
+<p>CLI cross-check (adjusted vs raw around a known action):</p>
+<pre><code class="language-bash">python -m assay.cli verify --start 2024-06-01 --end 2024-06-30 --adj split
+</code></pre>
+<p>See also: <a href="/doc/guide/data-pipeline">Data Pipeline</a> (how to load/update data) ·
+<a href="/doc/guide/getting-started">Getting Started</a> · <a href="/doc/design/engineering">Engineering design</a>.</p>

@@ -1,32 +1,27 @@
 # Assay WebUI — Detailed Design
 
-**Version:** 0.1 · Draft  
-**Scope:** Dashboard · Factor Library Analysis · Single Factor Test  
-**Stack:** React 18 · Recharts · Monaco Editor · Tailwind CSS
+**Version:** 0.2 · 2026-11  
+**Scope:** every page of the shipped console  
+**Stack (shipped):** vanilla JS modules and hand-drawn SVG charts, no build step — [`src/assay/api/static/`](../../../src/assay/api/static/)
 
-> **Implementation status (2026-06): 🔶 A runnable WebUI now exists — but as a zero-install
-> vanilla-JS app, not the React/Vite stack this doc specifies.** Because the build
-> environment has no npm registry access (proxy 407), the shipped UI lives at
-> [`src/assay/api/static/`](../../../src/assay/api/static/) and is served directly by FastAPI
-> (`python -m assay.cli serve-api` → `http://localhost:8000`). It implements the three
-> screens below — **Dashboard, Factor Library, Single Factor Test** — with hand-rolled SVG
-> charts, a lightweight expression editor (not Monaco), the qlib↔python syntax bridge, and
-> **SSE-streaming evaluate**, all bound to the real `/v1/*` API. It backs the editor with a
-> new data-free **`POST /v1/factor/lint`** endpoint (AST + diagnostics).
+> **Status (2026-11).** The console that ships is the zero-build app served by FastAPI. It
+> covers Dashboard, Factor Library (detail, correlation matrix, alpha-space map, IC heatmap,
+> lineage), Single Factor Test, Factor Combination, Portfolio Backtest, Chart, Data Manager,
+> Account and Users, in the QFinVerse look (sidebar, light and dark, EN / 中文), with
+> invite-only accounts when `ASSAY_ACCOUNTS=1`. The screenshots in this document are of
+> that app.
 >
-> This document remains the spec for the **production React 18 + Vite + TS + Recharts +
-> Monaco + Tailwind** rebuild (📋, the documented target). Features with no backend endpoint
-> are **omitted/gated** in the shipped UI, not faked: the live agent feed
-> (`/v1/events/session-stream`), the Alpha Space Map (UMAP), the Lineage DAG, and the IC
-> Heatmap mode. The shipped UI stays consistent with backend reality:
+> Sections 6–10 (React components, stores, hooks, Monaco) describe the React rebuild that
+> was planned first. They stay as a reference for component behaviour; they are not the
+> shipped code.
 >
-> - **Primary universe is NASDAQ-100** (~101 symbols), the only one wired up end-to-end.
->   SP500 / Russell 2000 are roadmap selector options.
-> - The MASSIVE day-aggregate source provides **OHLCV + transaction count, no `vwap`** — so
->   `vwap` is not a selectable field or execution price today.
-> - Error/diagnostic codes and `failure_mode` values come from the implemented
->   `assay.engine.diagnostics` catalog (`SYNTAX_ERROR` · `LOOKAHEAD` · `CONSTANT` ·
->   `ALL_NAN` · `RUNTIME_ERROR`; codes `ASSAY-P###/E###/O###`).
+> - Universes: TOP500 / TOP1000 / TOP3000, SP500 and NASDAQ100 on QFinVerse data; CSI300 /
+>   500 / 1000 and HK100 where Tushare data is ingested.
+> - The US day bars carry OHLCV and trade count; there is no `vwap` field.
+> - Not wired: the live agent feed on the Dashboard (no session-stream endpoint yet).
+> - Diagnostic codes and `failure_mode` values come from `assay.engine.diagnostics`
+>   (`SYNTAX_ERROR` · `LOOKAHEAD` · `CONSTANT` · `ALL_NAN` · `RUNTIME_ERROR`; codes
+>   `ASSAY-P###/E###/O###`).
 
 ---
 
@@ -49,16 +44,18 @@
 ## 1. Information Architecture
 
 ```
-assay-ui/
-├── /                           → redirect → /dashboard
-├── /dashboard                  → Dashboard
-├── /library                    → Factor Library (default: list view)
-│   ├── /library?mode=matrix    → Correlation matrix
-│   ├── /library?mode=map       → Alpha space map
-│   ├── /library?mode=heatmap   → IC heatmap
-│   └── /library?mode=lineage   → Factor lineage DAG
-├── /factor                     → Single Factor Test (blank editor)
-└── /factor/:factor_id          → Single Factor Test (pre-loaded)
+#/dashboard            Dashboard
+#/library              Factor Library (tabs: detail, matrix, alpha space, IC heatmap, lineage)
+#/factor               Single Factor Test (blank editor)
+#/factor/:factor_id    Single Factor Test (pre-loaded)
+#/combination          Factor Combination
+#/portfolio            Portfolio Backtest (#/portfolio/:factor_id pre-loaded)
+#/chart                Chart
+#/data                 Data Manager (admins)
+#/account              Account: profile, password, API keys
+#/users                Users and invitations (admins)
+/login                 Sign in, invitation sign-up, password reset, first-admin setup
+/doc/                  Doc Hub (separate page)
 ```
 
 URL params shared across all routes (global state, synced to URL):
@@ -73,50 +70,50 @@ URL params shared across all routes (global state, synced to URL):
 
 ## 2. Global Shell
 
+![Dashboard: sidebar, context bar, KPIs, leaderboard, data calendar](../../assets/screens/en/dashboard.png "Dashboard on QFinVerse data (SP500, 2019–2026)")
+
 ### 2.1  Layout
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  TopNav                                                  [48px]  │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  <Outlet />     (page content, scrollable)                       │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+A sidebar on the left and the page on the right, as in the QFinVerse console. A sticky
+context bar sits on top of every page. Pages scroll; the sidebar and the context bar stay.
 
-No sidebar. All navigation lives in the top bar. Pages are full-width with internal padding.
+### 2.2  Sidebar
 
-### 2.2  TopNav component
+224 px wide; *Collapse* folds it to 60 px of icons (remembered per browser).
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  ◆ ASSAY   │  Dashboard  │  Factor Library  │  Single Factor Test   │    │
-│            │                                                   [search]   │
-│                                       [NASDAQ100 ▾]  [2020–2024 ▾]  [●]   │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+| Element | Behaviour |
+|---|---|
+| QFinVerse mark + "Assay" | Goes to the Dashboard |
+| Dashboard | Top link |
+| Research | Factor Library · Single Factor Test · Factor Combination · Portfolio Backtest |
+| Data | Chart · Data Manager (admins) · Docs (opens the Doc Hub in a new tab) |
+| Admin | Users (admins only) |
+| QFinVerse | Opens the QFinVerse console in a new tab |
+| Theme | System / light / dark; shared with QFinVerse (`qfv-theme`) |
+| Language | English / 中文 |
+| User row | Name and role; opens Account. The icon beside it signs out |
+| Build | `Build <commit>` of the running deployment; the tooltip adds engine version and deploy time |
 
-Elements from left to right:
+The active page is marked with a tinted row and a 3 px accent bar.
 
-| Element | Type | Behaviour |
-|---|---|---|
-| `◆ ASSAY` | Logo + text | Navigates to `/dashboard` |
-| `Dashboard` | Tab | Active state when on `/dashboard` |
-| `Factor Library` | Tab | Active state when on `/library` |
-| `Single Factor Test` | Tab | Active state when on `/factor` |
-| Search box | Input | Full-text search across factor expressions in library; results shown in dropdown; selecting navigates to `/factor/:factor_id` |
-| Universe selector | Dropdown | Options: NASDAQ100 (default, only one wired up today), SP500, Russell2000 (roadmap — shown disabled until ingested); updates global state |
-| Period selector | Dropdown | Presets: 1Y, 3Y, 5Y + custom date range picker; updates global state |
-| Status indicator | Dot icon | Green = data fresh, amber = stale (> 24h), red = sync error; tooltip shows last sync time; click navigates to data calendar on Dashboard |
+### 2.3  Context bar
 
-### 2.3  TopNav props and behaviour
+| Element | Behaviour |
+|---|---|
+| Universe | Universes with data are selectable; others are listed as coming soon |
+| Period | 1Y / 3Y / 5Y presets or a custom start and end date |
+| Status pill | "Data to <last date>"; green when fresh, amber when stale or degraded, red when unreachable. Click goes to the Dashboard |
 
-Changing universe or period:
-1. Updates Zustand global state
-2. Invalidates current session ID (calls `POST /v1/session/create` with new params)
-3. Triggers React Query cache invalidation for library queries
-4. Does **not** re-run any in-progress evaluation — user must re-run manually
+Universe and period are global: they are kept in the URL and the browser, and every page
+reads them. Changing them does not re-run an evaluation that is already running.
+
+### 2.4  Sign-in
+
+With accounts on, a signed-out visitor is sent to `/login` and comes back to the same page
+afterwards. The same page handles invitation sign-up (`?invite=`), password reset
+(`?reset=`) and, on a new server, creating the first admin.
+
+![Sign-in page](../../assets/screens/en/login.png)
 
 ---
 
@@ -124,29 +121,11 @@ Changing universe or period:
 
 ### 3.1  Page layout
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  StatusBar                                               [48px]   │
-├──────────────────────────────────────────────────────────────────┤
-│  KPI Row  [4 cards]                                     [120px]   │
-├──────────────────┬───────────────────────────────────────────────┤
-│                  │                                               │
-│  Factor          │  Agent Activity Feed                          │
-│  Leaderboard     │                                               │
-│  [60%]           │  [40%]                            [~400px]   │
-│                  │                                               │
-├──────────────────┴───────────────────────────────────────────────┤
-│  Data Calendar                                          [160px]   │
-└──────────────────────────────────────────────────────────────────┘
-```
+The page is shown in the screenshot in §2.
 
 ### 3.2  StatusBar
 
-A slim 48px strip at the top of the Dashboard page (below TopNav). Shows three items:
-
-```
-  ● Data current as of Dec 31 2024  ·  Last sync: 2 hours ago  ·  101 symbols  ·  ⚠ 2 warnings
-```
+A slim strip at the top of the Dashboard page: data status, last sync, per-market coverage, engine version and data warnings.
 
 - Green dot = fully synced, amber = stale, red = error
 - Click "2 warnings" expands an inline alert panel listing specific data quality issues
@@ -154,36 +133,15 @@ A slim 48px strip at the top of the Dashboard page (below TopNav). Shows three i
 
 ### 3.3  KPI Row
 
-Four metric cards in a horizontal row with equal widths.
-
-```
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│  Total       │  │  Avg         │  │  Agent       │  │  Best IC     │
-│  factors     │  │  RankICIR    │  │  sessions    │  │  today       │
-│              │  │              │  │              │  │              │
-│  1,284       │  │  0.52        │  │  3           │  │  0.089       │
-│  ↑ 31 today  │  │  ↑ 0.03      │  │  284 factors │  │  ts_corr...  │
-└──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
-```
-
-Each card:
-- Label in 13px muted text above the number
-- Primary metric in 28px / medium weight
-- Secondary line: delta vs previous session (cards 1, 2) or contextual detail (cards 3, 4)
-- Background: `--color-background-secondary`, no border, 8px radius
-- Cards 1, 3 are clickable: card 1 navigates to `/library`, card 4 navigates to `/factor/:best_factor_id`
-
-Polling: KPI row refetches every 30 seconds via React Query.
+Four cards of equal width: total factors in the library, average RankICIR, best RankICIR
+(with its expression) and active sessions (with the number of data days). Labels are small
+uppercase muted text; the value is in the mono face.
 
 ### 3.4  Factor Leaderboard
 
 Left column (60%), shows the top 100 factors sorted by RankICIR.
 
 #### Controls (above table)
-
-```
-[Sort: RankICIR ▾]  [Min ICIR: 0.0 ▾]  [Source: All ▾]  [Hide redundant: ○]
-```
 
 - Sort dropdown: RankICIR (default), IC, Decay half-life, Evaluated date
 - Min ICIR filter: slider + numeric input, 0.0–2.0
@@ -214,26 +172,11 @@ Right column (40%). Live feed of factor evaluations triggered in the current or 
 
 #### Session summary panel (top of feed)
 
-```
-┌──────────────────────────────────────────────────┐
-│  Session #42   Started 14:30 · 23 min ago        │
-│                                                  │
-│  284 evaluated   ·   61% pass   ·   avg IC 0.041 │
-│  ▁▂▃▄▅▃▂▄▅▆▅▄▃▂ (IC sparkline)                  │
-└──────────────────────────────────────────────────┘
-```
+> Not wired yet: there is no session-stream endpoint. The right column shows the library's top factors by RankICIR instead (see §2). The rest of this section is the target.
 
 #### Feed entries
 
 Each entry is a card with:
-
-```
-┌────────────────────────────────────────────────────┐
-│  ts_corr(close, volume, 20)             0.047 IC   │
-│  RankICIR 0.61  ·  Decay 12d  ·  31ms             │
-│  "Consider shorter window for higher turnover..."  │
-└────────────────────────────────────────────────────┘
-```
 
 - New entries animate in from the top (CSS slide-down transition)
 - Maximum 50 visible entries; older ones fade out at the bottom
@@ -246,13 +189,6 @@ Polling: new entries via SSE subscription to `GET /v1/events/session-stream`.
 ### 3.6  Data Calendar
 
 Full-width strip below the leaderboard + feed row. A GitHub contribution heatmap showing data availability by trading day.
-
-```
-       Jan  Feb  Mar  Apr  May  Jun  Jul  Aug  Sep  Oct  Nov  Dec
-2022   ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████
-2023   ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████
-2024   ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████ ████
-```
 
 Cell colors:
 - Dark green: 100% coverage (all symbols have data)
@@ -272,26 +208,13 @@ Interactions:
 
 ### 4.1  Page layout
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│  [Analysis mode tabs]  [Bulk action bar — visible when selected]   │
-├──────────────────────┬─────────────────────────────────────────────┤
-│                      │                                             │
-│  Factor List         │  Analysis Panel                            │
-│  [35%]               │  [65%]                                     │
-│                      │                                             │
-│  (virtualised list)  │  (changes based on active mode tab)        │
-│                      │                                             │
-└──────────────────────┴─────────────────────────────────────────────┘
-```
+![Factor Library, detail mode](../../assets/screens/en/library.png)
 
 The left/right split is resizable — user can drag the divider between 25%–50%.
 
 ### 4.2  Mode tabs
 
-```
-[Factor Detail]  [Correlation Matrix]  [Alpha Space Map]  [IC Heatmap]  [Lineage]
-```
+Five tabs: Factor detail, Correlation matrix, Alpha space map, IC heatmap, Lineage.
 
 Mode state is persisted in the URL as `?mode=matrix`.
 
@@ -299,23 +222,11 @@ Mode state is persisted in the URL as `?mode=matrix`.
 
 #### Filter bar
 
-```
-[🔍 Search expressions...        ] [Source: All ▾] [Sort: RankICIR ▾]
-[Min ICIR ──●──────] [Max redundancy ──────●──] [× Clear filters]
-```
-
 - Full-text search runs against the expression string (client-side for small libraries, server-side for > 500 factors)
 - Sliders update results on release (not on drag, to avoid excessive API calls)
 - Active filter count badge on "Clear filters" button
 
 #### List item
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ☐  ts_corr(close, volume, 20)                              [AGENT]   │
-│    ████████████████░░░░░  0.61 ICIR  ·  12d decay  ·  ● unique      │
-└──────────────────────────────────────────────────────────────────────┘
-```
 
 - Checkbox for multi-select
 - Expression in monospace, truncated, full text in tooltip
@@ -330,10 +241,6 @@ Selected item has a blue left border. Active item (last clicked) has a slightly 
 
 #### Bulk action bar (appears when ≥ 1 item checked)
 
-```
-  3 selected   [Export ↓]  [Tag ▾]  [Compare]  [Delete]  [× Clear]
-```
-
 - Export: downloads FactorReport JSON or CSV for selected factors
 - Tag: dropdown to add a label (create new or choose existing)
 - Compare: switches to Correlation Matrix mode pre-seeded with selected factors
@@ -345,27 +252,7 @@ Default mode. Shows when a factor is selected from the list.
 
 Right panel layout:
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  ts_corr(close, volume, 20)                                         │
-│  Factor ID: abc123  ·  Evaluated: Jan 15 2025  ·  AGENT            │
-│                                                    [Open in tester →]│
-├───────────────────┬─────────────────────────────────────────────────┤
-│  RankIC   0.047   │  IC      0.032                                  │
-│  RankICIR 0.61    │  ICIR    0.43                                   │
-│  Decay    12d     │  Turnover  0.72                                  │
-│  Redundancy 0.31  │  Lookahead  ✓ Clean                             │
-├───────────────────┴─────────────────────────────────────────────────┤
-│  IC sparkline (last 252 trading days)                               │
-│  ▁▂▃▄▅▃▂▄▅▆▅▄▃▂▁▂▃▄▅▆▇▆▅▄▃▂▁▂▃▄▅                                  │
-├─────────────────────────────────────────────────────────────────────┤
-│  Suggestion                                                         │
-│  "Decay is moderate. Try ts_corr(close, volume, 10) for shorter..." │
-├─────────────────────────────────────────────────────────────────────┤
-│  ▶ Lineage  (collapsed by default)                                  │
-│  ▶ Full FactorReport JSON  (collapsed by default)                   │
-└─────────────────────────────────────────────────────────────────────┘
-```
+The detail panel is shown in the screenshot in §4.1.
 
 The "Open in tester →" button navigates to `/factor/abc123`.
 
@@ -373,10 +260,7 @@ The "Open in tester →" button navigates to `/factor/abc123`.
 
 Full right panel is a heatmap.
 
-```
-Controls:
-  [Redundancy threshold: 0.70 ──●──────]  [Cluster: ○ On]  [Export matrix ↓]
-```
+![Factor Library, correlation matrix](../../assets/screens/en/library-matrix.png)
 
 Heatmap:
 - Rows and columns are factor expressions (truncated)
@@ -387,10 +271,6 @@ Heatmap:
 - Click any cell: opens a scatter plot modal of the two factors' daily values
 
 Summary below heatmap:
-```
-  14 pairs above 0.70 threshold.  Pruning would remove 8 dominated factors.
-  [Preview pruning →]
-```
 
 "Preview pruning" opens a side drawer listing the 8 factors that would be removed, keeping the one with higher RankICIR in each pair.
 
@@ -399,11 +279,6 @@ Summary below heatmap:
 Full right panel is a 2D scatter plot.
 
 The position of each point is computed by running UMAP on the pairwise rank-correlation distance matrix (1 - |corr|). Factors that behave similarly cluster together; orthogonal factors are far apart.
-
-```
-Controls:
-  [Color by: RankICIR ▾]  [Size by: IC ▾]  [Show gaps: ○]  [Reset zoom]
-```
 
 Plot:
 - Each point is a factor
@@ -419,11 +294,6 @@ UMAP is computed client-side using `umap-js` on page load or when the factor set
 ### 4.7  Mode D — IC Heatmap
 
 Full right panel. A matrix where rows = factors, columns = trading dates, cells = IC value that day.
-
-```
-Controls:
-  [Date range: 2024 ▾]  [Color scale: ±0.15 ────●────]  [Sort rows: RankICIR ▾]
-```
 
 - Rows are factors in the same order as the left panel list (honors current filters)
 - Columns are trading days, grouped by month
@@ -449,11 +319,6 @@ Edges:
 
 Layout: top-to-bottom DAG using dagre layout algorithm.
 
-```
-Controls:
-  [Show: All factors / High quality only (ICIR > 0.5)]  [Zoom to fit]
-```
-
 Interactions:
 - Hover node: tooltip with full details
 - Click `[FACTOR]` node: selects in left panel, shows detail in Mode A
@@ -466,21 +331,7 @@ Interactions:
 
 ### 5.1  Page layout
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Expression Editor                                        [~180px]  │
-├─────────────────────────────────────────────────────────────────────┤
-│  Config Row                                                [48px]   │
-├───────────────────────────────────────┬─────────────────────────────┤
-│                                       │                             │
-│  Results Grid  (2 columns)            │  Summary Panel             │
-│                                       │  [300px fixed]             │
-│  [IC Series]      [Decay Curve]       │                             │
-│  [Group Returns]  [Factor Heatmap]    │                             │
-│  [Turnover]       [Return Distrib]    │                             │
-│                                       │                             │
-└───────────────────────────────────────┴─────────────────────────────┘
-```
+![Single Factor Test with results](../../assets/screens/en/factor.png "Single Factor Test after an evaluation")
 
 On narrow screens (< 1200px) the summary panel moves below the results grid and the results grid becomes 1 column.
 
@@ -489,10 +340,6 @@ On narrow screens (< 1200px) the summary panel moves below the results grid and 
 A Monaco Editor instance occupying approximately 180px height (4–6 lines). Resizable by dragging the bottom edge.
 
 #### Toolbar above the editor
-
-```
-[● qlib] [● Python]   [⇄ Convert syntax]   [⌘↵ Evaluate]   [↺ History]   [? Operator docs]
-```
 
 - Syntax toggle: shows which syntax is currently active; clicking switches highlighting mode
 - Convert syntax: rewrites the current expression between qlib and Python syntax (calls the `syntax-bridge` utility in-process, no API call)
@@ -510,27 +357,11 @@ A Monaco Editor instance occupying approximately 180px height (4–6 lines). Res
 
 #### AST disclosure panel
 
-```
-▼ AST  (click to expand)
-
-BinOp(-)
-├── ts_corr
-│   ├── FieldNode(close)
-│   ├── FieldNode(volume)
-│   └── LitNode(20)
-└── cs_rank
-    └── FieldNode(close)
-```
-
 Rendered as an indented tree. Node types use different colors: FieldNode (teal), LitNode (amber), OpNode (blue), BinOp (gray).
 
 ### 5.3  Config Row
 
 A horizontal strip below the editor with six controls. Controls are compact (height 36px).
-
-```
-[NASDAQ100 ▾]  [2020–2024 ▾]  [next_open ▾]  [1d ✓  5d ✓  10d ✓  20d ✓]  [Neutralize: None ▾]  [Evaluate ▶]
-```
 
 | Control | Options | Notes |
 |---|---|---|
@@ -546,16 +377,6 @@ When universe or period differ from global state, the control shows a small `*` 
 ### 5.4  Results Grid
 
 Six chart cards in a 2×3 grid. Chart cards share a common card shell:
-
-```
-┌────────────────────────────────────────────────┐
-│  Card title           [interpretation hint]  ↓ │
-├────────────────────────────────────────────────┤
-│                                                │
-│  [chart area]                                  │
-│                                                │
-└────────────────────────────────────────────────┘
-```
 
 - Title: 14px, medium weight
 - Interpretation hint: 12px muted text, one line, updates based on results
@@ -690,41 +511,6 @@ While evaluation is in progress: shows a loading skeleton for each section.
 
 #### Populated state
 
-```
-┌──────────────────────────────────────────────────┐
-│  Expression                                      │
-│  ts_corr(close, volume, 20)                      │
-├──────────────────────────────────────────────────┤
-│  Signal quality                                  │
-│  IC      0.032    ICIR    0.43                   │
-│  RankIC  0.047    RankICIR 0.61                  │
-│  Decay half-life  12 days                        │
-├──────────────────────────────────────────────────┤
-│  Diagnostics                                     │
-│  Look-ahead    ✓ Clean                           │
-│  Redundancy    0.31  (nearest: ts_corr_ret_v15)  │
-│  Failure       None                              │
-├──────────────────────────────────────────────────┤
-│  Suggestion                                      │
-│  Decay is moderate. Consider ts_corr(close,      │
-│  volume, 10) for shorter holding periods.        │
-├──────────────────────────────────────────────────┤
-│  Evaluation context                              │
-│  Universe  NASDAQ100  ·  101 symbols             │
-│  Period    2020-01-01 → 2024-12-31               │
-│  Execution next_open                             │
-│  Duration  342ms                                 │
-├──────────────────────────────────────────────────┤
-│  Lineage                                         │
-│  Snapshot  US_2024Q4_v3                          │
-│  Evaluated Jan 15 2025  14:32:07                │
-│  Source    AGENT (session #42)                   │
-├──────────────────────────────────────────────────┤
-│  [Save to library]   [Compare with library →]   │
-│  ▶ Full JSON  (collapsed)                        │
-└──────────────────────────────────────────────────┘
-```
-
 - "Save to library" button: calls `POST /v1/library/factors`, shows success toast
 - "Compare with library →" button: navigates to `/library?mode=matrix` with this factor pre-seeded in the correlation matrix against the top 20 library factors by RankICIR
 - "Full JSON" disclosure: expands a `<pre>` block with the complete `FactorReport` JSON, syntax-highlighted, with a copy button
@@ -735,20 +521,6 @@ Rendered from the engine's `FactorDiagnostics` (the `errors[]` / `warnings[]` ar
 `diagnose().to_dict()`). The header is the diagnostic `title`, the code badge is the stable
 `ASSAY-*` id, the body is the `message` + caret `snippet`, and the fix line is the
 `suggestion`. Example — a real `LOOKAHEAD_SHIFT` (`failure_mode: LOOKAHEAD`):
-
-```
-┌──────────────────────────────────────────────────┐
-│  ⚠  Look-ahead shift              [ASSAY-E007]   │
-│                                                  │
-│  A negative look-back peeks into the future.     │
-│                                                  │
-│    ts_delay(close, -5)                           │
-│    ^^^^^^^^                                       │
-│                                                  │
-│  Fix: use a non-negative window, e.g.            │
-│  ts_delay(close, 5).                             │
-└──────────────────────────────────────────────────┘
-```
 
 `failure_mode` is one of `SYNTAX_ERROR` · `LOOKAHEAD` · `CONSTANT` · `ALL_NAN` ·
 `RUNTIME_ERROR`; parse errors (`ASSAY-P###`) surface inline in the editor (§9) as well.

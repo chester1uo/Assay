@@ -1,3 +1,4 @@
+import { P } from "../palette.js";
 // pages/library.js — Factor Library Analysis (assay_webui_design.md §4).
 // Contract: export render(root, ctx) where ctx = {api, store, router, charts, el, ...dom}.
 //
@@ -135,7 +136,7 @@ function injectStyle() {
 
 .lib-bulkbar {
   display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
-  padding: var(--sp-2) var(--sp-3); background: #E4ECFD; border: 1px solid var(--blue);
+  padding: var(--sp-2) var(--sp-3); background: var(--primary-soft); border: 1px solid var(--blue);
   border-radius: var(--radius-btn); margin-bottom: var(--sp-3);
 }
 .lib-bulkbar .lib-bulk-count { font-weight: 500; color: var(--navy); }
@@ -148,7 +149,7 @@ function injectStyle() {
 }
 .lib-item:hover { background: var(--gray-1); }
 .lib-item.is-selected { border-left-color: var(--blue); }
-.lib-item.is-active { background: #E4ECFD; }
+.lib-item.is-active { background: var(--primary-soft); }
 .lib-item-check { margin-top: 2px; }
 .lib-item-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .lib-item-expr {
@@ -181,7 +182,7 @@ function injectStyle() {
 .lib-matrix-controls { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; margin-bottom: var(--sp-3); }
 .lib-heatmap-wrap { overflow: auto; }
 .lib-heatmap text { font-family: var(--font-mono); fill: var(--text-muted); }
-.lib-heatmap rect.cell { stroke: #fff; stroke-width: 1; }
+.lib-heatmap rect.cell { stroke: var(--surface); stroke-width: 1; }
 .lib-heatmap rect.cell.over { stroke: var(--red); stroke-width: 1.5; }
 .lib-prune-list { list-style: none; margin: var(--sp-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
 .lib-prune-list li { font-family: var(--font-mono); font-size: 12px; padding: var(--sp-1) var(--sp-2); background: var(--gray-1); border-radius: var(--radius-badge); display: flex; gap: var(--sp-2); align-items: center; }
@@ -807,7 +808,7 @@ export function render(root, ctx) {
         rect.setAttribute("x", String(labelW + j * cellW)); rect.setAttribute("y", String(yc));
         rect.setAttribute("width", String(cellW - 2)); rect.setAttribute("height", String(cellH - 2));
         rect.setAttribute("rx", "2");
-        rect.setAttribute("fill", Number.isFinite(v) ? ctx.charts.diverging(v, maxAbs) : "#F3F4F6");
+        rect.setAttribute("fill", Number.isFinite(v) ? ctx.charts.diverging(v, maxAbs) : P.fill);
         const tt = document.createElementNS(NS, "title");
         tt.textContent = `${rowExpr}\n${periods[j]}: ${Number.isFinite(v) ? v.toFixed(4) : "—"}`;
         rect.appendChild(tt);
@@ -820,11 +821,11 @@ export function render(root, ctx) {
       srect.setAttribute("x", String(sx)); srect.setAttribute("y", String(yc));
       srect.setAttribute("width", String(sumW - 6)); srect.setAttribute("height", String(cellH - 2));
       srect.setAttribute("rx", "2");
-      srect.setAttribute("fill", Number.isFinite(sv) ? ctx.charts.diverging(sv, maxAbs) : "#F3F4F6");
+      srect.setAttribute("fill", Number.isFinite(sv) ? ctx.charts.diverging(sv, maxAbs) : P.fill);
       srect.setAttribute("stroke", "#0001");
       svg.appendChild(srect);
       svg.appendChild(txt(sx + (sumW - 6) / 2, yc + cellH / 2 + 3, Number.isFinite(sv) ? sv.toFixed(3) : "—",
-        { anchor: "middle", size: 9, fill: Math.abs(sv) > maxAbs * 0.5 ? "#fff" : "#333" }));
+        { anchor: "middle", size: 9, fill: Math.abs(sv) > maxAbs * 0.5 ? P.surface : P.text }));
     }
     return svg;
   }
@@ -867,7 +868,7 @@ export function render(root, ctx) {
     load();
   }
 
-  const CLUSTER_COLORS = ["#2D5BE3", "#0E8A7E", "#C0392B", "#8E44AD", "#D98C00", "#1E7B4B", "#2C82C9", "#C0398B"];
+  const CLUSTER_COLORS = [P.primary, P.second, P.down, P.purple, P.amber, P.up, "#2C82C9", "#C0398B"];
 
   function buildScatter(res) {
     const NS = "http://www.w3.org/2000/svg";
@@ -898,7 +899,7 @@ export function render(root, ctx) {
       c.setAttribute("cx", String(sx(p.x))); c.setAttribute("cy", String(sy(p.y)));
       c.setAttribute("r", String(rOf(p)));
       c.setAttribute("fill", CLUSTER_COLORS[(p.cluster || 0) % CLUSTER_COLORS.length]);
-      c.setAttribute("fill-opacity", "0.78"); c.setAttribute("stroke", "#fff"); c.setAttribute("stroke-width", "1");
+      c.setAttribute("fill-opacity", "0.78"); c.setAttribute("stroke", P.surface); c.setAttribute("stroke-width", "1");
       const tt = document.createElementNS(NS, "title");
       tt.textContent = `${p.expr}\nRankIC ${fmtMaybe(p.rank_ic, 3)} · RankICIR ${fmtMaybe(p.rank_icir, 2)}${p.source ? " · " + p.source : ""}`;
       c.appendChild(tt);
@@ -976,7 +977,7 @@ export function render(root, ctx) {
     marker.setAttribute("markerWidth", "7"); marker.setAttribute("markerHeight", "7");
     marker.setAttribute("orient", "auto-start-reverse");
     const mpath = document.createElementNS(NS, "path");
-    mpath.setAttribute("d", "M0,0 L10,5 L0,10 z"); mpath.setAttribute("fill", "#9aa3b2");
+    mpath.setAttribute("d", "M0,0 L10,5 L0,10 z"); mpath.setAttribute("fill", P.muted);
     marker.appendChild(mpath); defs.appendChild(marker); svg.appendChild(defs);
     // edges first (under nodes)
     for (const e of edges) {
@@ -986,7 +987,7 @@ export function render(root, ctx) {
       const mx = (x1 + x2) / 2;
       const path = document.createElementNS(NS, "path");
       path.setAttribute("d", `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
-      path.setAttribute("fill", "none"); path.setAttribute("stroke", "#9aa3b2"); path.setAttribute("stroke-width", "1.4");
+      path.setAttribute("fill", "none"); path.setAttribute("stroke", P.muted); path.setAttribute("stroke-width", "1.4");
       path.setAttribute("marker-end", "url(#lin-arrow)");
       svg.appendChild(path);
     }
@@ -1113,7 +1114,7 @@ export function render(root, ctx) {
       )
     );
     if (series.length >= 2) {
-      const spark = ctx.charts.sparkline(series, { width: 560, height: 56, color: "#2D5BE3" });
+      const spark = ctx.charts.sparkline(series, { width: 560, height: 56, color: P.primary });
       sparkBlock.appendChild(el("div", { className: "chart-wrap" }, spark));
     } else {
       sparkBlock.appendChild(el("div", { className: "muted", style: { fontSize: "12px" } }, ctx.t("lib.icSeriesNa")));

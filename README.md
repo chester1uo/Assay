@@ -14,9 +14,12 @@ built-in **Data Manager** (WebUI) or ingested from a local mirror — see the
 
 ## 📚 Documentation
 
-Full design specs and usage guides live in **[docs/](docs/en/README.md)**:
+Full design specs and usage guides live in **[docs/](docs/en/README.md)**, and are served
+as the Doc Hub at **https://assay.qfinverse.com/doc/** (`/doc/` on any deployment; rebuild
+it with `python scripts/build_doc_hub.py` after editing docs):
 
 - **Start here:** [Getting Started](docs/en/guide/getting-started.md)
+- **US data from QFinVerse:** [QFinVerse daily panel](docs/en/guide/qfv-data.md)
 - **Data & correctness:** [Data & Adjustment](docs/en/guide/data-and-adjustment.md)
   ([中文](docs/cn/guide/data-and-adjustment.md)) — the data layer, point-in-time reads, and how
   factors see prices under **splits & dividends**.
@@ -82,6 +85,32 @@ There are two ways to populate RAW:
 | `TUSHARE_TOKEN` | Tushare API token (CN / HK download) |
 | `TUSHARE_API_URL` | endpoint override — a relay gateway speaking the Tushare protocol (default `api.tushare.pro`); required for the HK price endpoints |
 | `ASSAY_DATA_DIR` / `ASSAY_DATA_DIR_CN` / `ASSAY_DATA_DIR_HK` | output root(s) for the prepared stores |
+| `ASSAY_QFV_PANEL_DIR` | read US data from a QFinVerse daily panel store instead (see below) |
+| `ASSAY_ACCOUNTS` | `1`: user accounts — invite-only sign-up, sign-in at `/login`, personal API keys (`asy_...`), user admin; the first admin is created with the token in `<state>/setup_token` |
+| `ASSAY_STATE_DIR` | where the account database, session secret and setup token live (default `$ASSAY_DATA_DIR/_state`; keep it on a local disk) |
+| `ASSAY_SECRET_KEY` / `ASSAY_SESSION_DAYS` | session signing secret (default: generated into the state dir) / sign-in lifetime (default 7) |
+| `ASSAY_API_KEYS` / `ASSAY_ADMIN_KEYS` | keys for the API; admin keys alone may use `/admin` and `/v1/admin/*` (service keys; they keep working next to accounts) |
+| `ASSAY_CORS_ORIGINS` | origins allowed to call the API from a browser (default any, without credentials) |
+
+### US data from QFinVerse
+
+With `ASSAY_QFV_PANEL_DIR` set, US universes read the daily panel store QFinVerse
+builds from MASSIVE (`qfz-data daily build`, format `qfv-daily-panel/1`; the reader
+is vendored in `assay/data/qfv_panel`, refreshed by `scripts/sync_qfv_panel.py`).
+What changes:
+
+- universes `TOP500` / `TOP1000` / `TOP3000`: monthly point-in-time liquidity
+  universes of common stocks; `SP500` and `NASDAQ100` resolve their dated histories
+  to QFinVerse securities;
+- evaluation covers every security that was a member during the period and scores
+  it only on the dates it was a member (the parquet store uses the members on the
+  last day for the whole period);
+- splits and dividends come checked against the prices, renamed tickers are one
+  security (`FB` and `META`), and reused tickers are not (older holder: `ABC~2004-03`);
+- fields: `open high low close volume transactions`, plus `dvol` (dollar volume)
+  and `ret` (daily total return);
+- the store refreshes itself when QFinVerse publishes a new version; US ingest
+  jobs in the Data Manager are not needed.
 
 Expected source layout under `MASSIVE_DATA_DIR`:
 

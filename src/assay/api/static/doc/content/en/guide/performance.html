@@ -1,0 +1,111 @@
+<h1 class="doc-title">Performance &amp; Caching</h1>
+<p>The factor-evaluation hot path is benchmarked over the WorldQuant <strong>Alpha-101</strong> catalog,
+comparing <strong>cache vs no-cache</strong> regimes. The benchmark is
+<a href="https://github.com/QFinVerse/Assay/blob/main/scripts/bench_alpha101.py" target="_blank" rel="noopener noreferrer"><code>scripts/bench_alpha101.py</code></a>; a guard test lives at
+<a href="https://github.com/QFinVerse/Assay/blob/main/tests/performance/test_performance.py" target="_blank" rel="noopener noreferrer"><code>tests/performance/test_performance.py</code></a>.</p>
+<h2 id="caches">Caches</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Cache</th>
+<th>What it reuses</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>warm engine / session</strong></td>
+<td>the loaded price panel + field-matrix pivots</td>
+<td>one <code>FactorEngine</code> reused across factors; <code>assay.Session</code>; <code>/v1/session/create</code></td>
+</tr>
+<tr>
+<td><strong>L2 disk cache</strong></td>
+<td>computed <code>(T, N)</code> factor-result matrices, keyed by (expr, universe, period, adj, market)</td>
+<td><code>assay.cache.L2FactorCache</code> under <code>&lt;data_dir&gt;/cache</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="run-the-benchmark">Run the benchmark</h2>
+<pre><code class="language-bash"># synthetic panel (offline, deterministic, runs all 101 alphas)
+PYTHONPATH=src python scripts/bench_alpha101.py --synthetic --n 200 --t 504
+
+# real ingested data (uses ASSAY_DATA_DIR; runs the alphas whose fields exist)
+PYTHONPATH=src python scripts/bench_alpha101.py --real --start 2025-01-02 --end 2026-06-09
+
+# the guard test (prints the report; -s to see it)
+PYTHONPATH=src python -m pytest -m performance -s
+</code></pre>
+<p>Every regime is <strong>correctness-checked</strong>: it must produce identical factor matrices
+(<code>max|Δ| = 0</code>) — caching may never change a result.</p>
+<h2 id="representative-numbers">Representative numbers</h2>
+<p><strong>Synthetic, all 101 alphas (300 dates × 120 symbols):</strong></p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>regime</th>
+<th>ms/factor</th>
+<th>factors/s</th>
+<th>speedup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>no-cache (fresh engine/factor)</td>
+<td>91.2</td>
+<td>11</td>
+<td>base</td>
+</tr>
+<tr>
+<td>warm engine (panel/pivot cache)</td>
+<td>43.6</td>
+<td>23</td>
+<td><strong>2.1×</strong></td>
+</tr>
+<tr>
+<td>L2 warm (load from disk)</td>
+<td>0.13</td>
+<td>7,725</td>
+<td><strong>704×</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Real data — NASDAQ-100, 2025-01-02…2026-06-09 (359 × 101, 52 runnable alphas):</strong></p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>regime</th>
+<th>ms/factor</th>
+<th>factors/s</th>
+<th>speedup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>no-cache (<code>from_store</code> per factor)</td>
+<td>168</td>
+<td>6</td>
+<td>base</td>
+</tr>
+<tr>
+<td>warm engine (session cache)</td>
+<td>~36–49</td>
+<td>20–28</td>
+<td><strong>3.4–4.6×</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>Two stories: reusing a warm engine amortizes the ~200 ms parquet panel load (the
+engineering-doc §8.2 effect — strongest on real data), and the <strong>L2 result cache makes
+re-running an evaluated factor set ~700× faster</strong> (disk load vs recompute). Only 52 of 101
+alphas run on real data (no <code>vwap</code>/<code>market_cap</code>); all 101 run on the synthetic panel.</p>
+<h2 id="notes">Notes</h2>
+<ul>
+<li><code>cvxpy</code>/<code>scikit-learn</code> are not dependencies; the optimization paths use scipy + numpy.</li>
+<li>The performance test asserts only the timing-robust facts (correctness + the huge L2 margin);
+the warm-engine speedup is reported but not asserted (it's negligible on tiny panels and so
+would be timing-flaky — it shows clearly on real data via the script).</li>
+<li>The L2 cache is currently exercised by the benchmark and tests; wiring it into
+<code>AssayService.evaluate</code> (so real backtests get the result-cache win automatically) is a
+natural follow-up.</li>
+</ul>
+<p>Background: <a href="/doc/design/engineering">engineering.md</a> §5 (cache system) and §8 (performance).</p>

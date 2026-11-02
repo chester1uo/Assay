@@ -23,7 +23,11 @@ to vectorised numpy with identical numerics.
 
 from __future__ import annotations
 
+import weakref
+
 import numpy as np
+
+from assay._native import kernels as _native
 
 # --- optional numba acceleration -------------------------------------------
 # We define plain-Python reference kernels, then try to njit them. Any import
@@ -225,6 +229,8 @@ def ic_series(factor: np.ndarray, fwd: np.ndarray) -> np.ndarray:
     fwd = np.ascontiguousarray(fwd, dtype=np.float64)
     if factor.shape != fwd.shape:
         raise ValueError("factor and fwd must share the same (T, N) shape")
+    if _native is not None:
+        return _native.ic_series(factor, fwd)
     return np.asarray(_ic_series_impl(factor, fwd), dtype=np.float64)
 
 
@@ -248,12 +254,44 @@ def rank_ic_series(factor: np.ndarray, fwd: np.ndarray) -> np.ndarray:
     fwd = np.ascontiguousarray(fwd, dtype=np.float64)
     if factor.shape != fwd.shape:
         raise ValueError("factor and fwd must share the same (T, N) shape")
+    if _native is not None:
+        return _native.rank_ic_series(factor, fwd)
     # factor_rank is recomputed per-date inside the kernel against the joint mask;
     # the precomputed-ranks argument is kept for the multi-horizon fast path below.
     factor_rank = _factor_ranks(factor)
     return np.asarray(
         _rank_ic_series_impl(factor_rank, fwd, factor), dtype=np.float64
     )
+
+
+def row_orders(factor: np.ndarray):
+    """Per-date value orders of ``factor`` for the native RankIC (``None`` without it).
+
+    Pass the result to :func:`evaluate_ic` and :func:`~assay.evaluator.turnover`
+    as ``order=`` so the factor is sorted once for every horizon and its own lag.
+    """
+    if _native is None:
+        return None
+    return _native.row_orders(np.ascontiguousarray(factor, dtype=np.float64))
+
+
+# forward-return orders by array identity, dropped when the array is collected; a
+# spec's forward returns are scored against every factor (they are never mutated)
+_FWD_ORDERS: dict[int, tuple] = {}
+
+
+def _fwd_orders(fwd: np.ndarray):
+    key = id(fwd)
+    hit = _FWD_ORDERS.get(key)
+    if hit is not None and hit[0]() is fwd:
+        return hit[1]
+    orders = _native.row_orders(fwd)
+    try:
+        ref = weakref.ref(fwd, lambda _r, k=key: _FWD_ORDERS.pop(k, None))
+    except TypeError:
+        return orders
+    _FWD_ORDERS[key] = (ref, orders)
+    return orders
 
 
 def ic_summary(series: np.ndarray) -> tuple[float, float]:
@@ -271,7 +309,7 @@ def ic_summary(series: np.ndarray) -> tuple[float, float]:
 
 
 def evaluate_ic(
-    factor: np.ndarray, fwd_by_h: dict[int, np.ndarray]
+    factor: np.ndarray, fwd_by_h: dict[int, np.ndarray], *, order=None
 ) -> dict[str, object]:
     """Headline IC bundle across horizons; factor ranked once and reused.
 
@@ -280,7 +318,8 @@ def evaluate_ic(
     ``ic_by_horizon`` maps every horizon to its mean RankIC.
 
     Returns keys: ``ic, icir, rank_ic, rank_icir, ic_by_horizon, ic_series,
-    rank_ic_series``.
+    rank_ic_series``. ``order`` is :func:`row_orders` of ``factor`` when the caller
+    already has it.
     """
     if not fwd_by_h:
         raise ValueError("fwd_by_h must contain at least one horizon")
@@ -288,8 +327,11 @@ def evaluate_ic(
     horizons = sorted(fwd_by_h.keys())
     head = horizons[0]
 
-    # Rank the factor once (per date) and reuse across all horizons.
-    factor_rank = _factor_ranks(factor)
+    # Rank the factor once (per date) and reuse across all horizons. The native
+    # kernel sorts it once and reads the joint-mask ranks off that order.
+    factor_rank = None if _native is not None else _factor_ranks(factor)
+    if _native is not None and order is None:
+        order = row_orders(factor)
 
     rank_ic_by_h: dict[int, float] = {}
     head_ic_series = None
@@ -298,9 +340,10 @@ def evaluate_ic(
         fwd = np.ascontiguousarray(fwd_by_h[h], dtype=np.float64)
         if fwd.shape != factor.shape:
             raise ValueError(f"fwd[{h}] shape {fwd.shape} != factor {factor.shape}")
-        rseries = np.asarray(
-            _rank_ic_series_impl(factor_rank, fwd, factor), dtype=np.float64
-        )
+        if _native is not None:
+            rseries = _native.rank_ic_ordered(factor, *order, fwd, *_fwd_orders(fwd))
+        else:
+            rseries = np.asarray(_rank_ic_series_impl(factor_rank, fwd, factor), dtype=np.float64)
         rank_ic_by_h[h] = ic_summary(rseries)[0]
         if h == head:
             head_rank_series = rseries

@@ -1,3 +1,4 @@
+import { P } from "./palette.js";
 // charts.js — hand-rolled SVG chart factories. Pure DOM, no dependencies.
 // Every factory returns an <svg> (or wrapping) element built in the SVG namespace.
 
@@ -47,14 +48,14 @@ function niceDomain(values, { padFrac = 0.08, includeZero = true } = {}) {
 
 /** Diverging color: green for +, white at 0, red for −, symmetric about `max`. */
 export function diverging(value, max) {
-  if (!isNum(value) || !isNum(max) || max === 0) return "#FFFFFF";
+  if (!isNum(value) || !isNum(max) || max === 0) return P.surface;
   const t = Math.max(-1, Math.min(1, value / max));
-  if (t >= 0) return mix("#FFFFFF", "#1E7B4B", t);
-  return mix("#FFFFFF", "#C0392B", -t);
+  if (t >= 0) return mix(P.surface, P.up, t);
+  return mix(P.surface, P.down, -t);
 }
 
 /** Sequential color from light to `to` (default blue) over [0,1]. */
-export function seq(t, to = "#2D5BE3", from = "#EEF2FB") {
+export function seq(t, to = P.primary, from = P.fill) {
   const c = Math.max(0, Math.min(1, isNum(t) ? t : 0));
   return mix(from, to, c);
 }
@@ -73,7 +74,7 @@ function hexToRgb(hex) {
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
 }
 
-const DEFAULT_COLORS = ["#2D5BE3", "#0E8A7E", "#B87C1A", "#C0392B", "#1E7B4B"];
+const DEFAULT_COLORS = [P.primary, P.second, P.amber, P.down, P.up];
 
 // ---------------------------------------------------------------- hover ----
 // Opt-in interactivity for line/bar charts: a dashed crosshair + focus dots and an
@@ -90,7 +91,7 @@ function injectHoverStyle() {
   if (typeof document === "undefined" || document.getElementById(HOVER_STYLE_ID)) return;
   const css = `
 .chart-interactive { position: relative; }
-.chart-crosshair { stroke: #8892AA; stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+.chart-crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
 .chart-tip { position: absolute; pointer-events: none; z-index: 5; background: rgba(17,24,39,0.92);
   color: #fff; font-size: 12px; padding: 6px 8px; border-radius: 6px; white-space: nowrap;
   box-shadow: 0 4px 12px rgba(0,0,0,0.22); transform: translateZ(0); }
@@ -150,7 +151,7 @@ function attachHover(svg, cfg) {
     focus.replaceChildren();
     for (const p of rows) {
       if (p.cy == null || !isNum(p.cy)) continue;
-      focus.appendChild(svgEl("circle", { cx, cy: p.cy, r: 3.2, fill: p.color, stroke: "#fff", "stroke-width": 1 }));
+      focus.appendChild(svgEl("circle", { cx, cy: p.cy, r: 3.2, fill: p.color, stroke: P.surface, "stroke-width": 1 }));
     }
     tip.replaceChildren();
     const dEl = document.createElement("div");
@@ -234,7 +235,7 @@ export function lineChart({ series = [], dates = null, yDomain = null, height = 
     root.appendChild(
       svgEl("rect", {
         x: m.left, y: Math.min(yA, yB), width: iw, height: Math.abs(yB - yA),
-        fill: b.color || "rgba(45,91,227,0.06)",
+        fill: b.color || P.fill,
       })
     );
   }
@@ -337,7 +338,7 @@ export function barChart({ labels = [], values = [], colors = null, height = 240
     if (!isNum(v)) return;
     const cx = m.left + slot * i + slot / 2;
     const yy = y(v);
-    const color = (colors && colors[i]) || (v >= 0 ? "#2D5BE3" : "#C0392B");
+    const color = (colors && colors[i]) || (v >= 0 ? P.primary : P.down);
     root.appendChild(
       svgEl("rect", { x: cx - bw / 2, y: Math.min(yy, y0), width: bw, height: Math.abs(yy - y0), fill: color, rx: 2 })
     );
@@ -363,7 +364,7 @@ export function barChart({ labels = [], values = [], colors = null, height = 240
     xAt: (i) => m.left + slot * i + slot / 2,
     seriesAt: (i) => {
       const v = values[i];
-      const color = (colors && colors[i]) || (v >= 0 ? "#2D5BE3" : "#C0392B");
+      const color = (colors && colors[i]) || (v >= 0 ? P.primary : P.down);
       return [{ name: "", color, value: v, cy: isNum(v) ? y(v) : null }];
     },
     dateAt: (i) => (dates && dates[i] != null ? String(dates[i]) : (labels[i] != null ? String(labels[i]) : String(i))),
@@ -437,8 +438,8 @@ export function calendarHeatmap({ dates = [], values = [], height = 140, divergi
         y: top + cellH * (c.month - 1) + 1,
         width: Math.max(1, cellW - 2),
         height: Math.max(1, cellH - 2),
-        fill: isNum(c.value) ? fill : "#FFFFFF",
-        stroke: "#E1E6F0",
+        fill: isNum(c.value) ? fill : P.surface,
+        stroke: P.border,
         "stroke-width": 0.5,
         rx: 1,
       })
@@ -450,7 +451,7 @@ export function calendarHeatmap({ dates = [], values = [], height = 140, divergi
 
 // ---------------------------------------------------------------- sparkline ----
 /** Minimal inline line; NaN-aware. */
-export function sparkline(values, { width = 120, height = 32, color = "#2D5BE3" } = {}) {
+export function sparkline(values, { width = 120, height = 32, color = P.primary } = {}) {
   const vals = (values || []).map((v) => (isNum(v) ? v : NaN));
   const finite = vals.filter(isNum);
   const root = svgEl("svg", {

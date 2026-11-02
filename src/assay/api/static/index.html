@@ -3,62 +3,138 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=1280, initial-scale=1" />
-  <title>Assay — Factor Research</title>
+  <title>Assay · QFinVerse</title>
+  <link rel="icon" type="image/svg+xml" href="/brand/qfinverse-app-icon.svg" />
+  <script>
+    // Before first paint: theme (localStorage "qfv-theme" = light | dark | system, as in
+    // QFinVerse) and the folded sidebar ("assay-sidebar-folded").
+    (function () {
+      var m = "system", folded = false;
+      try { m = localStorage.getItem("qfv-theme") || "system"; folded = localStorage.getItem("assay-sidebar-folded") === "1"; } catch (e) {}
+      var dark = m === "dark" || (m === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.classList.toggle("dark", dark);
+      document.documentElement.classList.toggle("nav-folded", folded);
+    })();
+  </script>
+  <link rel="stylesheet" href="/fonts.css" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <header class="topnav" id="topnav">
-    <a class="topnav-logo" href="#/dashboard" data-i18n-aria="nav.home" aria-label="Assay home">
-      <span class="topnav-diamond" aria-hidden="true">&#9670;</span>
-      <span class="topnav-wordmark">ASSAY</span>
-      <span class="topnav-version" id="app-version" title="Engine version"></span>
-    </a>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <!-- Icons: Lucide (ISC licence), stroke 2 on a 24 grid. -->
+    <symbol id="i-dashboard" viewBox="0 0 24 24"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></symbol>
+    <symbol id="i-library" viewBox="0 0 24 24"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></symbol>
+    <symbol id="i-flask" viewBox="0 0 24 24"><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></symbol>
+    <symbol id="i-briefcase" viewBox="0 0 24 24"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/></symbol>
+    <symbol id="i-candles" viewBox="0 0 24 24"><path d="M9 5v4"/><rect width="4" height="6" x="7" y="9" rx="1"/><path d="M9 15v2"/><path d="M17 3v2"/><rect width="4" height="8" x="15" y="5" rx="1"/><path d="M17 13v3"/><path d="M3 3v18h18"/></symbol>
+    <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></symbol>
+    <symbol id="i-contrast" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 18a6 6 0 0 0 0-12v12z"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+    <symbol id="i-languages" viewBox="0 0 24 24"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></symbol>
+    <symbol id="i-fold" viewBox="0 0 24 24"><path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/></symbol>
+    <symbol id="i-unfold" viewBox="0 0 24 24"><path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></symbol>
+    <symbol id="i-qfv" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+    <symbol id="i-out" viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></symbol>
+  </svg>
 
-    <nav class="topnav-tabs" aria-label="Primary">
-      <a class="topnav-tab" data-route="#/dashboard" data-i18n="nav.dashboard" href="#/dashboard">Dashboard</a>
-      <a class="topnav-tab" data-route="#/library" data-i18n="nav.library" href="#/library">Factor Library</a>
-      <a class="topnav-tab" data-route="#/factor" data-i18n="nav.factor" href="#/factor">Single Factor Test</a>
-      <a class="topnav-tab" data-route="#/combination" data-i18n="nav.combination" href="#/combination">Factor Combination</a>
-      <a class="topnav-tab" data-route="#/portfolio" data-i18n="nav.portfolio" href="#/portfolio">Portfolio Backtest</a>
-      <a class="topnav-tab" data-route="#/chart" data-i18n="nav.chart" href="#/chart">Chart</a>
-      <a class="topnav-tab" data-route="#/docs" data-i18n="nav.docs" href="#/docs">Docs</a>
-      <a class="topnav-tab" data-route="#/data" data-i18n="nav.data" href="#/data">Data Manager</a>
-    </nav>
-
-    <div class="topnav-controls">
-      <label class="topnav-field">
-        <span class="topnav-field-label" data-i18n="ctrl.universe">Universe</span>
-        <select id="universe-select" class="select" aria-label="Universe"></select>
-      </label>
-
-      <label class="topnav-field">
-        <span class="topnav-field-label" data-i18n="ctrl.period">Period</span>
-        <select id="period-select" class="select" aria-label="Period preset">
-          <option value="1Y">1Y</option>
-          <option value="3Y">3Y</option>
-          <option value="5Y">5Y</option>
-          <option value="custom" data-i18n="ctrl.custom">Custom</option>
-        </select>
-      </label>
-
-      <div class="topnav-field topnav-period-custom" id="period-custom" hidden>
-        <input type="date" id="period-start" class="input input-date" aria-label="Period start" />
-        <span class="topnav-period-dash" aria-hidden="true">&ndash;</span>
-        <input type="date" id="period-end" class="input input-date" aria-label="Period end" />
+  <div class="shell">
+    <aside class="sidenav" id="sidenav" data-i18n-aria="nav.console" aria-label="Console">
+      <div class="sidenav-brand">
+        <a class="sidenav-logo" href="#/dashboard" data-i18n-aria="nav.home" aria-label="Assay home">
+          <svg class="sidenav-mark" viewBox="0 0 88 64" aria-hidden="true">
+            <g class="q"><rect x="7.5" y="25.5" width="13" height="13" transform="rotate(45 14 32)"/><rect x="19.5" y="13.5" width="13" height="13" transform="rotate(45 26 20)"/><rect x="19.5" y="37.5" width="13" height="13" transform="rotate(45 26 44)"/><rect x="31.5" y="25.5" width="13" height="13" transform="rotate(45 38 32)"/></g>
+            <g class="v"><rect x="43.5" y="13.5" width="13" height="13" transform="rotate(45 50 20)"/><rect x="55.5" y="25.5" width="13" height="13" transform="rotate(45 62 32)"/><rect x="67.5" y="13.5" width="13" height="13" transform="rotate(45 74 20)"/><rect x="43.5" y="37.5" width="13" height="13" transform="rotate(45 50 44)"/></g>
+          </svg>
+          <img class="lockup lockup-light" src="/brand/assay-lockup-light.svg" alt="ASSAY" /><img class="lockup lockup-dark" src="/brand/assay-lockup-dark.svg" alt="ASSAY" />
+        </a>
       </div>
 
-      <button type="button" id="theme-toggle" class="lang-toggle" data-i18n-title="ctrl.themeTitle"
-              title="Switch skin">Retro</button>
+      <nav class="sidenav-links" aria-label="Primary">
+        <a class="sidenav-link" data-route="#/dashboard" href="#/dashboard"><svg class="ico"><use href="#i-dashboard"/></svg><span data-i18n="nav.dashboard">Dashboard</span></a>
+        <div class="sidenav-heading" data-i18n="nav.groupResearch">Research</div>
+        <a class="sidenav-link" data-route="#/library" href="#/library"><svg class="ico"><use href="#i-library"/></svg><span data-i18n="nav.library">Factor Library</span></a>
+        <a class="sidenav-link" data-route="#/factor" href="#/factor"><svg class="ico"><use href="#i-flask"/></svg><span data-i18n="nav.factor">Single Factor Test</span></a>
+        <a class="sidenav-link" data-route="#/combination" href="#/combination"><svg class="ico"><use href="#i-layers"/></svg><span data-i18n="nav.combination">Factor Combination</span></a>
+        <a class="sidenav-link" data-route="#/portfolio" href="#/portfolio"><svg class="ico"><use href="#i-briefcase"/></svg><span data-i18n="nav.portfolio">Portfolio Backtest</span></a>
+        <div class="sidenav-heading" data-i18n="nav.groupData">Data</div>
+        <a class="sidenav-link" data-route="#/chart" href="#/chart"><svg class="ico"><use href="#i-candles"/></svg><span data-i18n="nav.chart">Chart</span></a>
+        <a class="sidenav-link admin-only" data-route="#/data" href="#/data"><svg class="ico"><use href="#i-database"/></svg><span data-i18n="nav.data">Data Manager</span></a>
+        <a class="sidenav-link" href="/doc/" target="_blank" rel="noopener" data-i18n-title="nav.docsHint" title="Doc Hub"><svg class="ico"><use href="#i-book"/></svg><span data-i18n="nav.docs">Docs</span><svg class="ico ico-out"><use href="#i-out"/></svg></a>
+        <div class="sidenav-heading admin-only" data-i18n="nav.groupAdmin">Admin</div>
+        <a class="sidenav-link admin-only" data-route="#/users" href="#/users"><svg class="ico"><use href="#i-users"/></svg><span data-i18n="nav.users">Users</span></a>
+      </nav>
 
-      <button type="button" id="lang-toggle" class="lang-toggle" data-i18n="ctrl.lang"
-              data-i18n-title="ctrl.langTitle" title="切换到中文">中文</button>
+      <div class="sidenav-foot">
+        <a class="sidenav-link" href="https://dashboard.qfinverse.com" target="_blank" rel="noopener noreferrer"
+           data-i18n-title="nav.qfvHint" title="QFinVerse console">
+          <svg class="ico"><use href="#i-qfv"/></svg><span>QFinVerse</span><svg class="ico ico-out"><use href="#i-out"/></svg>
+        </a>
+        <div class="sidenav-theme" role="radiogroup" data-i18n-aria="ctrl.themeTitle" aria-label="Theme">
+          <svg class="ico"><use href="#i-contrast"/></svg>
+          <span class="sidenav-label" data-i18n="ctrl.themeTitle">Theme</span>
+          <span class="seg" id="theme-switch">
+            <button type="button" role="radio" data-theme="system" data-i18n-title="ctrl.theme.system" title="Auto"><svg><use href="#i-monitor"/></svg></button>
+            <button type="button" role="radio" data-theme="light" data-i18n-title="ctrl.theme.light" title="Light"><svg><use href="#i-sun"/></svg></button>
+            <button type="button" role="radio" data-theme="dark" data-i18n-title="ctrl.theme.dark" title="Dark"><svg><use href="#i-moon"/></svg></button>
+          </span>
+        </div>
+        <button type="button" id="lang-toggle" class="sidenav-link sidenav-btn" data-i18n-title="ctrl.langTitle" title="切换到中文">
+          <svg class="ico"><use href="#i-languages"/></svg><span data-i18n="ctrl.langName">English</span>
+          <span class="sidenav-aside" data-i18n="ctrl.lang">中文</span>
+        </button>
+        <div class="sidenav-user" id="nav-user" hidden>
+          <a class="sidenav-user-link" href="#/account" data-route="#/account" data-i18n-title="nav.account" title="Account">
+            <span class="avatar" id="nav-avatar"></span>
+            <span class="sidenav-user-text"><span class="sidenav-user-name" id="nav-name"></span><span class="sidenav-user-role" id="nav-role"></span></span>
+          </a>
+          <button type="button" class="sidenav-iconbtn" id="nav-logout" data-i18n-title="nav.logout" title="Sign out"><svg class="ico"><use href="#i-logout"/></svg></button>
+        </div>
+        <button type="button" id="nav-fold" class="sidenav-fold" data-i18n-title="ctrl.collapse" title="Collapse">
+          <svg class="ico ico-fold"><use href="#i-fold"/></svg><svg class="ico ico-unfold"><use href="#i-unfold"/></svg>
+          <span data-i18n="ctrl.collapse">Collapse</span>
+          <span class="sidenav-version" id="app-version"></span>
+        </button>
+      </div>
+    </aside>
 
-      <button type="button" id="status-dot" class="status-dot status-dot--unknown"
-              aria-label="System status" title="System status: unknown"></button>
+    <div class="workspace">
+      <header class="contextbar" id="contextbar">
+        <div class="contextbar-controls">
+          <label class="ctx-field">
+            <span class="ctx-label" data-i18n="ctrl.universe">Universe</span>
+            <select id="universe-select" class="select" aria-label="Universe"></select>
+          </label>
+
+          <label class="ctx-field">
+            <span class="ctx-label" data-i18n="ctrl.period">Period</span>
+            <select id="period-select" class="select" aria-label="Period preset">
+              <option value="1Y">1Y</option>
+              <option value="3Y">3Y</option>
+              <option value="5Y">5Y</option>
+              <option value="custom" data-i18n="ctrl.custom">Custom</option>
+            </select>
+          </label>
+
+          <div class="ctx-field ctx-period-custom" id="period-custom" hidden>
+            <input type="date" id="period-start" class="input input-date" aria-label="Period start" />
+            <span class="ctx-dash" aria-hidden="true">&ndash;</span>
+            <input type="date" id="period-end" class="input input-date" aria-label="Period end" />
+          </div>
+
+        </div>
+        <button type="button" id="status-dot" class="status-pill status-pill--unknown"
+                aria-label="System status" title="System status: unknown"><span class="status-dot"></span><span id="status-text"></span></button>
+      </header>
+
+      <main id="app" class="app-main" tabindex="-1"></main>
     </div>
-  </header>
-
-  <main id="app" class="app-main" tabindex="-1"></main>
+  </div>
 
   <script type="module" src="/js/app.js"></script>
 </body>

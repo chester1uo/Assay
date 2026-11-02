@@ -1,0 +1,1766 @@
+<h1 class="doc-title">ASSAY — Engineering Documentation</h1>
+<h3 id="a-high-performance-factor-backtesting-engine-for-agent-driven-alpha-mining">A High-Performance Factor Backtesting Engine for Agent-Driven Alpha Mining</h3>
+<p><strong>Version:</strong> 0.1 (Draft)<br />
+<strong>Status:</strong> Internal Engineering Reference<br />
+<strong>Data Source:</strong> Massive (US equities, Phase 1)<br />
+<strong>Markets:</strong> US (Phase 1) · HK · A-share (roadmap)<br />
+<strong>Project:</strong> AlphaBench — OpenReview d97Q8r7ZKZ<br />
+<strong>License:</strong> Apache 2.0</p>
+<hr />
+<h2 id="table-of-contents">Table of Contents</h2>
+<ol>
+<li><a href="#1-introduction">Introduction</a></li>
+<li><a href="#2-system-architecture">System Architecture</a></li>
+<li><a href="#3-data-layer">Data Layer</a></li>
+<li><a href="#4-factor-execution-engine">Factor Execution Engine</a></li>
+<li><a href="#5-cache-system">Cache System</a></li>
+<li><a href="#6-backtest-and-evaluation-layer">Backtest and Evaluation Layer</a></li>
+<li><a href="#7-user-interface">User Interface</a></li>
+<li><a href="#8-performance">Performance</a></li>
+<li><a href="#9-implementation-roadmap">Implementation Roadmap</a></li>
+<li><a href="#10-appendix">Appendix</a></li>
+</ol>
+<hr />
+<h2 id="1-introduction">1. Introduction</h2>
+<blockquote>
+<p>Assay is a point-in-time correct, agent-native factor backtesting engine designed to serve as the high-throughput evaluation backbone for LLM agent systems that autonomously generate, evaluate, and refine quantitative alpha factors at scale.</p>
+</blockquote>
+<h3 id="1-1-motivation">1.1  Motivation</h3>
+<p>Traditional backtesting frameworks—qlib, Zipline, VectorBT—were architected for human-in-the-loop research: a researcher manually crafts a small number of factor hypotheses and carefully validates each one. The evaluation step is a terminal operation performed once per factor.</p>
+<p>LLM agent-driven alpha mining inverts this model. An agent generates hundreds of candidate factors per session, requiring the evaluation engine to function as a low-latency feedback signal within a tight generation-evaluation-refinement loop. This fundamentally changes the system requirements:</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Traditional workflow</th>
+<th>Agent mining workflow</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Factors per session</td>
+<td>1–10</td>
+<td>50–500</td>
+</tr>
+<tr>
+<td>Evaluation role</td>
+<td>Terminal validation</td>
+<td>Iterative feedback signal</td>
+</tr>
+<tr>
+<td>Latency tolerance</td>
+<td>Minutes to hours</td>
+<td>Sub-second</td>
+</tr>
+<tr>
+<td>Data correctness</td>
+<td>Checked manually</td>
+<td>Guaranteed by system</td>
+</tr>
+<tr>
+<td>Factor diversity</td>
+<td>Human-managed</td>
+<td>Automatically tracked</td>
+</tr>
+<tr>
+<td>Batch parallelism</td>
+<td>Not required</td>
+<td>Core requirement</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="1-2-design-goals">1.2  Design Goals</h3>
+<ul>
+<li>Sub-500ms end-to-end latency for single-factor evaluation (cold path)</li>
+<li>100-factor batch evaluation in under 60 seconds via DAG-aware parallel execution</li>
+<li>Point-in-time correctness enforced at the data layer, not as a user responsibility</li>
+<li>Structured <code>FactorReport</code> output designed for direct LLM agent consumption</li>
+<li>Multi-market support: US (Phase 1 via Massive), HK and A-share (roadmap)</li>
+<li>Dual syntax: qlib expression strings and Python functions share one execution backend</li>
+</ul>
+<h3 id="1-3-scope-of-this-document">1.3  Scope of This Document</h3>
+<p>This document covers the engineering design of Assay at the component level. It is intended as the authoritative internal reference for contributors and the technical foundation for academic publication. The following areas are addressed:</p>
+<ol>
+<li>System architecture and layer boundaries</li>
+<li>Data layer design (Massive integration, PIT model, corporate actions)</li>
+<li>Factor execution engine (parser, AST, operator registry)</li>
+<li>Cache system (L1 operator cache, L2 factor string cache, incremental maintenance)</li>
+<li>Backtest and evaluation layer (IC, RankIC, decay, batch evaluation)</li>
+<li>User interface (Python SDK, CLI, FactorReport schema)</li>
+<li>Performance model and benchmarks</li>
+</ol>
+<hr />
+<h2 id="2-system-architecture">2. System Architecture</h2>
+<h3 id="2-1-layer-overview">2.1  Layer Overview</h3>
+<p>Assay is decomposed into five fully decoupled layers. Each layer exposes a well-defined interface and can be used independently. Dependencies flow strictly downward; no lower layer has knowledge of the layer above it.</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Layer</th>
+<th>Module(s)</th>
+<th>Primary responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Data</td>
+<td><code>DataStore</code>, <code>AdjFactorStore</code>, <code>UniverseStore</code>, <code>EventScheduler</code></td>
+<td>PIT-correct market data, corporate action snapshots, universe membership history</td>
+</tr>
+<tr>
+<td>Engine</td>
+<td><code>FactorEngine</code>, <code>OperatorRegistry</code>, <code>ExprParser</code></td>
+<td>Expression parsing, AST compilation, operator execution, two-level cache</td>
+</tr>
+<tr>
+<td>Backtest</td>
+<td><code>SingleFactorBT</code>, <code>BatchFactorBT</code>, <code>ForwardReturns</code>, <code>CostModel</code></td>
+<td>IC/RankIC/decay evaluation, parallel batch scheduling, transaction cost modeling</td>
+</tr>
+<tr>
+<td>Analysis</td>
+<td><code>ICAnalyzer</code>, <code>DecayAnalyzer</code>, <code>LineageStore</code>, <code>CorrelationAnalyzer</code></td>
+<td>Factor diagnostics, redundancy detection, lineage and reproducibility</td>
+</tr>
+<tr>
+<td>Interface</td>
+<td>Python SDK, CLI, AgentAPI, FactorReport</td>
+<td>User-facing API, structured output for LLM agent consumption</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="2-2-data-flow">2.2  Data Flow</h3>
+<p>A single factor evaluation request traverses the following path:</p>
+<figure class="doc-fig"><svg xmlns="http://www.w3.org/2000/svg" class="fig" viewBox="0 0 760 502" width="760" height="502" role="img" aria-label="Path of one factor evaluation"><style>
+.f-box{fill:var(--fig-box,#FFFFFF);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-group{fill:var(--fig-group,#F4F6FA);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-acc{fill:var(--fig-accent-bg,#E3F6F2);stroke:var(--fig-accent,#00A38B);stroke-width:1.2}
+.f-warm{fill:var(--fig-warm-bg,#FFF0E6);stroke:var(--fig-warm,#E8590C);stroke-width:1.2}
+.f-gold{fill:var(--fig-gold-bg,#FDF4DF);stroke:var(--fig-gold,#B7791F);stroke-width:1.2}
+.f-t{fill:var(--fig-text,#1A1D2E);font:600 13px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-h{fill:var(--fig-muted,#5A6477);font:600 10.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.f-s{fill:var(--fig-muted,#5A6477);font:400 11.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-m{fill:var(--fig-text,#1A1D2E);font:500 11.5px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ms{fill:var(--fig-muted,#5A6477);font:400 11px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ta{fill:var(--fig-accent,#00A38B);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tw{fill:var(--fig-warm,#E8590C);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tg{fill:var(--fig-gold,#B7791F);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-a{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4}
+.f-ad{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4;stroke-dasharray:4 3}
+.f-head{fill:var(--fig-arrow,#8A93A6)}
+.f-dot-ok{fill:var(--fig-accent,#00A38B)} .f-dot-part{fill:var(--fig-gold,#B7791F)} .f-dot-plan{fill:none;stroke:var(--fig-muted,#5A6477);stroke-width:1.2}
+@media (prefers-color-scheme:dark){svg.fig{--fig-box:#1F232E;--fig-line:#3A3F4C;--fig-group:#171B25;--fig-text:#D7DAE1;--fig-muted:#8A8F9C;--fig-arrow:#6E7484;--fig-accent:#00D6B3;--fig-accent-bg:#11302C;--fig-warm:#FF7A3D;--fig-warm-bg:#3A2418;--fig-gold:#E3B341;--fig-gold-bg:#352B14}}
+</style><rect x="150" y="20" width="220" height="40" rx="8" class="f-acc"/><text x="260" y="45" class="f-m" text-anchor="middle">User / Agent</text><text x="392" y="45" class="f-s" text-anchor="start">factor_expr: str</text><path d="M260,60 L260,84" class="f-a"/><path d="M260.0,84.0 L256.5,76.8 L263.5,76.8 Z" class="f-head"/><text x="130" y="77" class="f-ms" text-anchor="end">AST</text><rect x="150" y="86" width="220" height="40" rx="8" class="f-box"/><text x="260" y="111" class="f-m" text-anchor="middle">ExprParser</text><text x="392" y="111" class="f-s" text-anchor="start">qlib or Python syntax → one AST</text><path d="M260,126 L260,150" class="f-a"/><path d="M260.0,150.0 L256.5,142.8 L263.5,142.8 Z" class="f-head"/><text x="130" y="143" class="f-ms" text-anchor="end">cache miss</text><rect x="150" y="152" width="220" height="40" rx="8" class="f-box"/><text x="260" y="177" class="f-m" text-anchor="middle">FactorEngine</text><text x="392" y="177" class="f-s" text-anchor="start">L2 factor cache, then L1 operator cache</text><path d="M260,192 L260,216" class="f-a"/><path d="M260.0,216.0 L256.5,208.8 L263.5,208.8 Z" class="f-head"/><text x="130" y="209" class="f-ms" text-anchor="end">T × N matrix</text><rect x="150" y="218" width="220" height="40" rx="8" class="f-box"/><text x="260" y="243" class="f-m" text-anchor="middle">OperatorRegistry</text><text x="392" y="243" class="f-s" text-anchor="start">uncached nodes via Polars / Numba</text><path d="M260,258 L260,282" class="f-a"/><path d="M260.0,282.0 L256.5,274.8 L263.5,274.8 Z" class="f-head"/><text x="130" y="275" class="f-ms" text-anchor="end">(factor, returns)</text><rect x="150" y="284" width="220" height="40" rx="8" class="f-box"/><text x="260" y="309" class="f-m" text-anchor="middle">BatchFactorBT</text><text x="392" y="309" class="f-s" text-anchor="start">aligns the factor with forward returns</text><path d="M260,324 L260,348" class="f-a"/><path d="M260.0,348.0 L256.5,340.8 L263.5,340.8 Z" class="f-head"/><rect x="150" y="350" width="220" height="40" rx="8" class="f-box"/><text x="260" y="375" class="f-m" text-anchor="middle">ICAnalyzer</text><text x="392" y="375" class="f-s" text-anchor="start">IC, RankIC, ICIR, decay (Numba, parallel)</text><path d="M260,390 L260,414" class="f-a"/><path d="M260.0,414.0 L256.5,406.8 L263.5,406.8 Z" class="f-head"/><text x="130" y="407" class="f-ms" text-anchor="end">JSON</text><rect x="150" y="416" width="220" height="40" rx="8" class="f-acc"/><text x="260" y="441" class="f-m" text-anchor="middle">FactorReport</text><text x="392" y="441" class="f-s" text-anchor="start">structured result for the caller</text></svg></figure>
+<h3 id="2-3-key-design-decisions">2.3  Key Design Decisions</h3>
+<h4 id="strict-pit-enforcement">Strict PIT enforcement</h4>
+<p>All <code>DataStore</code> queries require an explicit <code>as_of_date</code> parameter. The store raises an error if called without one, making look-ahead bias a compile-time rather than runtime concern. Adjustment factors and universe membership are stored with both <code>event_time</code> and <code>knowledge_time</code> columns (bi-temporal model).</p>
+<h4 id="immutable-append-only-writes">Immutable append-only writes</h4>
+<p>No historical record is ever modified. All data revisions (e.g. a restated earnings figure, a corrected corporate action) are appended as new rows with a new <code>knowledge_time</code>. This guarantees that any historical backtest can be reproduced exactly by querying <code>as_of</code> the original run date.</p>
+<h4 id="separation-of-scheduling-from-computation">Separation of scheduling from computation</h4>
+<p>The DAG execution planner (scheduling) is fully separated from the operator compute kernels (execution). This allows the scheduler to be optimized independently—changing the parallelism strategy or materialization policy does not require changes to operator implementations.</p>
+<h4 id="agent-feedback-as-a-first-class-output">Agent feedback as a first-class output</h4>
+<p>The <code>FactorReport</code> is not a dashboard artifact—it is a machine-readable protocol designed for direct agent consumption. Every field is chosen to provide actionable signal for the next generation step.</p>
+<hr />
+<h2 id="3-data-layer">3. Data Layer</h2>
+<blockquote>
+<p>The data layer is the correctness foundation of the entire system. Performance optimizations in higher layers are only valid if the data they operate on is point-in-time correct. Getting this layer right is the single most important engineering task in the project.</p>
+</blockquote>
+<h3 id="3-1-massive-integration-us-equities">3.1  Massive Integration (US Equities)</h3>
+<p>Phase 1 uses Massive as the primary data provider for US equities. Massive provides daily OHLCV, adjustment factors, corporate action events, and index constituent history. The integration layer normalizes Massive's delivery format into Assay's internal storage schema.</p>
+<h4 id="ingestion-pipeline">Ingestion pipeline</h4>
+<figure class="doc-fig"><svg xmlns="http://www.w3.org/2000/svg" class="fig" viewBox="0 0 760 260" width="760" height="260" role="img" aria-label="Ingestion: vendor connector to the Parquet store"><style>
+.f-box{fill:var(--fig-box,#FFFFFF);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-group{fill:var(--fig-group,#F4F6FA);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-acc{fill:var(--fig-accent-bg,#E3F6F2);stroke:var(--fig-accent,#00A38B);stroke-width:1.2}
+.f-warm{fill:var(--fig-warm-bg,#FFF0E6);stroke:var(--fig-warm,#E8590C);stroke-width:1.2}
+.f-gold{fill:var(--fig-gold-bg,#FDF4DF);stroke:var(--fig-gold,#B7791F);stroke-width:1.2}
+.f-t{fill:var(--fig-text,#1A1D2E);font:600 13px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-h{fill:var(--fig-muted,#5A6477);font:600 10.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.f-s{fill:var(--fig-muted,#5A6477);font:400 11.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-m{fill:var(--fig-text,#1A1D2E);font:500 11.5px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ms{fill:var(--fig-muted,#5A6477);font:400 11px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ta{fill:var(--fig-accent,#00A38B);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tw{fill:var(--fig-warm,#E8590C);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tg{fill:var(--fig-gold,#B7791F);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-a{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4}
+.f-ad{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4;stroke-dasharray:4 3}
+.f-head{fill:var(--fig-arrow,#8A93A6)}
+.f-dot-ok{fill:var(--fig-accent,#00A38B)} .f-dot-part{fill:var(--fig-gold,#B7791F)} .f-dot-plan{fill:none;stroke:var(--fig-muted,#5A6477);stroke-width:1.2}
+@media (prefers-color-scheme:dark){svg.fig{--fig-box:#1F232E;--fig-line:#3A3F4C;--fig-group:#171B25;--fig-text:#D7DAE1;--fig-muted:#8A8F9C;--fig-arrow:#6E7484;--fig-accent:#00D6B3;--fig-accent-bg:#11302C;--fig-warm:#FF7A3D;--fig-warm-bg:#3A2418;--fig-gold:#E3B341;--fig-gold-bg:#352B14}}
+</style><rect x="12" y="12" width="340" height="236" rx="10" class="f-group"/><text x="28" y="36" class="f-m" text-anchor="start">MassiveConnector</text><rect x="28" y="52" width="308" height="38" rx="8" class="f-box"/><text x="40" y="68" class="f-m" text-anchor="start">fetch_ohlcv()</text><text x="40" y="83" class="f-s" text-anchor="start">→ raw OHLCV frame</text><rect x="28" y="98" width="308" height="38" rx="8" class="f-box"/><text x="40" y="114" class="f-m" text-anchor="start">fetch_adj_events()</text><text x="40" y="129" class="f-s" text-anchor="start">→ corporate action log</text><rect x="28" y="144" width="308" height="38" rx="8" class="f-box"/><text x="40" y="160" class="f-m" text-anchor="start">fetch_universe()</text><text x="40" y="175" class="f-s" text-anchor="start">→ constituent snapshot</text><rect x="28" y="190" width="308" height="38" rx="8" class="f-box"/><text x="40" y="206" class="f-m" text-anchor="start">fetch_financials()</text><text x="40" y="221" class="f-s" text-anchor="start">→ point-in-time financials</text><path d="M352,130 L392,130" class="f-a"/><path d="M392.0,130.0 L384.8,133.5 L384.8,126.5 Z" class="f-head"/><rect x="394" y="12" width="220" height="236" rx="10" class="f-group"/><text x="410" y="36" class="f-m" text-anchor="start">DataIngester</text><rect x="410" y="52" width="188" height="38" rx="8" class="f-box"/><text x="422" y="68" class="f-m" text-anchor="start">validate_schema()</text><text x="422" y="83" class="f-s" text-anchor="start">reject bad rows to quarantine</text><path d="M504,90 L504,98" class="f-a"/><rect x="410" y="98" width="188" height="38" rx="8" class="f-box"/><text x="422" y="114" class="f-m" text-anchor="start">deduplicate()</text><text x="422" y="129" class="f-s" text-anchor="start">drop exact duplicates</text><path d="M504,136 L504,144" class="f-a"/><rect x="410" y="144" width="188" height="38" rx="8" class="f-box"/><text x="422" y="160" class="f-m" text-anchor="start">normalize_timezone()</text><text x="422" y="175" class="f-s" text-anchor="start">NYSE trading calendar</text><path d="M504,182 L504,190" class="f-a"/><rect x="410" y="190" width="188" height="38" rx="8" class="f-box"/><text x="422" y="206" class="f-m" text-anchor="start">write_parquet()</text><text x="422" y="221" class="f-s" text-anchor="start">append to a partition</text><path d="M614,130 L642,130" class="f-a"/><path d="M642.0,130.0 L634.8,133.5 L634.8,126.5 Z" class="f-head"/><path d="M646,100 v64 a50.0,10 0 0 0 100,0 v-64" class="f-acc"/><ellipse cx="696.0" cy="100" rx="50.0" ry="10" class="f-acc"/><text x="696.0" y="138" class="f-t" text-anchor="middle">DataStore</text><text x="696.0" y="154" class="f-s" text-anchor="middle">Parquet</text></svg></figure>
+<h4 id="field-mapping">Field mapping</h4>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Massive field</th>
+<th>Assay internal name</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>adj_close</code></td>
+<td><code>close_adj</code></td>
+<td>Massive provides split + dividend adjusted</td>
+</tr>
+<tr>
+<td><code>close</code></td>
+<td><code>close_raw</code></td>
+<td>Unadjusted closing price</td>
+</tr>
+<tr>
+<td><code>volume</code></td>
+<td><code>volume</code></td>
+<td>Shares traded</td>
+</tr>
+<tr>
+<td><code>adj_factor</code></td>
+<td><code>adj_factor</code></td>
+<td>Cumulative adjustment factor, stored with <code>as_of_date</code></td>
+</tr>
+<tr>
+<td><code>div_amount</code></td>
+<td><code>dividend_raw</code></td>
+<td>Pre-split dividend amount, must be ratio-adjusted</td>
+</tr>
+<tr>
+<td><code>split_ratio</code></td>
+<td><code>split_ratio</code></td>
+<td>Forward split ratio (e.g. 2.0 = 1:2 split)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="3-2-storage-schema">3.2  Storage Schema</h3>
+<h4 id="datastore-price_raw">DataStore (<code>price_raw</code>)</h4>
+<pre><code>Parquet partition layout:
+  data/
+  └── market=US/
+      └── year=2024/
+          └── month=12/
+              └── price_raw.parquet
+
+Schema: price_raw
+  date          DATE          -- trading date (event_time)
+  symbol        STRING        -- ticker (e.g. AAPL)
+  open          FLOAT32
+  high          FLOAT32
+  low           FLOAT32
+  close         FLOAT32       -- unadjusted
+  volume        FLOAT32
+  as_of_date    DATE          -- knowledge_time (when row was ingested)
+  source_id     STRING        -- Massive batch ID for audit trail
+</code></pre>
+<h4 id="adjfactorstore-adj_events">AdjFactorStore (<code>adj_events</code>)</h4>
+<pre><code>Schema: adj_events
+  symbol        STRING
+  ex_date       DATE          -- event_time: date the action takes effect
+  as_of_date    DATE          -- knowledge_time: when Assay learned of this event
+  event_type    ENUM          -- SPLIT | DIVIDEND | MERGER | SPINOFF
+  adj_factor    FLOAT32       -- cumulative factor on this date
+  split_ratio   FLOAT32       -- 1.0 if not a split event
+  dividend_adj  FLOAT32       -- 0.0 if not a dividend event
+
+Query pattern (PIT-correct):
+  SELECT adj_factor
+  FROM adj_events
+  WHERE symbol = :sym
+    AND ex_date &lt;= :backtest_date
+    AND as_of_date &lt;= :backtest_date   -- only use info known at backtest_date
+  ORDER BY ex_date DESC
+  LIMIT 1
+</code></pre>
+<h4 id="universestore-universe_snapshots">UniverseStore (<code>universe_snapshots</code>)</h4>
+<pre><code>Schema: universe_snapshots
+  index_id       STRING        -- e.g. SP500, NASDAQ100
+  effective_date DATE          -- date this composition became active
+  symbols        LIST&lt;STRING&gt;  -- constituent tickers on that date
+  as_of_date     DATE          -- when Assay received this snapshot
+
+Usage: universe for backtest as-of 2022-06-15
+  SELECT symbols FROM universe_snapshots
+  WHERE index_id = 'SP500'
+    AND effective_date &lt;= '2022-06-15'
+    AND as_of_date &lt;= '2022-06-15'
+  ORDER BY effective_date DESC LIMIT 1
+</code></pre>
+<h3 id="3-3-corporate-action-handling">3.3  Corporate Action Handling</h3>
+<p>Incorrect corporate action handling is the most common source of look-ahead bias in production systems. Assay enforces two invariants:</p>
+<ul>
+<li><strong>Invariant 1:</strong> Adjustment factors applied to a backtest as-of date <code>t</code> must have <code>as_of_date ≤ t</code>. A split occurring after <code>t</code> must not affect the adjusted prices used in the backtest.</li>
+<li><strong>Invariant 2:</strong> Pre-split dividend amounts must be ratio-adjusted before being used to compute adjusted prices. Using the raw dividend amount against a split-adjusted price over-adjusts historical values.</li>
+</ul>
+<h4 id="adjustment-calculation">Adjustment calculation</h4>
+<pre><code class="language-python">def get_adj_price(symbol: str, date_range: tuple,
+                  as_of_date: str) -&gt; pd.DataFrame:
+    &quot;&quot;&quot;
+    Returns PIT-correct forward-adjusted prices.
+    Only uses corporate actions known as_of as_of_date.
+    &quot;&quot;&quot;
+    raw = store.get_raw_prices(symbol, *date_range)
+
+    # Fetch only events known at backtest time
+    events = adj_store.query(
+        symbol=symbol,
+        ex_date_lte=date_range[1],
+        as_of_date_lte=as_of_date   # &lt;-- PIT constraint
+    )
+
+    # Cumulative forward-adjustment factor
+    ref_factor = events.iloc[-1]['adj_factor']
+    raw['adj_factor'] = raw['date'].map(
+        lambda d: events[events['ex_date'] &lt;= d]['adj_factor'].iloc[-1]
+        if len(events[events['ex_date'] &lt;= d]) &gt; 0 else 1.0
+    )
+    raw['close_adj'] = raw['close'] * raw['adj_factor'] / ref_factor
+    return raw
+</code></pre>
+<h3 id="3-4-point-in-time-query-interface">3.4  Point-in-Time Query Interface</h3>
+<p>All <code>DataStore</code> methods enforce PIT correctness through their interface design. The <code>as_of_date</code> parameter is mandatory and has no default value.</p>
+<pre><code class="language-python">class DataStore:
+    def get_panel(
+        self,
+        fields:     list[str],
+        symbols:    list[str],
+        start_date: str,
+        end_date:   str,
+        as_of_date: str,            # REQUIRED — no default
+        adj:        str = 'forward' # forward | backward | none
+    ) -&gt; pl.DataFrame: ...
+
+    def get_universe(
+        self,
+        index_id:   str,
+        date:       str,
+        as_of_date: str             # REQUIRED
+    ) -&gt; list[str]: ...
+
+    def get_forward_returns(
+        self,
+        symbols:    list[str],
+        start_date: str,
+        end_date:   str,
+        horizons:   list[int],      # [1, 5, 10, 20]
+        as_of_date: str,
+        execution:  str = 'next_open'  # next_open | next_close | vwap
+    ) -&gt; dict[int, pl.DataFrame]: ...
+</code></pre>
+<h3 id="3-5-eventscheduler">3.5  EventScheduler</h3>
+<p>The <code>EventScheduler</code> automates data ingestion by mapping market events to ingestion tasks.</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Event type</th>
+<th>Trigger</th>
+<th>Tasks dispatched</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>market_close</code></td>
+<td>NYSE 4:00 PM ET (US Phase 1)</td>
+<td><code>ingest_ohlcv</code>, <code>update_adj_factor</code>, <code>refresh_universe</code></td>
+</tr>
+<tr>
+<td><code>earnings_release</code></td>
+<td>SEC filing timestamp</td>
+<td><code>ingest_financials</code>, <code>update_pit_snapshot</code></td>
+</tr>
+<tr>
+<td><code>index_rebalance</code></td>
+<td>Index provider announcement</td>
+<td><code>update_universe_snapshot</code></td>
+</tr>
+<tr>
+<td><code>dividend_ex_date</code></td>
+<td>NYSE ex-dividend date</td>
+<td><code>update_adj_factor_snapshot</code>, <code>invalidate_l2_cache</code></td>
+</tr>
+<tr>
+<td><code>split_effective</code></td>
+<td>Split effective date</td>
+<td><code>update_adj_factor_snapshot</code>, <code>invalidate_l2_cache</code></td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="4-factor-execution-engine">4. Factor Execution Engine</h2>
+<h3 id="4-1-dual-syntax-parser">4.1  Dual-Syntax Parser</h3>
+<p>Assay accepts factor expressions in two syntaxes. Both are parsed into an identical intermediate representation (unified AST) before execution. The execution backend has no knowledge of which syntax produced the AST.</p>
+<h4 id="syntax-a-qlib-expression-strings">Syntax A — qlib expression strings</h4>
+<pre><code>Ref($close, 5) / $close - 1
+Corr($close, $volume, 20) - Mean(Ref($close, 1), 10)
+Rank(EMA($close, 12) - EMA($close, 26))
+</code></pre>
+<h4 id="syntax-b-python-function-calls">Syntax B — Python function calls</h4>
+<pre><code>ts_returns(close, 5)
+ts_corr(close, volume, 20) - ts_mean(ts_delay(close, 1), 10)
+cs_rank(ts_ema(close, 12) - ts_ema(close, 26))
+</code></pre>
+<h4 id="unified-ast-node-types">Unified AST node types</h4>
+<pre><code class="language-python">@dataclass(frozen=True)
+class FieldNode:             # leaf: raw data field
+    name: str                # 'close', 'volume', 'open', ...
+
+@dataclass(frozen=True)
+class LitNode:               # leaf: literal value
+    value: float | int | str # 20, 0.5, 'sector'
+
+@dataclass(frozen=True)
+class OpNode:                # internal: operator application
+    op:       str            # 'ts_mean', 'cs_rank', ...
+    children: tuple          # tuple of child node hashes (after interning)
+
+    def struct_hash(self) -&gt; str:
+        raw = f&quot;op:{self.op}({','.join(self.children)})&quot;
+        return hashlib.sha256(raw.encode()).hexdigest()[:12]
+</code></pre>
+<h4 id="parser-auto-detection">Parser auto-detection</h4>
+<pre><code class="language-python">class ExprParser:
+    def parse(self, expr: str) -&gt; OpNode:
+        if re.search(r'\$\w+', expr) or self._has_qlib_ops(expr):
+            return QlibParser().parse(expr)
+        return PythonParser().parse(expr)
+
+    def _has_qlib_ops(self, expr: str) -&gt; bool:
+        qlib_ops = {'Ref','Mean','Std','Corr','EMA','Rank','Delta','Resi'}
+        return bool(re.search(r'\b(' + '|'.join(qlib_ops) + r')\b', expr))
+</code></pre>
+<h3 id="4-2-operator-registry">4.2  Operator Registry</h3>
+<p>All operators are registered in a central <code>OperatorRegistry</code>. The registry provides both the execution implementation and a machine-readable schema used for LLM agent prompt injection.</p>
+<h4 id="operator-categories">Operator categories</h4>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Category</th>
+<th>Prefix</th>
+<th>Examples</th>
+<th>Complexity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Time-series</td>
+<td><code>ts_</code></td>
+<td><code>ts_mean</code>, <code>ts_std</code>, <code>ts_corr</code>, <code>ts_rank</code>, <code>ts_decay_linear</code></td>
+<td>O(T × N × d)</td>
+</tr>
+<tr>
+<td>Cross-sectional</td>
+<td><code>cs_</code></td>
+<td><code>cs_rank</code>, <code>cs_zscore</code>, <code>cs_neutralize</code>, <code>cs_group_rank</code></td>
+<td>O(T × N log N)</td>
+</tr>
+<tr>
+<td>Mathematical</td>
+<td>(none)</td>
+<td><code>log</code>, <code>sign</code>, <code>abs</code>, <code>pow</code>, <code>sqrt</code>, <code>clip</code>, <code>where</code>, <code>safe_div</code></td>
+<td>O(T × N)</td>
+</tr>
+<tr>
+<td>Composite</td>
+<td><code>calc_</code></td>
+<td><code>calc_vwap</code>, <code>calc_adv</code>, <code>calc_returns</code></td>
+<td>O(T × N)</td>
+</tr>
+</tbody>
+</table></div>
+<h4 id="operator-schema-machine-readable">Operator schema (machine-readable)</h4>
+<pre><code class="language-python">OPERATOR_SCHEMA = {
+  'ts_corr': {
+    'signature':    'ts_corr(x, y, d)',
+    'params':       {'d': {'type': 'int', 'min': 2, 'max': 250}},
+    'inputs':       {'x': 'price_or_factor', 'y': 'price_or_factor'},
+    'output_range': '[-1, 1]',
+    'incremental':  True,       # supports O(1) daily update
+    'lookahead_safe': True,
+    'common_errors': [
+        'd=1 produces all-NaN output (zero variance)',
+        'x and y must share the same (date, symbol) index',
+    ],
+    'example': 'ts_corr(close, volume, 20)',
+  },
+  # ... all operators follow this schema
+}
+</code></pre>
+<h3 id="4-3-dag-construction-and-cse">4.3  DAG Construction and CSE</h3>
+<p>When F factor expressions are submitted for batch evaluation, the engine merges their ASTs into a single shared DAG using structural hashing. Nodes with identical structure (same operator, same children, same parameters) are merged into a single node computed once and referenced many times.</p>
+<pre><code class="language-python">class DAGBuilder:
+    def build(self, exprs: list[str]) -&gt; SharedDAG:
+        asts = [ExprParser().parse(e) for e in exprs]
+        dag_nodes: dict[str, OpNode] = {}
+        factor_roots: list[str] = []
+
+        for ast in asts:
+            root_hash = self._intern(ast, dag_nodes)
+            factor_roots.append(root_hash)
+
+        return SharedDAG(dag_nodes, factor_roots)
+
+    def _intern(self, node, dag: dict) -&gt; str:
+        if isinstance(node, (FieldNode, LitNode)):
+            h = node.struct_hash()
+            dag.setdefault(h, node)
+            return h
+        # Recurse first (post-order)
+        child_hashes = tuple(
+            self._intern(c, dag) for c in node.children
+        )
+        interned = OpNode(op=node.op, children=child_hashes)
+        h = interned.struct_hash()
+        dag.setdefault(h, interned)
+        return h
+</code></pre>
+<h4 id="cse-impact-k-6-avg-depth-r-0-6-overlap-rate">CSE impact (K=6 avg depth, R=0.6 overlap rate)</h4>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Batch size (F)</th>
+<th>Naive nodes (F×K)</th>
+<th>After CSE</th>
+<th>Reduction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>10</td>
+<td>60</td>
+<td>24</td>
+<td>60%</td>
+</tr>
+<tr>
+<td>50</td>
+<td>300</td>
+<td>120</td>
+<td>60%</td>
+</tr>
+<tr>
+<td>100</td>
+<td>600</td>
+<td>240</td>
+<td>60%</td>
+</tr>
+<tr>
+<td>200</td>
+<td>1,200</td>
+<td>480</td>
+<td>60%</td>
+</tr>
+<tr>
+<td>500</td>
+<td>3,000</td>
+<td>1,200</td>
+<td>60%</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="4-4-execution-planning">4.4  Execution Planning</h3>
+<pre><code class="language-python">class ExecutionPlanner:
+    def plan(self, dag: SharedDAG) -&gt; ExecutionPlan:
+        # Step 1: Kahn topological layering
+        layers = self._kahn_layers(dag)
+
+        # Step 2: Within each layer, sort by priority:
+        #   (1) high fan-out first (many dependents)
+        #   (2) expensive ops first (critical path)
+        #   (3) small memory footprint first (peak memory control)
+        layers = self._prioritize(layers, dag)
+
+        # Step 3: Check memory budget; split layers if needed
+        stages = self._memory_constrained_stages(layers)
+
+        # Step 4: Compute critical path length
+        critical_ms = self._critical_path(dag)
+
+        return ExecutionPlan(stages, critical_ms)
+</code></pre>
+<p>The <strong>critical path</strong> is the longest chain of sequentially-dependent nodes in the DAG. It defines the theoretical lower bound on execution time regardless of parallelism. For typical factor expressions with depth K=6, the critical path is approximately <strong>44ms</strong> (N=1000, T=250).</p>
+<h3 id="4-5-parallel-execution">4.5  Parallel Execution</h3>
+<pre><code class="language-python">class ParallelExecutor:
+    def execute(self, plan: ExecutionPlan,
+                dag: SharedDAG,
+                data: dict) -&gt; dict[str, np.ndarray]:
+        results = {}
+        for stage in plan.stages:
+            if len(stage) == 1:
+                results[stage[0]] = self._run_node(stage[0], dag, data, results)
+            else:
+                # ThreadPoolExecutor: numpy releases GIL during computation
+                # No serialization cost vs ProcessPoolExecutor
+                with ThreadPoolExecutor(self.n_workers) as ex:
+                    futs = {ex.submit(self._run_node, h, dag, data, results): h
+                            for h in stage}
+                    for fut in as_completed(futs):
+                        results[futs[fut]] = fut.result()
+            # GC: release intermediate results no longer needed
+            self._gc(stage, plan, results)
+        return results
+</code></pre>
+<blockquote>
+<p><strong>Note:</strong> Thread-based (not process-based) parallelism is used for intra-batch execution. Because Polars and Numba operations release the Python GIL during computation, threads achieve true parallelism without inter-process communication overhead. For large batch jobs (F &gt; 200), the outer loop across factor batches uses <code>ProcessPoolExecutor</code>.</p>
+</blockquote>
+<hr />
+<h2 id="5-cache-system">5. Cache System</h2>
+<p>The cache system is Assay's primary performance mechanism. It operates at two levels and exploits the structural properties of append-only temporal panel data to maintain cached results with O(1) daily updates.</p>
+<h3 id="5-1-architecture-overview">5.1  Architecture Overview</h3>
+<figure class="doc-fig"><svg xmlns="http://www.w3.org/2000/svg" class="fig" viewBox="0 0 760 330" width="760" height="330" role="img" aria-label="Cache layers, checked top to bottom"><style>
+.f-box{fill:var(--fig-box,#FFFFFF);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-group{fill:var(--fig-group,#F4F6FA);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-acc{fill:var(--fig-accent-bg,#E3F6F2);stroke:var(--fig-accent,#00A38B);stroke-width:1.2}
+.f-warm{fill:var(--fig-warm-bg,#FFF0E6);stroke:var(--fig-warm,#E8590C);stroke-width:1.2}
+.f-gold{fill:var(--fig-gold-bg,#FDF4DF);stroke:var(--fig-gold,#B7791F);stroke-width:1.2}
+.f-t{fill:var(--fig-text,#1A1D2E);font:600 13px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-h{fill:var(--fig-muted,#5A6477);font:600 10.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.f-s{fill:var(--fig-muted,#5A6477);font:400 11.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-m{fill:var(--fig-text,#1A1D2E);font:500 11.5px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ms{fill:var(--fig-muted,#5A6477);font:400 11px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ta{fill:var(--fig-accent,#00A38B);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tw{fill:var(--fig-warm,#E8590C);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tg{fill:var(--fig-gold,#B7791F);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-a{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4}
+.f-ad{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4;stroke-dasharray:4 3}
+.f-head{fill:var(--fig-arrow,#8A93A6)}
+.f-dot-ok{fill:var(--fig-accent,#00A38B)} .f-dot-part{fill:var(--fig-gold,#B7791F)} .f-dot-plan{fill:none;stroke:var(--fig-muted,#5A6477);stroke-width:1.2}
+@media (prefers-color-scheme:dark){svg.fig{--fig-box:#1F232E;--fig-line:#3A3F4C;--fig-group:#171B25;--fig-text:#D7DAE1;--fig-muted:#8A8F9C;--fig-arrow:#6E7484;--fig-accent:#00D6B3;--fig-accent-bg:#11302C;--fig-warm:#FF7A3D;--fig-warm-bg:#3A2418;--fig-gold:#E3B341;--fig-gold-bg:#352B14}}
+</style><rect x="110" y="16" width="634" height="86" rx="10" class="f-acc"/><text x="130" y="42" class="f-t" text-anchor="start">L2 factor cache · disk, Parquet (~1 MB per factor)</text><text x="130" y="62" class="f-s" text-anchor="start">key: hash(expression, universe, dates, adjustment version)</text><text x="130" y="78" class="f-s" text-anchor="start">stores the full T × N factor matrix</text><text x="130" y="94" class="f-s" text-anchor="start">dropped when the adjustment version changes</text><circle cx="62" cy="59" r="22" class="f-acc"/><text x="62" y="64" class="f-t" text-anchor="middle">L2</text><rect x="110" y="116" width="634" height="86" rx="10" class="f-box"/><text x="130" y="142" class="f-t" text-anchor="start">L1 operator cache · RAM arena blocks, float32</text><text x="130" y="162" class="f-s" text-anchor="start">key: (operator, field, window, market, universe, dates)</text><text x="130" y="178" class="f-s" text-anchor="start">stores intermediate results such as ts_mean(close, 20)</text><text x="130" y="194" class="f-s" text-anchor="start">eviction: LFU with EMA heat score</text><circle cx="62" cy="159" r="22" class="f-box"/><text x="62" y="164" class="f-t" text-anchor="middle">L1</text><rect x="110" y="216" width="634" height="86" rx="10" class="f-group"/><text x="130" y="242" class="f-t" text-anchor="start">Incremental maintenance</text><text x="130" y="262" class="f-s" text-anchor="start">daily append: O(1) update for linear sliding-window operators</text><text x="130" y="278" class="f-s" text-anchor="start">topological scheduler updates dependents in order</text><circle cx="62" cy="259" r="22" class="f-group"/><text x="62" y="264" class="f-t" text-anchor="middle">Δ</text><path d="M62,65 L62,137" class="f-a"/><path d="M62.0,137.0 L58.5,129.8 L65.5,129.8 Z" class="f-head"/><path d="M62,165 L62,237" class="f-a"/><path d="M62.0,237.0 L58.5,229.8 L65.5,229.8 Z" class="f-head"/><text x="20" y="104" class="f-ms" text-anchor="start">miss</text><text x="20" y="204" class="f-ms" text-anchor="start">miss</text></svg></figure>
+<h3 id="5-2-l1-operator-cache">5.2  L1 Operator Cache</h3>
+<h4 id="key-design">Key design</h4>
+<p>L1 cache keys are frozen dataclasses. Python caches the <code>__hash__</code> result after the first call, making repeated dict lookups O(1) with no serialization overhead.</p>
+<pre><code class="language-python">@dataclass(frozen=True)
+class OpKey:
+    op:       str
+    field:    str
+    window:   int
+    market:   str
+    univ_id:  str
+    t0:       str
+    t1:       str
+    field2:   str = ''  # second input for binary ops (ts_corr)
+
+# frozen=True auto-generates __hash__ and __eq__
+# Python caches hash value after first computation
+# dict[OpKey, CachedArray] lookups run at C speed
+</code></pre>
+<h4 id="arena-memory-layout">Arena memory layout</h4>
+<p>Cached arrays are stored in pre-allocated Arena blocks rather than individual heap allocations. This eliminates memory fragmentation and improves cache locality.</p>
+<pre><code class="language-python">class ArenaBlock:
+    def __init__(self, n_dates, n_symbols, n_slots=256):
+        # Single contiguous allocation: (slots, dates, symbols)
+        # C-order: slot dimension outermost for sequential slot access
+        self._buf = np.empty(
+            (n_slots, n_dates, n_symbols),
+            dtype=np.float32,   # float32: half bandwidth vs float64
+            order='C'
+        )
+        self._slot_map: dict[OpKey, int] = {}
+        self._heat:     dict[int, float]  = {}
+
+    def get(self, key: OpKey) -&gt; np.ndarray | None:
+        slot = self._slot_map.get(key)
+        if slot is None: return None
+        self._heat[slot] = self._heat[slot] * 0.9 + 1.0  # EMA heat
+        return self._buf[slot]   # zero-copy view
+
+    def put(self, key: OpKey, arr: np.ndarray):
+        if self._next_slot &gt;= len(self._buf):
+            self._evict_lfu()
+        slot = self._next_slot
+        self._buf[slot] = arr    # direct write into pre-allocated block
+        self._slot_map[key] = slot
+        self._heat[slot] = 1.0
+        self._next_slot += 1
+</code></pre>
+<h3 id="5-3-incremental-o-1-daily-update">5.3  Incremental O(1) Daily Update</h3>
+<p>For operators whose results satisfy a sliding window recurrence relation, appending one day of new data requires O(1) work per symbol rather than O(d) recomputation over the full window.</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Operator</th>
+<th>Incremental?</th>
+<th>Update formula</th>
+<th>State maintained</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts_mean</code></td>
+<td>Yes</td>
+<td><code>new = old + (x_new - x_expired) / d</code></td>
+<td><code>sum_x</code></td>
+</tr>
+<tr>
+<td><code>ts_sum</code></td>
+<td>Yes</td>
+<td><code>new = old + x_new - x_expired</code></td>
+<td><code>sum_x</code></td>
+</tr>
+<tr>
+<td><code>ts_std</code></td>
+<td>Yes</td>
+<td>Welford sliding window</td>
+<td><code>sum_x</code>, <code>sum_x2</code></td>
+</tr>
+<tr>
+<td><code>ts_corr</code></td>
+<td>Yes</td>
+<td>Update 5 sufficient statistics</td>
+<td><code>sx, sy, sx2, sy2, sxy</code></td>
+</tr>
+<tr>
+<td><code>ts_ema</code></td>
+<td>Yes</td>
+<td><code>new = alpha * x_new + (1-alpha) * old</code></td>
+<td><code>last_ema</code></td>
+</tr>
+<tr>
+<td><code>ts_rank</code></td>
+<td><strong>No</strong></td>
+<td>Requires full-window sort O(d log d)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>ts_argmax</code></td>
+<td><strong>No</strong></td>
+<td>Requires full-window scan O(d)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>cs_rank</code></td>
+<td><strong>No</strong></td>
+<td>Cross-sectional, no time-state</td>
+<td>—</td>
+</tr>
+</tbody>
+</table></div>
+<h4 id="ts_std-incremental-implementation"><code>ts_std</code> incremental implementation</h4>
+<pre><code class="language-python">@numba.jit(nopython=True, fastmath=True)
+def _increment_ts_std(
+    sum_x:  np.ndarray,   # shape (N,)
+    sum_x2: np.ndarray,   # shape (N,)
+    x_new:  np.ndarray,   # today's values
+    x_exp:  np.ndarray,   # expiring values (d days ago)
+    window: int
+) -&gt; tuple:
+    new_sum_x  = sum_x  + x_new - x_exp
+    new_sum_x2 = sum_x2 + x_new**2 - x_exp**2
+    variance = (new_sum_x2 - new_sum_x**2 / window) / (window - 1)
+    std = np.sqrt(np.maximum(variance, 0.0))  # clip numerical errors
+    return new_sum_x, new_sum_x2, std
+</code></pre>
+<h3 id="5-4-l2-factor-string-cache">5.4  L2 Factor String Cache</h3>
+<p>L2 caches complete factor expression results to disk. It is used across sessions: if an agent submits an expression evaluated in a previous session on the same universe and date range, the result is served from disk without recomputation.</p>
+<pre><code class="language-python">@dataclass(frozen=True)
+class FactorCacheKey:
+    expr_hash:   str   # SHA-256[:16] of canonicalized expression
+    universe_id: str
+    market:      str
+    date_start:  str
+    date_end:    str
+    adj_version: str   # bumped when adj_factor snapshot changes
+                       # → automatic cache invalidation on splits/divs
+
+# Storage:  ~/.assay/factor_cache/&lt;hash[:2]&gt;/&lt;hash&gt;.parquet
+# Compression: zstd
+# Index: in-memory metadata dict for O(1) existence check
+# Size:  ~1MB per factor for N=1000, T=250, float32
+</code></pre>
+<h3 id="5-5-cache-invalidation-policy">5.5  Cache Invalidation Policy</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Event</th>
+<th>L1 effect</th>
+<th>L2 effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>New trading day appended</td>
+<td>Incremental update (O(1) ops)</td>
+<td>No invalidation</td>
+</tr>
+<tr>
+<td>Dividend ex-date</td>
+<td>Invalidate affected symbol's price ops</td>
+<td>Invalidate by <code>adj_version</code> bump</td>
+</tr>
+<tr>
+<td>Stock split</td>
+<td>Invalidate all price-derived ops for symbol</td>
+<td>Invalidate by <code>adj_version</code> bump</td>
+</tr>
+<tr>
+<td>Universe rebalance</td>
+<td>No effect (keyed by <code>universe_id</code>)</td>
+<td>Invalidate by <code>universe_id</code> update</td>
+</tr>
+<tr>
+<td>Data correction / restatement</td>
+<td>Invalidate affected date range</td>
+<td>Full invalidation for symbol</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="6-backtest-and-evaluation-layer">6. Backtest and Evaluation Layer</h2>
+<h3 id="6-1-forward-returns">6.1  Forward Returns</h3>
+<p>Forward returns are precomputed once per evaluation session and reused across all factor evaluations. This eliminates redundant return computation from the per-factor hot path.</p>
+<pre><code class="language-python">class ForwardReturns:
+    def precompute(
+        self,
+        symbols:    list[str],
+        date_range: tuple[str, str],
+        horizons:   list[int] = [1, 5, 10, 20],
+        execution:  str = 'next_open',  # price used for entry/exit
+        as_of_date: str = None
+    ) -&gt; dict[int, pl.DataFrame]:
+        &quot;&quot;&quot;
+        Returns dict mapping horizon → (T, N) returns DataFrame.
+        Aligned to the same (date, symbol) index as factor outputs.
+        Session-level cache: reused for all factors in the session.
+        &quot;&quot;&quot;
+</code></pre>
+<h4 id="execution-price-conventions">Execution price conventions</h4>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Convention</th>
+<th>Description</th>
+<th>Recommended for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>next_open</code></td>
+<td>Entry at T+1 open price</td>
+<td>Most factor strategies (avoids closing price impact)</td>
+</tr>
+<tr>
+<td><code>next_close</code></td>
+<td>Entry at T+1 close price</td>
+<td>MOC orders, index-tracking strategies</td>
+</tr>
+<tr>
+<td><code>vwap</code></td>
+<td>T+1 VWAP (requires intraday data)</td>
+<td>Larger AUM, impact-sensitive strategies</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="6-2-ic-and-rankic-computation">6.2  IC and RankIC Computation</h3>
+<p>Information Coefficient (IC) measures cross-sectional linear correlation between factor values and subsequent returns. Rank IC (RankIC) measures Spearman rank correlation, which is more robust to outliers and distribution assumptions.</p>
+<h4 id="mathematical-definition">Mathematical definition</h4>
+<pre><code>For each date t in [t_start, t_end]:
+
+  IC_t     = Pearson(factor_vals[t], fwd_returns[t])
+           = Cov(f, r) / (Std(f) × Std(r))
+
+  RankIC_t = Pearson(rank(factor_vals[t]), rank(fwd_returns[t]))
+           = Spearman(factor_vals[t], fwd_returns[t])
+
+  IC       = mean(IC_t for t in T)
+  ICIR     = mean(IC_t) / std(IC_t)
+  RankIC   = mean(RankIC_t for t in T)
+  RankICIR = mean(RankIC_t) / std(RankIC_t)
+</code></pre>
+<h4 id="high-performance-rankic-via-numba">High-performance RankIC via Numba</h4>
+<p>The production implementation uses <code>numba.prange</code> for data-parallel execution across all T dates simultaneously. Theoretical speedup vs <code>scipy.spearmanr</code> loop: ~200-275x for N=1000, T=250.</p>
+<pre><code class="language-python">@numba.jit(nopython=True, parallel=True, fastmath=True, cache=True)
+def rank_ic_parallel(
+    factor:  np.ndarray,   # (T, N) float32
+    returns: np.ndarray,   # (T, N) float32
+) -&gt; tuple:
+    T, N = factor.shape
+    ic_series = np.empty(T, dtype=np.float32)
+
+    for t in numba.prange(T):    # parallel: T dates across all cores
+        f_rank = _rank_1d(factor[t])
+        r_rank = _rank_1d(returns[t])
+        ic_series[t] = _pearson_1d(f_rank, r_rank)
+
+    return ic_series.mean(), ic_series.std(), ic_series
+
+
+@numba.jit(nopython=True, fastmath=True)
+def _rank_1d(x: np.ndarray) -&gt; np.ndarray:
+    # Average-rank tie handling, O(N log N)
+    idx = np.argsort(x)
+    rank = np.empty(len(x), dtype=np.float32)
+    i = 0
+    while i &lt; len(x):
+        j = i + 1
+        while j &lt; len(x) and x[idx[j]] == x[idx[i]]: j += 1
+        avg = (i + j - 1) / 2.0
+        for k in range(i, j): rank[idx[k]] = avg
+        i = j
+    return rank
+</code></pre>
+<h4 id="multi-horizon-fusion">Multi-horizon fusion</h4>
+<p>Factor rank is computed once and reused across all H horizons, saving (H-1)/H of the factor ranking work. For H=4 horizons, this saves <strong>75%</strong> of factor sort operations.</p>
+<pre><code class="language-python">@numba.jit(nopython=True, parallel=True, fastmath=True)
+def rank_ic_multi_horizon(
+    factor:      np.ndarray,  # (T, N)
+    fwd_returns: np.ndarray,  # (H, T, N)
+) -&gt; np.ndarray:              # (H, T)
+    H, T, N = fwd_returns.shape
+    result = np.empty((H, T), dtype=np.float32)
+    for t in numba.prange(T):
+        f_rank = _rank_1d(factor[t])  # computed once per date
+        for h in range(H):
+            r_rank = _rank_1d(fwd_returns[h, t])
+            result[h, t] = _pearson_1d(f_rank, r_rank)
+    return result
+</code></pre>
+<h3 id="6-3-decay-analysis">6.3  Decay Analysis</h3>
+<p>Factor decay measures how quickly the predictive signal attenuates over longer holding periods.</p>
+<pre><code class="language-python">class DecayAnalyzer:
+    def compute(
+        self,
+        factor_vals: np.ndarray,
+        fwd_returns: dict[int, np.ndarray],  # horizon → (T, N)
+    ) -&gt; DecayResult:
+        horizons = sorted(fwd_returns.keys())
+        ic_by_horizon = {
+            h: rank_ic_parallel(factor_vals, fwd_returns[h])[0]
+            for h in horizons
+        }
+        halflife = self._estimate_halflife(horizons, ic_by_horizon)
+        return DecayResult(ic_by_horizon, halflife)
+
+    def _estimate_halflife(self, horizons, ic_vals) -&gt; float:
+        # Fit: IC(h) = IC(1) * exp(-lambda * h)
+        # halflife = log(2) / lambda
+        ...
+</code></pre>
+<h3 id="6-4-batch-evaluation">6.4  Batch Evaluation</h3>
+<pre><code class="language-python">class BatchFactorBT:
+    def run(
+        self,
+        exprs:     list[str],
+        universe:  str,
+        period:    tuple[str, str],
+        as_of:     str,
+        horizons:  list[int] = [1, 5, 10, 20],
+        n_workers: int = 8,
+    ) -&gt; list[FactorReport]:
+
+        # 1. Precompute forward returns (once for all factors)
+        fwd = ForwardReturns().precompute(
+            symbols=store.get_universe(universe, period[1], as_of),
+            date_range=period, horizons=horizons, as_of_date=as_of
+        )
+
+        # 2. Build shared DAG (CSE across all F factors)
+        dag = DAGBuilder().build(exprs)
+
+        # 3. Schedule and execute
+        plan    = ExecutionPlanner(dag, n_workers=n_workers).plan()
+        results = ParallelExecutor(plan, dag, data).execute()
+
+        # 4. Compute IC for each factor root
+        reports = []
+        for i, root_h in enumerate(dag.factor_roots):
+            factor_vals = results[root_h]
+            report = self._evaluate(exprs[i], factor_vals, fwd)
+            reports.append(report)
+
+        return sorted(reports, key=lambda r: -r.rank_icir)
+</code></pre>
+<h3 id="6-5-cost-model">6.5  Cost Model</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Parameter</th>
+<th>US (Phase 1)</th>
+<th>HK (roadmap)</th>
+<th>A-share (roadmap)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Commission</td>
+<td>0.05%</td>
+<td>0.03%</td>
+<td>0.03%</td>
+</tr>
+<tr>
+<td>Stamp duty</td>
+<td>0%</td>
+<td>0.13%</td>
+<td>0.10% (sell only)</td>
+</tr>
+<tr>
+<td>Market impact k</td>
+<td>0.10</td>
+<td>0.15</td>
+<td>0.20</td>
+</tr>
+<tr>
+<td>Price limit</td>
+<td>None</td>
+<td>None</td>
+<td>±10% daily</td>
+</tr>
+<tr>
+<td>Settlement</td>
+<td>T+2</td>
+<td>T+2</td>
+<td>T+1</td>
+</tr>
+</tbody>
+</table></div>
+<p><em>Market impact model: <code>impact = k × sqrt(order_size / adv20)</code> where <code>adv20</code> is 20-day average daily volume.</em></p>
+<hr />
+<h2 id="7-user-interface">7. User Interface</h2>
+<h3 id="7-1-python-sdk">7.1  Python SDK</h3>
+<h4 id="single-factor-evaluation">Single factor evaluation</h4>
+<pre><code class="language-python">import assay
+
+# Minimal usage
+report = assay.backtest(
+    expr     = 'ts_returns(close, 20)',
+    universe = 'SP500',
+    period   = ('2020-01-01', '2024-12-31'),
+)
+
+print(report.rank_ic)        # 0.047
+print(report.rank_icir)      # 0.61
+print(report.decay_halflife) # 12 days
+
+# Full options
+report = assay.backtest(
+    expr       = 'ts_corr(close, volume, 20)',
+    universe   = 'SP500',
+    period     = ('2018-01-01', '2024-12-31'),
+    horizons   = [1, 5, 10, 20],
+    execution  = 'next_open',
+    market     = 'US',
+    neutralize = ['sector'],   # industry-neutral IC
+)
+</code></pre>
+<h4 id="batch-evaluation">Batch evaluation</h4>
+<pre><code class="language-python">factors = [
+    'ts_returns(close, 20)',
+    'ts_corr(close, volume, 20)',
+    'cs_rank(ts_std(log(close/ts_delay(close,1)), 20))',
+    # ... up to hundreds
+]
+
+reports = assay.batch_backtest(
+    exprs    = factors,
+    universe = 'SP500',
+    period   = ('2020-01-01', '2024-12-31'),
+    n_jobs   = 8,
+    sort_by  = 'rank_icir',
+)
+
+for r in reports[:5]:
+    print(f'{r.expr:&lt;50}  RankIC={r.rank_ic:.3f}  ICIR={r.rank_icir:.2f}')
+</code></pre>
+<h4 id="session-context-amortize-setup-costs">Session context (amortize setup costs)</h4>
+<pre><code class="language-python"># Panel loaded once: ~265ms
+# Each subsequent factor: ~30-50ms (hot path only)
+with assay.Session(universe='SP500',
+                   period=('2020-01-01', '2024-12-31')) as sess:
+    r1 = sess.backtest('ts_returns(close, 20)')
+    r2 = sess.backtest('ts_corr(close, volume, 20)')
+    r3 = sess.backtest(custom_factor_fn)
+</code></pre>
+<h4 id="custom-python-factor-functions">Custom Python factor functions</h4>
+<pre><code class="language-python">def my_factor(df: pl.DataFrame) -&gt; pl.Series:
+    &quot;&quot;&quot;df has columns: date, symbol, close, volume, ...&quot;&quot;&quot;
+    return (df['close'] / df['close'].shift(20) - 1) * df['volume']
+
+report = assay.backtest(
+    expr     = my_factor,
+    universe = 'SP500',
+    period   = ('2020-01-01', '2024-12-31'),
+)
+</code></pre>
+<h3 id="7-2-factorreport-schema">7.2  FactorReport Schema</h3>
+<p>Every field is chosen to provide actionable information for the next step in the agent loop.</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>factor_id</code></td>
+<td>str</td>
+<td>SHA-256[:16] of canonical expression</td>
+</tr>
+<tr>
+<td><code>expr</code></td>
+<td>str</td>
+<td>Original expression string</td>
+</tr>
+<tr>
+<td><code>expr_canonical</code></td>
+<td>str</td>
+<td>Normalized form (for deduplication)</td>
+</tr>
+<tr>
+<td><code>ic</code></td>
+<td>float</td>
+<td>Mean IC across evaluation period</td>
+</tr>
+<tr>
+<td><code>icir</code></td>
+<td>float</td>
+<td>IC / std(IC)</td>
+</tr>
+<tr>
+<td><code>rank_ic</code></td>
+<td>float</td>
+<td>Mean RankIC (Spearman) across period</td>
+</tr>
+<tr>
+<td><code>rank_icir</code></td>
+<td>float</td>
+<td>RankIC / std(RankIC)</td>
+</tr>
+<tr>
+<td><code>ic_by_horizon</code></td>
+<td>dict[int, float]</td>
+<td>IC at each holding period: <code>{1: 0.04, 5: 0.035, ...}</code></td>
+</tr>
+<tr>
+<td><code>decay_halflife_days</code></td>
+<td>int | null</td>
+<td>Estimated signal half-life in trading days</td>
+</tr>
+<tr>
+<td><code>turnover_1d</code></td>
+<td>float</td>
+<td>Average 1-day factor rank autocorrelation</td>
+</tr>
+<tr>
+<td><code>redundancy_score</code></td>
+<td>float</td>
+<td>Max rank-corr with any factor in library [0, 1]</td>
+</tr>
+<tr>
+<td><code>most_similar_factor</code></td>
+<td>str | null</td>
+<td><code>factor_id</code> of closest library match</td>
+</tr>
+<tr>
+<td><code>lookahead_detected</code></td>
+<td>bool</td>
+<td>True if shift error or global normalization found</td>
+</tr>
+<tr>
+<td><code>failure_mode</code></td>
+<td>str | null</td>
+<td><code>SYNTAX_ERROR</code> | <code>LOOKAHEAD</code> | <code>CONSTANT</code> | <code>ALL_NAN</code> | <code>RUNTIME_ERROR</code> (from the diagnostics system — see <code>assay.engine.diagnostics</code>)</td>
+</tr>
+<tr>
+<td><code>suggestion</code></td>
+<td>str | null</td>
+<td>Natural language improvement hint (the diagnostic's actionable suggestion)</td>
+</tr>
+<tr>
+<td><code>eval_period</code></td>
+<td>tuple[str, str]</td>
+<td>Actual evaluation date range used</td>
+</tr>
+<tr>
+<td><code>universe_id</code></td>
+<td>str</td>
+<td>Universe identifier</td>
+</tr>
+<tr>
+<td><code>n_dates</code></td>
+<td>int</td>
+<td>Number of trading days evaluated</td>
+</tr>
+<tr>
+<td><code>n_symbols</code></td>
+<td>int</td>
+<td>Average universe size</td>
+</tr>
+<tr>
+<td><code>lineage.prompt_hash</code></td>
+<td>str | null</td>
+<td>Hash of LLM prompt that generated this factor</td>
+</tr>
+<tr>
+<td><code>lineage.data_snapshot_id</code></td>
+<td>str</td>
+<td>DataStore snapshot ID used for evaluation</td>
+</tr>
+<tr>
+<td><code>lineage.eval_timestamp</code></td>
+<td>str</td>
+<td>ISO 8601 timestamp of evaluation</td>
+</tr>
+<tr>
+<td><code>lineage.adj_version</code></td>
+<td>str</td>
+<td>Adjustment factor version at eval time</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="7-3-agent-api">7.3  Agent API</h3>
+<pre><code class="language-python">class AgentAPI:
+    def eval_factor(
+        self,
+        expr:           str,
+        context:        AgentContext,
+        include_schema: bool = True,  # inject operator docs into response
+    ) -&gt; dict:
+        &quot;&quot;&quot;
+        Returns FactorReport as dict, with optional operator schema appended.
+        Designed to be directly serializable to JSON for agent consumption.
+        &quot;&quot;&quot;
+        report = self._bt.run(expr, context)
+        result = report.to_dict()
+        if include_schema:
+            ops_used = extract_ops(expr)
+            result['operator_schemas'] = {
+                op: OPERATOR_SCHEMA[op]
+                for op in ops_used if op in OPERATOR_SCHEMA
+            }
+        return result
+</code></pre>
+<h3 id="7-4-cli">7.4  CLI</h3>
+<pre><code class="language-bash"># Single factor evaluation
+assay run 'ts_returns(close, 20)' --universe SP500 --period 2020-2024
+
+# Batch evaluation from file
+assay batch factors.txt --universe SP500 --jobs 8 --output results.parquet
+
+# Factor report
+assay report momentum_20 --market US --period 2020-2024
+
+# Factor library management
+assay library list --sort rank_icir
+assay library search 'ts_corr' --min-icir 0.5
+assay library prune --redundancy-threshold 0.7
+
+# Cache management
+assay cache stats
+assay cache clear --market US --before 2023-01-01
+
+# Data management
+assay data ingest --market US --date 2024-12-31
+assay data status --market US
+</code></pre>
+<hr />
+<h2 id="8-performance">8. Performance</h2>
+<h3 id="8-1-benchmark-configuration">8.1  Benchmark Configuration</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Universe size (N)</td>
+<td>1,000 symbols</td>
+</tr>
+<tr>
+<td>Time period (T)</td>
+<td>250 trading days</td>
+</tr>
+<tr>
+<td>Total rows</td>
+<td>248,179</td>
+</tr>
+<tr>
+<td>Horizons</td>
+<td>4 (1, 5, 10, 20 days)</td>
+</tr>
+<tr>
+<td>Workers</td>
+<td>8 (default <code>ThreadPoolExecutor</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="8-2-measured-performance-v0-1-cold-run">8.2  Measured Performance (v0.1, cold run)</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Step</th>
+<th>Time (ms)</th>
+<th>% of total</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DataStore init + load adj events</td>
+<td>32.5</td>
+<td>4.8%</td>
+<td>Setup (once per session)</td>
+</tr>
+<tr>
+<td>Universe load</td>
+<td>2.2</td>
+<td>0.3%</td>
+<td>Setup</td>
+</tr>
+<tr>
+<td>DataStore.get_panel (PIT query + adj)</td>
+<td>222.2</td>
+<td>33.1%</td>
+<td>Setup</td>
+</tr>
+<tr>
+<td>Forward returns precompute (4 horizons)</td>
+<td>42.7</td>
+<td>6.4%</td>
+<td>Setup</td>
+</tr>
+<tr>
+<td>FactorEngine init (sort + context)</td>
+<td>9.9</td>
+<td>1.5%</td>
+<td>Setup</td>
+</tr>
+<tr>
+<td>Factor evaluate (expression)</td>
+<td>29.9</td>
+<td>4.5%</td>
+<td><strong>Hot path</strong></td>
+</tr>
+<tr>
+<td>IC / RankIC / ICIR / decay</td>
+<td>331.7</td>
+<td>49.4%</td>
+<td><strong>Hot path</strong></td>
+</tr>
+<tr>
+<td>Redundancy + FactorReport assembly</td>
+<td>0.1</td>
+<td>0.0%</td>
+<td>Hot path</td>
+</tr>
+<tr>
+<td><strong>TOTAL (cold)</strong></td>
+<td><strong>671</strong></td>
+<td>100%</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+<th>Target</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Session setup (one-time)</td>
+<td>309 ms</td>
+<td>&lt; 500 ms</td>
+<td>✅ PASS</td>
+</tr>
+<tr>
+<td>Per-factor hot path</td>
+<td>362 ms</td>
+<td>&lt; 500 ms</td>
+<td>✅ PASS</td>
+</tr>
+<tr>
+<td>Batch 50 factors (warm)</td>
+<td>361 ms/factor</td>
+<td>&lt; 720 ms/factor</td>
+<td>✅ PASS</td>
+</tr>
+<tr>
+<td>100-factor projection</td>
+<td>~36 s</td>
+<td>&lt; 60 s</td>
+<td>✅ PASS</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="8-3-hot-path-breakdown">8.3  Hot Path Breakdown</h3>
+<blockquote>
+<p><strong>Key finding:</strong> IC/RankIC computation accounts for <strong>92%</strong> of the per-factor hot path (331.7ms of 362ms). Factor expression evaluation itself is only 8%. The primary optimization target is the IC computation kernel, not the factor engine.</p>
+</blockquote>
+<h3 id="8-4-planned-optimizations">8.4  Planned Optimizations</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Optimization</th>
+<th>Target</th>
+<th>Expected gain</th>
+<th>Priority</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Numba parallel RankIC (T dates parallel)</td>
+<td>IC kernel</td>
+<td>~200x vs scipy loop</td>
+<td>P0</td>
+</tr>
+<tr>
+<td>Multi-horizon rank fusion (factor rank once)</td>
+<td>IC kernel</td>
+<td>75% fewer factor sorts</td>
+<td>P0</td>
+</tr>
+<tr>
+<td>Session-level panel cache</td>
+<td><code>get_panel</code></td>
+<td>222ms → 0ms (2nd+ factor)</td>
+<td>P1</td>
+</tr>
+<tr>
+<td>DAG CSE + topological parallel execution</td>
+<td>Batch throughput</td>
+<td>10-50x batch speedup</td>
+<td>P1</td>
+</tr>
+<tr>
+<td>Approximate rank (200-bucket, error &lt; 0.003)</td>
+<td>IC kernel</td>
+<td>O(N) vs O(N log N)</td>
+<td>P2</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="8-5-theoretical-performance-bounds">8.5  Theoretical Performance Bounds</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Memory bandwidth limit</th>
+<th>Target (P0+P1)</th>
+<th>Current</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Single factor (hot path)</td>
+<td>0.12 ms</td>
+<td>30–50 ms</td>
+<td>362 ms</td>
+</tr>
+<tr>
+<td>100 factor batch</td>
+<td>6 ms</td>
+<td>5–10 s</td>
+<td>~36 s</td>
+</tr>
+<tr>
+<td>Daily incremental update</td>
+<td>~1 ms</td>
+<td>&lt; 500 ms</td>
+<td>full recompute</td>
+</tr>
+</tbody>
+</table></div>
+<p><em>Memory bandwidth limit assumes 50 GB/s RAM, float32, no data reuse. These represent absolute physical lower bounds.</em></p>
+<hr />
+<h2 id="9-implementation-roadmap">9. Implementation Roadmap</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Phase</th>
+<th>Scope</th>
+<th>Key deliverables</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Phase 1 — MVP</strong></td>
+<td>DataStore (Massive US) + FactorEngine (Python syntax) + SingleFactorBT + IC/RankIC</td>
+<td>End-to-end runnable on US equities. Cold-path &lt; 700ms.</td>
+<td>DataStore + FactorEngine (parser/AST/operators/evaluator) landed — see <a href="https://github.com/QFinVerse/Assay/tree/main/src/assay/engine" target="_blank" rel="noopener noreferrer"><code>src/assay/engine/</code></a>; SingleFactorBT + IC/RankIC next</td>
+</tr>
+<tr>
+<td><strong>Phase 2 — Performance</strong></td>
+<td>Numba IC kernel + session panel cache + L1 Arena + DAG CSE + BatchFactorBT</td>
+<td>Hot-path &lt; 50ms. 100 factors &lt; 10s.</td>
+<td>Planned</td>
+</tr>
+<tr>
+<td><strong>Phase 3 — Agent native</strong></td>
+<td>FactorReport JSON + LineageStore + SandboxExecutor + qlib syntax + redundancy</td>
+<td>AlphaBench v2 integration complete.</td>
+<td>Planned</td>
+</tr>
+<tr>
+<td><strong>Phase 4 — Multi-market</strong></td>
+<td>HK + A-share calendars + cost models + universe snapshots</td>
+<td>Cross-market factor research.</td>
+<td>Roadmap</td>
+</tr>
+<tr>
+<td><strong>Phase 5 — Portfolio</strong></td>
+<td>PortfolioLayer + WeightOptimizer + RiskModel + FactorComposer</td>
+<td>Full portfolio backtest capability.</td>
+<td>Roadmap</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="10-appendix">10. Appendix</h2>
+<h3 id="a-operator-quick-reference">A.  Operator Quick Reference</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Operator</th>
+<th>Signature</th>
+<th>Output range</th>
+<th>Incremental</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts_delay</code></td>
+<td><code>ts_delay(x, d)</code></td>
+<td>same as x</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>ts_delta</code></td>
+<td><code>ts_delta(x, d)</code></td>
+<td>same as x</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>ts_returns</code></td>
+<td><code>ts_returns(x, d)</code></td>
+<td>(-1, ∞)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>ts_log_returns</code></td>
+<td><code>ts_log_returns(x, d)</code></td>
+<td>(-∞, ∞)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>ts_mean</code></td>
+<td><code>ts_mean(x, d)</code></td>
+<td>same as x</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>ts_sum</code></td>
+<td><code>ts_sum(x, d)</code></td>
+<td>same as x</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>ts_std</code></td>
+<td><code>ts_std(x, d)</code></td>
+<td>[0, ∞)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>ts_corr</code></td>
+<td><code>ts_corr(x, y, d)</code></td>
+<td>[-1, 1]</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>ts_rank</code></td>
+<td><code>ts_rank(x, d)</code></td>
+<td>[0, 1]</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>ts_argmax</code></td>
+<td><code>ts_argmax(x, d)</code></td>
+<td>[0, d-1]</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>ts_argmin</code></td>
+<td><code>ts_argmin(x, d)</code></td>
+<td>[0, d-1]</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>ts_ema</code></td>
+<td><code>ts_ema(x, d)</code></td>
+<td>same as x</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>ts_decay_linear</code></td>
+<td><code>ts_decay_linear(x, d)</code></td>
+<td>same as x</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>ts_regression</code></td>
+<td><code>ts_regression(y, x, d)</code></td>
+<td>returns beta, resid</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>ts_skew</code></td>
+<td><code>ts_skew(x, d)</code></td>
+<td>(-∞, ∞)</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>ts_kurt</code></td>
+<td><code>ts_kurt(x, d)</code></td>
+<td>(-∞, ∞)</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>cs_rank</code></td>
+<td><code>cs_rank(x)</code></td>
+<td>[0, 1]</td>
+<td>N/A</td>
+</tr>
+<tr>
+<td><code>cs_zscore</code></td>
+<td><code>cs_zscore(x)</code></td>
+<td>(-∞, ∞)</td>
+<td>N/A</td>
+</tr>
+<tr>
+<td><code>cs_demean</code></td>
+<td><code>cs_demean(x)</code></td>
+<td>(-∞, ∞)</td>
+<td>N/A</td>
+</tr>
+<tr>
+<td><code>cs_winsorize</code></td>
+<td><code>cs_winsorize(x, p)</code></td>
+<td>same as x</td>
+<td>N/A</td>
+</tr>
+<tr>
+<td><code>cs_neutralize</code></td>
+<td><code>cs_neutralize(x, group)</code></td>
+<td>(-∞, ∞)</td>
+<td>N/A</td>
+</tr>
+<tr>
+<td><code>cs_group_rank</code></td>
+<td><code>cs_group_rank(x, g)</code></td>
+<td>[0, 1]</td>
+<td>N/A</td>
+</tr>
+<tr>
+<td><code>log</code></td>
+<td><code>log(x)</code></td>
+<td>(-∞, ∞)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>sign</code></td>
+<td><code>sign(x)</code></td>
+<td>{-1, 0, 1}</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>abs</code></td>
+<td><code>abs(x)</code></td>
+<td>[0, ∞)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>pow</code></td>
+<td><code>pow(x, e)</code></td>
+<td>(-∞, ∞)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>clip</code></td>
+<td><code>clip(x, lo, hi)</code></td>
+<td>[lo, hi]</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>where</code></td>
+<td><code>where(cond, a, b)</code></td>
+<td>same as a/b</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>safe_div</code></td>
+<td><code>safe_div(a, b, fill=0)</code></td>
+<td>(-∞, ∞)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>fillna</code></td>
+<td><code>fillna(x, method)</code></td>
+<td>same as x</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="b-qlib-expression-mapping">B.  qlib Expression Mapping</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>qlib syntax</th>
+<th>Assay equivalent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Ref($close, 5)</code></td>
+<td><code>ts_delay(close, 5)</code></td>
+</tr>
+<tr>
+<td><code>Mean($close, 20)</code></td>
+<td><code>ts_mean(close, 20)</code></td>
+</tr>
+<tr>
+<td><code>Std($close, 20)</code></td>
+<td><code>ts_std(close, 20)</code></td>
+</tr>
+<tr>
+<td><code>Corr($close, $volume, 20)</code></td>
+<td><code>ts_corr(close, volume, 20)</code></td>
+</tr>
+<tr>
+<td><code>Rank($close)</code></td>
+<td><code>cs_rank(close)</code></td>
+</tr>
+<tr>
+<td><code>EMA($close, 12)</code></td>
+<td><code>ts_ema(close, 12)</code></td>
+</tr>
+<tr>
+<td><code>Delta($close, 1)</code></td>
+<td><code>ts_delta(close, 1)</code></td>
+</tr>
+<tr>
+<td><code>Resi($close, $open, 5)</code></td>
+<td><code>ts_regression(close, open, 5).resid</code></td>
+</tr>
+<tr>
+<td><code>Less($close, $open)</code></td>
+<td><code>where(close &lt; open, 1, 0)</code></td>
+</tr>
+<tr>
+<td><code>Abs($close - $open)</code></td>
+<td><code>abs(close - open)</code></td>
+</tr>
+<tr>
+<td><code>Log($close)</code></td>
+<td><code>log(close)</code></td>
+</tr>
+<tr>
+<td><code>Sign($close - $open)</code></td>
+<td><code>sign(close - open)</code></td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<p><em>— Assay · AlphaBench Project —</em></p>

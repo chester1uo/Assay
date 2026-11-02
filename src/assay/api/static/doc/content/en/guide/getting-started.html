@@ -1,0 +1,136 @@
+<h1 class="doc-title">Getting Started</h1>
+<p>Assay scores factor expressions on point-in-time data: IC, RankIC, decay, turnover,
+redundancy, and a portfolio backtest with costs. There are two ways in: the hosted site,
+or your own install.</p>
+<h2 id="use-the-hosted-site">Use the hosted site</h2>
+<p><a href="https://assay.qfinverse.com" target="_blank" rel="noopener noreferrer">assay.qfinverse.com</a> runs Assay on QFinVerse's US daily data
+(2003 onward, universes TOP500 / TOP1000 / TOP3000, SP500, NASDAQ100). See
+<a href="/doc/guide/qfv-data">US data from QFinVerse</a> for what that data holds.</p>
+<ol>
+<li><strong>Get an invitation.</strong> Sign-up is by invitation only. Ask an admin for a link, open it,
+and choose a username and password (at least 10 characters).</li>
+<li><strong>Sign in</strong> at <code>/login</code>. The session lasts 7 days.</li>
+<li><strong>Score a factor.</strong> Open <em>Single Factor Test</em>, pick a universe and period in the bar at
+the top, write an expression such as <code>-ts_delta(close, 5) / ts_delay(close, 5)</code> and press
+<em>Evaluate</em>. Save good ones to the library. See the <a href="/doc/guide/webui">WebUI guide</a>.</li>
+<li><strong>Create an API key</strong> for scripts and agents: <em>Account</em> → <em>API keys</em> → <em>Create key</em>.
+The key (<code>asy_...</code>) is shown once. It acts as you; revoke it when you no longer need it.</li>
+<li><strong>Call the REST API</strong> with the key in the <code>X-API-Key</code> header:</li>
+</ol>
+<pre><code class="language-bash">export ASSAY_KEY=asy_...
+curl -s -X POST https://assay.qfinverse.com/v1/factor/evaluate \
+  -H &quot;X-API-Key: $ASSAY_KEY&quot; -H 'Content-Type: application/json' \
+  -d '{&quot;expr&quot;: &quot;-ts_delta(close, 5) / ts_delay(close, 5)&quot;, &quot;universe&quot;: &quot;SP500&quot;,
+       &quot;period&quot;: [&quot;2019-01-01&quot;, &quot;2026-10-30&quot;], &quot;horizons&quot;: [1, 5, 10, 20]}'
+</code></pre>
+<p>All endpoints are listed in the <a href="/doc/guide/rest-api">REST guide</a>; the interactive schema is at
+<code>/docs</code> on the site.</p>
+<h2 id="run-it-yourself">Run it yourself</h2>
+<h3 id="1-install">1. Install</h3>
+<p>From source (there is no PyPI release):</p>
+<pre><code class="language-bash">git clone https://github.com/QFinVerse/Assay.git &amp;&amp; cd Assay
+pip install -e &quot;.[perf,api,mcp]&quot;      # perf = numba + scipy (much faster evaluation)
+</code></pre>
+<p>Without installing, everything also runs with <code>PYTHONPATH=src</code>.</p>
+<h3 id="2-point-it-at-data">2. Point it at data</h3>
+<p>Settings are environment variables, read by <code>AssayConfig.from_env()</code>. A <code>.env</code> file in the
+project is loaded at import; the shell always wins. See
+<a href="https://github.com/QFinVerse/Assay/blob/main/.env.example" target="_blank" rel="noopener noreferrer">.env.example</a>.</p>
+<ul>
+<li><strong>US, from a QFinVerse daily panel</strong> (recommended): set <code>ASSAY_QFV_PANEL_DIR</code> to the panel
+root. Nothing else to ingest; see <a href="/doc/guide/qfv-data">US data from QFinVerse</a>.</li>
+<li><strong>US, from a local MASSIVE mirror</strong>: set <code>MASSIVE_DATA_DIR</code> and build the Parquet stores:</li>
+</ul>
+<pre><code class="language-bash">export MASSIVE_DATA_DIR=/data/massive_data   # local mirror, no credentials needed
+export ASSAY_DATA_DIR=data                   # where the stores are written
+python -m assay.cli prepare-nasdaq100 --start 2025-01-01 --end 2026-06-09
+python -m assay.cli status
+</code></pre>
+<ul>
+<li><strong>China A-shares and Hong Kong</strong> come from Tushare; see <a href="/doc/guide/multi-market">Multi-market</a>
+and <a href="/doc/guide/tushare">Tushare</a>.</li>
+</ul>
+<p>The MASSIVE day bars are OHLCV plus trade count; there is no <code>vwap</code> field.</p>
+<h3 id="3-evaluate-a-factor">3. Evaluate a factor</h3>
+<p>From the CLI:</p>
+<pre><code class="language-bash">python -m assay.cli parse 'cs_rank(ts_corr(close, volume, 20))'      # syntax only, no data
+python -m assay.cli run   'cs_rank(ts_corr(close, volume, 20))' \
+    --start 2025-01-02 --end 2026-06-09
+</code></pre>
+<p>From Python (<a href="/doc/guide/python-sdk">SDK guide</a>):</p>
+<pre><code class="language-python">import assay
+report = assay.backtest(
+    &quot;cs_rank(ts_corr(close, volume, 20))&quot;,
+    universe=&quot;NASDAQ100&quot;, period=(&quot;2025-01-02&quot;, &quot;2026-06-09&quot;),
+)
+print(report.rank_ic, report.rank_icir, report.decay_halflife_days, report.failure_mode)
+</code></pre>
+<p>A <code>FactorReport</code> holds <code>ic</code> / <code>rank_ic</code> / <code>icir</code> / <code>rank_icir</code>, <code>ic_by_horizon</code>, decay,
+turnover, redundancy, look-ahead checks, a <code>suggestion</code> and structured <code>diagnostics</code>.
+<code>.to_dict()</code> is JSON-safe.</p>
+<h3 id="4-backtest-a-portfolio">4. Backtest a portfolio</h3>
+<pre><code class="language-python">from assay.portfolio import PortfolioBacktestConfig
+cfg = PortfolioBacktestConfig(universe=&quot;NASDAQ100&quot;,
+                              period_start=&quot;2025-01-02&quot;, period_end=&quot;2026-06-09&quot;,
+                              rebalance_type=&quot;monthly&quot;, weight_method=&quot;signal_prop&quot;)
+pf = assay.backtest_portfolio(&quot;cs_rank(ts_returns(close, 20))&quot;, cfg)
+print(pf.sharpe, pf.max_drawdown, pf.annual_turnover, pf.cost_drag)
+</code></pre>
+<p>See the <a href="/doc/guide/portfolio-backtest">portfolio backtest guide</a>.</p>
+<h3 id="5-start-the-server">5. Start the server</h3>
+<pre><code class="language-bash">python -m assay.cli serve-api --port 8000     # REST API, WebUI and Doc Hub on :8000
+python -m assay.cli serve-mcp                 # MCP server over stdio, for agents
+</code></pre>
+<p>The server is open by default. To require sign-in, set <code>ASSAY_ACCOUNTS=1</code> and create the
+first admin with the token in the state directory; see <a href="/doc/guide/rest-api">REST API → Auth</a>.</p>
+<h2 id="where-to-go-next">Where to go next</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Guide</th>
+<th>What it covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="/doc/guide/webui">WebUI</a></td>
+<td>the console: pages, controls, accounts</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/qfv-data">US data from QFinVerse</a></td>
+<td>universes, security ids, splits and dividends</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/data-and-adjustment">Data &amp; Adjustment</a></td>
+<td>how prices are adjusted and read point-in-time</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/data-pipeline">Data pipeline</a></td>
+<td>MASSIVE loaders, <code>prepare-nasdaq100</code>, data folders</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/python-sdk">Python SDK</a></td>
+<td><code>backtest</code>, <code>Session</code>, <code>batch_backtest</code>, <code>library</code>, <code>backtest_portfolio</code></td>
+</tr>
+<tr>
+<td><a href="/doc/guide/cli">CLI</a></td>
+<td>every <code>python -m assay.cli</code> subcommand</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/rest-api">REST API</a></td>
+<td><code>/v1/*</code> and <code>/auth/*</code> endpoints, SSE streaming, auth modes</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/mcp-server">MCP server</a></td>
+<td>agent tools and client setup</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/portfolio-backtest">Portfolio backtest</a></td>
+<td>config, running, metrics, A-share notes</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/performance">Performance</a></td>
+<td>the Alpha-101 cache benchmark</td>
+</tr>
+</tbody>
+</table></div>

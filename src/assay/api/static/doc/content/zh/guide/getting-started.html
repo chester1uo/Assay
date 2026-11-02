@@ -1,0 +1,120 @@
+<h1 class="doc-title">快速开始</h1>
+<p>Assay 在时点正确的数据上评估因子表达式：IC、RankIC、衰减、换手、冗余度，以及带成本的组合回测。有两种用法：直接用线上站点，或者自己部署。</p>
+<h2 id="使用线上站点">使用线上站点</h2>
+<p><a href="https://assay.qfinverse.com" target="_blank" rel="noopener noreferrer">assay.qfinverse.com</a> 跑在 QFinVerse 的美股日频数据上（2003 年起，股票池 TOP500 / TOP1000 / TOP3000、SP500、NASDAQ100）。数据包含什么见<a href="/doc/guide/qfv-data">美股数据（QFinVerse）</a>。</p>
+<ol>
+<li><strong>拿到邀请。</strong> 只能凭邀请注册。向管理员要一个链接，打开后设置用户名和密码（至少 10 位）。</li>
+<li><strong>登录。</strong> 在 <code>/login</code> 登录，登录状态保持 7 天。</li>
+<li><strong>评估因子。</strong> 打开「单因子测试」，在顶部横栏选好股票池和区间，输入表达式，例如 <code>-ts_delta(close, 5) / ts_delay(close, 5)</code>，点「评估」。好的因子可以存进因子库。详见 <a href="/doc/guide/webui">WebUI 指南</a>。</li>
+<li><strong>创建 API 密钥</strong>，给脚本和 agent 用：「账户」→「API 密钥」→「创建密钥」。密钥（<code>asy_...</code>）只显示一次，代表你本人，不用时撤销。</li>
+<li><strong>调用 REST API</strong>，把密钥放在 <code>X-API-Key</code> 请求头里：</li>
+</ol>
+<pre><code class="language-bash">export ASSAY_KEY=asy_...
+curl -s -X POST https://assay.qfinverse.com/v1/factor/evaluate \
+  -H &quot;X-API-Key: $ASSAY_KEY&quot; -H 'Content-Type: application/json' \
+  -d '{&quot;expr&quot;: &quot;-ts_delta(close, 5) / ts_delay(close, 5)&quot;, &quot;universe&quot;: &quot;SP500&quot;,
+       &quot;period&quot;: [&quot;2019-01-01&quot;, &quot;2026-10-30&quot;], &quot;horizons&quot;: [1, 5, 10, 20]}'
+</code></pre>
+<p>全部接口见 <a href="/doc/guide/rest-api">REST API 指南</a>；站点的 <code>/docs</code> 是可交互的接口文档。</p>
+<h2 id="自己部署">自己部署</h2>
+<h3 id="1-安装">1. 安装</h3>
+<p>从源码安装（没有 PyPI 版本）：</p>
+<pre><code class="language-bash">git clone https://github.com/QFinVerse/Assay.git &amp;&amp; cd Assay
+pip install -e &quot;.[perf,api,mcp]&quot;      # perf = numba + scipy，评估快很多
+</code></pre>
+<p>不安装的话，加 <code>PYTHONPATH=src</code> 也能直接运行。</p>
+<h3 id="2-配置数据">2. 配置数据</h3>
+<p>配置都是环境变量，由 <code>AssayConfig.from_env()</code> 读取。导入时会加载项目里的 <code>.env</code>，shell 里的变量优先。参见 <a href="https://github.com/QFinVerse/Assay/blob/main/.env.example" target="_blank" rel="noopener noreferrer">.env.example</a>。</p>
+<ul>
+<li><strong>美股，读 QFinVerse 日频面板</strong>（推荐）：把 <code>ASSAY_QFV_PANEL_DIR</code> 设为面板根目录，不需要再导入数据。见<a href="/doc/guide/qfv-data">美股数据（QFinVerse）</a>。</li>
+<li><strong>美股，读本地 MASSIVE 镜像</strong>：设置 <code>MASSIVE_DATA_DIR</code>，然后生成 Parquet 存储：</li>
+</ul>
+<pre><code class="language-bash">export MASSIVE_DATA_DIR=/data/massive_data   # 本地镜像，不需要凭证
+export ASSAY_DATA_DIR=data                   # 存储写到这里
+python -m assay.cli prepare-nasdaq100 --start 2025-01-01 --end 2026-06-09
+python -m assay.cli status
+</code></pre>
+<ul>
+<li><strong>A 股和港股</strong>来自 Tushare，见<a href="/doc/guide/multi-market">多市场</a>和 <a href="/doc/guide/tushare">Tushare</a>。</li>
+</ul>
+<p>MASSIVE 日线只有 OHLCV 和成交笔数，没有 <code>vwap</code> 字段。</p>
+<h3 id="3-评估一个因子">3. 评估一个因子</h3>
+<p>命令行：</p>
+<pre><code class="language-bash">python -m assay.cli parse 'cs_rank(ts_corr(close, volume, 20))'      # 只检查语法，不需要数据
+python -m assay.cli run   'cs_rank(ts_corr(close, volume, 20))' \
+    --start 2025-01-02 --end 2026-06-09
+</code></pre>
+<p>Python（见 <a href="/doc/guide/python-sdk">SDK 指南</a>）：</p>
+<pre><code class="language-python">import assay
+report = assay.backtest(
+    &quot;cs_rank(ts_corr(close, volume, 20))&quot;,
+    universe=&quot;NASDAQ100&quot;, period=(&quot;2025-01-02&quot;, &quot;2026-06-09&quot;),
+)
+print(report.rank_ic, report.rank_icir, report.decay_halflife_days, report.failure_mode)
+</code></pre>
+<p><code>FactorReport</code> 包含 <code>ic</code> / <code>rank_ic</code> / <code>icir</code> / <code>rank_icir</code>、<code>ic_by_horizon</code>、衰减、换手、冗余度、前视检查、改进建议 <code>suggestion</code> 和结构化的 <code>diagnostics</code>。<code>.to_dict()</code> 可以直接转 JSON。</p>
+<h3 id="4-组合回测">4. 组合回测</h3>
+<pre><code class="language-python">from assay.portfolio import PortfolioBacktestConfig
+cfg = PortfolioBacktestConfig(universe=&quot;NASDAQ100&quot;,
+                              period_start=&quot;2025-01-02&quot;, period_end=&quot;2026-06-09&quot;,
+                              rebalance_type=&quot;monthly&quot;, weight_method=&quot;signal_prop&quot;)
+pf = assay.backtest_portfolio(&quot;cs_rank(ts_returns(close, 20))&quot;, cfg)
+print(pf.sharpe, pf.max_drawdown, pf.annual_turnover, pf.cost_drag)
+</code></pre>
+<p>见<a href="/doc/guide/portfolio-backtest">组合回测指南</a>。</p>
+<h3 id="5-启动服务">5. 启动服务</h3>
+<pre><code class="language-bash">python -m assay.cli serve-api --port 8000     # REST API、WebUI 和 Doc Hub，端口 8000
+python -m assay.cli serve-mcp                 # MCP 服务（stdio），给 agent 用
+</code></pre>
+<p>服务默认不需要登录。要求登录时设置 <code>ASSAY_ACCOUNTS=1</code>，再用状态目录里的 setup token 创建第一个管理员，见 <a href="/doc/guide/rest-api">REST API → 鉴权</a>。</p>
+<h2 id="接下来">接下来</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>指南</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="/doc/guide/webui">WebUI</a></td>
+<td>控制台：页面、操作、账户</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/qfv-data">美股数据（QFinVerse）</a></td>
+<td>股票池、证券 ID、拆股与分红</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/data-and-adjustment">数据与复权</a></td>
+<td>价格如何复权、如何按时点读取</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/data-pipeline">数据流水线</a></td>
+<td>MASSIVE 加载器、<code>prepare-nasdaq100</code>、数据目录</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/python-sdk">Python SDK</a></td>
+<td><code>backtest</code>、<code>Session</code>、<code>batch_backtest</code>、<code>library</code>、<code>backtest_portfolio</code></td>
+</tr>
+<tr>
+<td><a href="/doc/guide/cli">CLI</a></td>
+<td>全部 <code>python -m assay.cli</code> 子命令</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/rest-api">REST API</a></td>
+<td><code>/v1/*</code> 和 <code>/auth/*</code> 接口、SSE 流式、鉴权模式</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/mcp-server">MCP 服务</a></td>
+<td>agent 工具和客户端配置</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/portfolio-backtest">组合回测</a></td>
+<td>配置、运行、指标、A 股说明</td>
+</tr>
+<tr>
+<td><a href="/doc/guide/performance">性能</a></td>
+<td>Alpha-101 缓存基准</td>
+</tr>
+</tbody>
+</table></div>

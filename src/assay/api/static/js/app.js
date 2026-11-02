@@ -44,9 +44,13 @@ import * as combination from "./pages/combination.js";
 import * as portfolio from "./pages/portfolio.js";
 import * as chart from "./pages/chart.js";
 import * as dataManager from "./pages/data.js";
-import * as docs from "./pages/docs.js";
+import * as account from "./pages/account.js";
+import * as users from "./pages/users.js";
 
 const appEl = document.getElementById("app");
+
+// {accounts, user}: whether the server runs on accounts, and who is signed in.
+let session = { accounts: false, user: null };
 
 // Shared context handed to every page render.
 function makeCtx(extra = {}) {
@@ -69,13 +73,14 @@ function makeCtx(extra = {}) {
     lang: getLang(),
     params: {},
     path: router.current(),
+    session,
     ...extra,
   };
 }
 
 // --------------------------------------------------------------- i18n chrome ----
 
-// Localize the static shell (top nav, control labels, language button, status dot)
+// Localize the static shell (sidebar, context bar, language button, status)
 // from data-i18n* attributes. Called on boot and on every language switch.
 function localizeChrome() {
   document.querySelectorAll("[data-i18n]").forEach((node) => {
@@ -87,18 +92,52 @@ function localizeChrome() {
   document.querySelectorAll("[data-i18n-aria]").forEach((node) => {
     node.setAttribute("aria-label", t(node.getAttribute("data-i18n-aria")));
   });
-  document.title = "Assay — " + t("nav.factor");
+  highlightTab(router.current() || "/dashboard");
 }
 
-// ---------------------------------------------------------------- TopNav ----
+// --------------------------------------------------------------- sidebar ----
 
+// Marks the sidebar link of the current page and names the page in the context bar
+// and the browser tab.
 function highlightTab(path) {
-  const tabs = document.querySelectorAll(".topnav-tab");
-  tabs.forEach((tab) => {
-    const route = tab.getAttribute("data-route") || "";
-    const base = "#" + path.split("/").slice(0, 2).join("/"); // '#/factor/x' -> '#/factor'
-    tab.classList.toggle("is-active", route === base);
+  const base = "#" + path.split("/").slice(0, 2).join("/"); // '#/factor/x' -> '#/factor'
+  let label = "";
+  document.querySelectorAll(".sidenav-link[data-route]").forEach((link) => {
+    const on = link.getAttribute("data-route") === base;
+    link.classList.toggle("is-active", on);
+    if (on) {
+      link.setAttribute("aria-current", "page");
+      label = link.textContent.trim();
+    } else {
+      link.removeAttribute("aria-current");
+    }
   });
+  const userLink = document.querySelector(".sidenav-user-link");
+  if (userLink) {
+    userLink.classList.toggle("is-active", base === "#/account");
+    if (base === "#/account") label = t("nav.account");
+  }
+  document.title = label ? `${label} · Assay` : "Assay · QFinVerse";
+  // Folded, the label is only in the tooltip.
+  document.querySelectorAll(".sidenav-link[data-route]").forEach((link) => {
+    link.title = document.documentElement.classList.contains("nav-folded") ? link.textContent.trim() : "";
+  });
+}
+
+const FOLD_KEY = "assay-sidebar-folded";
+
+function wireSidebar() {
+  const btn = document.getElementById("nav-fold");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    const folded = !document.documentElement.classList.contains("nav-folded");
+    document.documentElement.classList.toggle("nav-folded", folded);
+    try { localStorage.setItem(FOLD_KEY, folded ? "1" : "0"); } catch (_) {}
+    btn.title = t(folded ? "ctrl.expand" : "ctrl.collapse");
+    highlightTab(router.current() || "/dashboard");
+    window.dispatchEvent(new Event("resize"));   // charts re-measure their width
+  });
+  btn.title = t(document.documentElement.classList.contains("nav-folded") ? "ctrl.expand" : "ctrl.collapse");
 }
 
 const KNOWN_UNIVERSES = [
@@ -227,10 +266,12 @@ function wireTopNav() {
 async function refreshStatus() {
   const dot = document.getElementById("status-dot");
   if (!dot) return;
-  const setState = (cls, title) => {
-    dot.className = "status-dot status-dot--" + cls;
+  const text = document.getElementById("status-text");
+  const setState = (cls, title, short) => {
+    dot.className = "status-pill status-pill--" + cls;
     dot.title = t("status.title") + ": " + title;
     dot.setAttribute("aria-label", t("status.title") + ": " + title);
+    if (text) text.textContent = short || t("status." + (cls === "fresh" ? "online" : cls === "stale" ? "stale" : cls === "error" ? "offline" : "unknown"));
   };
   try {
     const status = await api.systemStatus();
@@ -242,6 +283,7 @@ async function refreshStatus() {
       store.applyDataDefaultPeriod(data.first_date, data.last_date);
     }
     const lastSync = data.last_sync || data.lastSync || null;
+    const asOf = data.last_date ? `${t("status.asOf")} ${data.last_date}` : "";
     const since = lastSync ? ` — ${t("status.lastSync")} ${lastSync}` : "";
     if (status && (status.degraded || status.status === "degraded")) {
       setState("stale", t("status.degraded") + since);
@@ -253,24 +295,32 @@ async function refreshStatus() {
         setState("stale", t("status.stale") + since);
         return;
       }
-      setState("fresh", t("status.fresh") + since);
+      setState("fresh", t("status.fresh") + since, asOf);
       return;
     }
-    setState("fresh", t("status.online"));
+    setState("fresh", t("status.online"), asOf);
   } catch (err) {
     setState("error", t("status.error"));
   }
 }
 
+// "Build <commit>" of the running deployment (as in QFinVerse); the tooltip adds the
+// engine version and when it was deployed.
 async function showVersion() {
   const node = document.getElementById("app-version");
   if (!node) return;
   try {
     const h = await api.health();
-    const v = h && h.engine_version;
-    if (v) node.textContent = "v" + v;
+    const build = (h && h.build) || {};
+    node.textContent = `Build ${build.id || "—"}`;
+    node.title = [
+      `${t("build.engine")}: v${h.engine_version || "—"}`,
+      `${t("build.commit")}: ${build.commit || "—"}`,
+      build.deployed_at ? `${t("build.deployed")}: ${build.deployed_at}` : "",
+    ].filter(Boolean).join("\n");
   } catch (_) {
-    /* health unreachable — leave the badge blank */
+    node.textContent = "Build —";
+    node.title = t("build.unavailable");
   }
 }
 
@@ -313,7 +363,9 @@ function registerRoutes() {
     .route("#/portfolio/:id", ({ params, path }) => mount(portfolio, params, path))
     .route("#/chart", ({ path }) => mount(chart, {}, path))
     .route("#/data", ({ path }) => mount(dataManager, {}, path))
-    .route("#/docs", ({ path }) => mount(docs, {}, path))
+    .route("#/account", ({ path }) => mount(account, {}, path))
+    .route("#/users", ({ path }) => mount(users, {}, path))
+    .route("#/docs", () => { location.href = "/doc/"; })
     .notFound(({ path }) => mount(dashboard, {}, path));
 }
 
@@ -326,6 +378,7 @@ function wireLangToggle() {
   // (universe "soon" labels + status), and re-render the active page in the new language.
   onLang(() => {
     localizeChrome();
+    paintUser();
     refreshThemeLabel();          // the theme button text is dynamic, not a data-i18n node
     populateUniverseSelect(lastUniverses);
     refreshStatus();
@@ -333,67 +386,135 @@ function wireLangToggle() {
   });
 }
 
-// ---------------------------------------------------------------- theme (skin) ----
-// Client-side legacy ⇄ modern skin switch — the same retro look as the /legacy
-// easter egg, but toggleable on the main site. Persisted in localStorage, applied
-// on boot. The banner/footer are siblings of <main>, so they survive route changes.
-const THEME_KEY = "assay_theme";
-const LEGACY_BANNER =
-  '<div class="legacy-banner"><marquee scrollamount="6" behavior="scroll" direction="left">' +
-  "★★★ WELCOME TO ASSAY · Factor Research since 2025 · " +
-  "Best viewed in 1024×768 with Netscape Navigator · " +
-  '<span class="legacy-blink">NEW!</span> now with A-share support! · ' +
-  "sign our guestbook! ★★★</marquee></div>";
-const LEGACY_FOOTER =
-  '<div class="legacy-foot"><hr>You are visitor <span class="legacy-counter">00013370</span> ' +
-  '&nbsp;|&nbsp; <span class="legacy-blink">●</span> Made with Notepad &nbsp;|&nbsp; ' +
-  "© 2025 Assay Labs &nbsp;|&nbsp; " +
-  '<span class="uc">This site is under construction</span> 🚧</div>';
+// ---------------------------------------------------------------- theme ----
+// Light / dark / auto, shared with QFinVerse (localStorage "qfv-theme"). index.html
+// applies it before first paint; a switch reloads the page so charts pick up the new
+// colours. The retro skin still lives at /legacy.
+const THEME_KEY = "qfv-theme";
+const THEMES = ["light", "dark", "system"];
 
 function currentTheme() {
-  try { return localStorage.getItem(THEME_KEY) || "modern"; } catch (_) { return "modern"; }
+  try { const v = localStorage.getItem(THEME_KEY); return THEMES.includes(v) ? v : "system"; } catch (_) { return "system"; }
 }
 
 function refreshThemeLabel() {
-  const btn = document.getElementById("theme-toggle");
-  if (btn) btn.textContent = t(currentTheme() === "legacy" ? "ctrl.themeToModern" : "ctrl.themeToRetro");
+  const theme = currentTheme();
+  document.querySelectorAll("#theme-switch button").forEach((b) => {
+    b.setAttribute("aria-checked", String(b.dataset.theme === theme));
+  });
 }
 
 function applyTheme(theme) {
-  const legacy = theme === "legacy";
-  let link = document.getElementById("legacy-css");
-  if (legacy && !link) {
-    link = document.createElement("link");
-    link.id = "legacy-css"; link.rel = "stylesheet"; link.href = "/legacy.css";
-    document.head.appendChild(link);
-  } else if (!legacy && link) {
-    link.remove();
-  }
-  document.body.classList.toggle("legacy", legacy);
-  // retro chrome — remove any existing copy (incl. one injected by the /legacy route), re-add if legacy
-  document.querySelectorAll(".legacy-banner, .legacy-foot").forEach((n) => n.remove());
-  if (legacy) {
-    document.body.insertAdjacentHTML("afterbegin", LEGACY_BANNER);
-    document.body.insertAdjacentHTML("beforeend", LEGACY_FOOTER);
-  }
+  const dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.classList.toggle("dark", dark);
   refreshThemeLabel();
 }
 
 function wireThemeToggle() {
   applyTheme(currentTheme());
-  const btn = document.getElementById("theme-toggle");
-  if (btn) btn.addEventListener("click", () => {
-    const next = currentTheme() === "legacy" ? "modern" : "legacy";
+  document.querySelectorAll("#theme-switch button").forEach((b) => b.addEventListener("click", () => {
+    const next = b.dataset.theme;
+    if (next === currentTheme()) return;
     try { localStorage.setItem(THEME_KEY, next); } catch (_) {}
+    const wasDark = document.documentElement.classList.contains("dark");
     applyTheme(next);
+    // charts read their colours once (palette.js), so a real switch reloads
+    if (document.documentElement.classList.contains("dark") !== wasDark) location.reload();
+  }));
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (currentTheme() === "system") location.reload();
   });
+}
+
+// ---------------------------------------------------------------- API key ----
+// When the server answers 401, ask for a key once and keep it in localStorage
+// ("assay_api_key", sent as X-API-Key by api.js).
+let keyDialogOpen = false;
+
+function askForKey(rejected) {
+  if (keyDialogOpen) return;
+  keyDialogOpen = true;
+  const input = el("input", { className: "input", type: "password", autocomplete: "off", spellcheck: false });
+  const err = el("div", { className: "err" }, rejected ? t("auth.bad") : "");
+  const form = el("form", {},
+    el("h2", {}, t("auth.title")),
+    el("div", { className: "muted" }, t("auth.hint")),
+    input, err,
+    el("button", { className: "btn btn--primary", type: "submit" }, t("auth.save")));
+  const box = el("div", { className: "key-dialog", role: "dialog", "aria-modal": "true" }, form);
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = input.value.trim();
+    if (!v) return;
+    try { localStorage.setItem("assay_api_key", v); } catch (_) {}
+    box.remove();
+    keyDialogOpen = false;
+    location.reload();
+  });
+  document.body.appendChild(box);
+  input.focus();
+}
+
+window.addEventListener("assay:auth-required", (e) => {
+  if (session.accounts) toLogin();
+  else askForKey(Boolean(e.detail && e.detail.hadKey));
+});
+
+// ---------------------------------------------------------------- session ----
+// With accounts on, a signed-out visitor goes to /login and comes back here after.
+function toLogin() {
+  const next = location.pathname + location.search + location.hash;
+  location.replace("/login?next=" + encodeURIComponent(next));
+}
+
+function paintUser() {
+  const user = session.user;
+  // Without accounts (service keys or open) every page shows, as before.
+  document.documentElement.classList.toggle("is-admin", !session.accounts || Boolean(user && user.role === "admin"));
+  const box = document.getElementById("nav-user");
+  if (!box) return;
+  box.hidden = !user;
+  if (!user) return;
+  const name = user.display_name || user.username;
+  document.getElementById("nav-avatar").textContent = name.slice(0, 1).toUpperCase();
+  document.getElementById("nav-name").textContent = name;
+  document.getElementById("nav-role").textContent = t("role." + user.role);
+}
+
+async function loadSession() {
+  try {
+    const me = await api.me();
+    session.accounts = Boolean(me && me.accounts);
+    session.user = (me && me.user) || null;
+  } catch (_) {
+    session.accounts = false;
+    session.user = null;
+  }
+  if (session.accounts) {
+    try { localStorage.removeItem("assay_api_key"); } catch (_) {}
+    if (!session.user) { toLogin(); return false; }
+  }
+  paintUser();
+  return true;
+}
+
+function wireSession() {
+  const out = document.getElementById("nav-logout");
+  if (out) out.addEventListener("click", async () => {
+    try { await api.logout(); } catch (_) { /* cookie is gone either way */ }
+    location.replace("/login");
+  });
+  window.addEventListener("assay:session-changed", () => loadSession());
 }
 
 let lastUniverses = [];
 
-function boot() {
+async function boot() {
   localizeChrome();
+  wireSession();
+  if (!(await loadSession())) return;
   wireTopNav();
+  wireSidebar();
   wireLangToggle();
   wireThemeToggle();
   registerRoutes();

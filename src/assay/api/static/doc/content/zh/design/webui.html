@@ -1,0 +1,1054 @@
+<h1 class="doc-title">Assay WebUI — 详细设计</h1>
+<p><strong>版本：</strong> 0.2 · 2026-11<br />
+<strong>范围：</strong> 已上线控制台的全部页面<br />
+<strong>技术栈（已上线）：</strong> 原生 JS 模块 + 手写 SVG 图表，无需构建 —— <a href="https://github.com/QFinVerse/Assay/tree/main/src/assay/api/static" target="_blank" rel="noopener noreferrer"><code>src/assay/api/static/</code></a></p>
+<blockquote>
+<p><strong>现状（2026-11）。</strong> 上线的控制台是由 FastAPI 直接提供的免构建应用，页面包括：仪表盘、
+因子库（详情、相关性矩阵、Alpha 空间图、IC 热力图、血缘）、单因子测试、因子合成、组合回测、
+行情、数据管理、账户和用户。界面与 QFinVerse 一致（左侧栏、浅色/深色、EN / 中文）；设置
+<code>ASSAY_ACCOUNTS=1</code> 时启用邀请制账户。本文的截图都来自这个应用。</p>
+<p>第 6–10 节（React 组件、状态、hooks、Monaco）描述的是最初规划的 React 版本，作为组件行为的
+参考保留，不是上线的代码。</p>
+<ul>
+<li>股票池：QFinVerse 数据上的 TOP500 / TOP1000 / TOP3000、SP500 和 NASDAQ100；导入了 Tushare
+数据时还有沪深300 / 500 / 1000 和 HK100。</li>
+<li>美股日线只有 OHLCV 和成交笔数，没有 <code>vwap</code> 字段。</li>
+<li>尚未接入：仪表盘上的实时 agent 信息流（还没有 session-stream 接口）。</li>
+<li>诊断码和 <code>failure_mode</code> 取自 <code>assay.engine.diagnostics</code>（<code>SYNTAX_ERROR</code> · <code>LOOKAHEAD</code> ·
+<code>CONSTANT</code> · <code>ALL_NAN</code> · <code>RUNTIME_ERROR</code>；代码 <code>ASSAY-P###/E###/O###</code>）。</li>
+</ul>
+</blockquote>
+<hr />
+<h2 id="目录">目录</h2>
+<ol>
+<li><a href="#1-information-architecture">信息架构</a></li>
+<li><a href="#2-global-shell">全局外壳</a></li>
+<li><a href="#3-dashboard">仪表盘</a></li>
+<li><a href="#4-factor-library-analysis">因子库分析</a></li>
+<li><a href="#5-single-factor-test">单因子测试</a></li>
+<li><a href="#6-shared-components">共享组件</a></li>
+<li><a href="#7-state-management">状态管理</a></li>
+<li><a href="#8-data-fetching--streaming">数据获取与流式传输</a></li>
+<li><a href="#9-monaco-editor-extension">Monaco 编辑器扩展</a></li>
+<li><a href="#10-routing">路由</a></li>
+<li><a href="#11-design-tokens">设计令牌</a></li>
+</ol>
+<hr />
+<h2 id="1-信息架构">1. 信息架构</h2>
+<pre><code>#/dashboard            仪表盘
+#/library              因子库（标签：详情、矩阵、Alpha 空间图、IC 热力图、血缘）
+#/factor               单因子测试（空白编辑器）
+#/factor/:factor_id    单因子测试（预载因子）
+#/combination          因子合成
+#/portfolio            组合回测（#/portfolio/:factor_id 预载因子）
+#/chart                行情
+#/data                 数据管理（管理员）
+#/account              账户：资料、密码、API 密钥
+#/users                用户与邀请（管理员）
+/login                 登录、凭邀请注册、重置密码、创建首个管理员
+/doc/                  Doc Hub（独立页面）
+</code></pre>
+<p>所有路由共享的 URL 参数（全局状态，同步到 URL）：</p>
+<pre><code>?universe=NASDAQ100
+&amp;period_start=2020-01-01
+&amp;period_end=2024-12-31
+</code></pre>
+<hr />
+<h2 id="2-全局框架">2. 全局框架</h2>
+<figure class="doc-shot"><img src="/doc/content/assets/screens/cn/dashboard.png" alt="仪表盘：侧栏、上下文栏、指标卡、排行榜、数据日历" loading="lazy" /><figcaption>QFinVerse 数据上的仪表盘（SP500，2019–2026）</figcaption></figure>
+<h3 id="2-1-布局">2.1  布局</h3>
+<p>左侧是侧栏，右侧是页面，与 QFinVerse 控制台一致。每个页面顶部有一条吸顶的上下文栏。页面滚动时，侧栏和上下文栏保持不动。</p>
+<h3 id="2-2-侧栏">2.2  侧栏</h3>
+<p>宽 224 px；点「收起」后只显示 60 px 宽的图标（按浏览器记住）。</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>元素</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>QFinVerse 标志 + &quot;Assay&quot;</td>
+<td>回到仪表盘</td>
+</tr>
+<tr>
+<td>仪表盘</td>
+<td>顶部链接</td>
+</tr>
+<tr>
+<td>研究</td>
+<td>因子库 · 单因子测试 · 因子合成 · 组合回测</td>
+</tr>
+<tr>
+<td>数据</td>
+<td>行情 · 数据管理（管理员） · 文档（在新标签页打开 Doc Hub）</td>
+</tr>
+<tr>
+<td>管理</td>
+<td>用户（仅管理员）</td>
+</tr>
+<tr>
+<td>QFinVerse</td>
+<td>在新标签页打开 QFinVerse 控制台</td>
+</tr>
+<tr>
+<td>主题</td>
+<td>跟随系统 / 浅色 / 深色；与 QFinVerse 共用（<code>qfv-theme</code>）</td>
+</tr>
+<tr>
+<td>语言</td>
+<td>English / 中文</td>
+</tr>
+<tr>
+<td>用户行</td>
+<td>显示名和角色，点击进入「账户」；旁边的图标退出登录</td>
+</tr>
+<tr>
+<td>Build</td>
+<td>当前部署的 <code>Build &lt;commit&gt;</code>；悬停显示引擎版本和部署时间</td>
+</tr>
+</tbody>
+</table></div>
+<p>当前页面所在的行有底色和 3 px 的强调色竖条。</p>
+<h3 id="2-3-上下文栏">2.3  上下文栏</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>元素</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>股票池</td>
+<td>有数据的股票池可选，其余标为「即将」</td>
+</tr>
+<tr>
+<td>区间</td>
+<td>1Y / 3Y / 5Y 预设，或自定义起止日期</td>
+</tr>
+<tr>
+<td>状态标签</td>
+<td>显示「数据至 &lt;最后日期&gt;」；绿色表示新鲜，黄色表示陈旧或降级，红色表示连不上。点击回到仪表盘</td>
+</tr>
+</tbody>
+</table></div>
+<p>股票池和区间是全局的：保存在 URL 和浏览器里，所有页面都读它们。修改它们不会重跑正在进行的评估。</p>
+<h3 id="2-4-登录">2.4  登录</h3>
+<p>开启账户后，未登录的访问会被引到 <code>/login</code>，登录后回到原页面。同一个页面还负责凭邀请注册（<code>?invite=</code>）、重置密码（<code>?reset=</code>），以及在新服务器上创建第一个管理员。</p>
+<figure class="doc-shot"><img src="/doc/content/assets/screens/cn/login.png" alt="登录页" loading="lazy" /></figure>
+<hr />
+<h2 id="3-仪表盘">3. 仪表盘</h2>
+<h3 id="3-1-页面布局">3.1  页面布局</h3>
+<p>页面见第 2 节的截图。</p>
+<h3 id="3-2-statusbar">3.2  StatusBar</h3>
+<p>仪表盘页面顶部的一条细栏：数据状态、最近同步、各市场覆盖、引擎版本和数据告警。</p>
+<ul>
+<li>绿点 = 完全同步，琥珀色 = 陈旧，红色 = 错误</li>
+<li>点击 &quot;2 warnings&quot; 会展开一个内联告警面板，列出具体的数据质量问题</li>
+<li>该条在仪表盘页面的滚动容器内保持固定（sticky）</li>
+</ul>
+<h3 id="3-3-指标卡">3.3  指标卡</h3>
+<p>四张等宽的卡片：因子库中的因子总数、平均 RankICIR、最佳 RankICIR（附表达式）、活跃会话（附数据天数）。标签是小号大写的灰色文字，数值用等宽字体。</p>
+<h3 id="3-4-因子排行榜">3.4  因子排行榜</h3>
+<p>左列（60%），显示按 RankICIR 排序的前 100 个因子。</p>
+<h4 id="控件-表格上方">控件（表格上方）</h4>
+<ul>
+<li>排序下拉框：RankICIR（默认）、IC、衰减半衰期、评估日期</li>
+<li>最小 ICIR 过滤器：滑块 + 数字输入框，0.0–2.0</li>
+<li>来源过滤器：All、AGENT、HUMAN、WQ101、IMPORTED</li>
+<li>隐藏冗余开关：过滤掉 <code>redundancy_score &gt; 0.7</code> 的因子</li>
+</ul>
+<h4 id="表格列">表格列</h4>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>列</th>
+<th>来源字段</th>
+<th>宽度</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Expression</td>
+<td><code>expr</code>（截断至 40 字符）</td>
+<td>flex</td>
+<td>悬停时工具提示显示完整表达式</td>
+</tr>
+<tr>
+<td>RankIC</td>
+<td><code>rank_ic</code></td>
+<td>72px</td>
+<td>右对齐，保留 3 位小数</td>
+</tr>
+<tr>
+<td>RankICIR</td>
+<td><code>rank_icir</code></td>
+<td>80px</td>
+<td>右对齐，内联条形叠加</td>
+</tr>
+<tr>
+<td>Decay</td>
+<td><code>decay_halflife_days</code></td>
+<td>64px</td>
+<td><code>Xd</code> 格式，颜色：绿色 &lt; 10d，琥珀色 10–30d，红色 &gt; 30d</td>
+</tr>
+<tr>
+<td>Redundancy</td>
+<td><code>redundancy_score</code></td>
+<td>72px</td>
+<td>彩色徽章：绿色 &lt; 0.4，琥珀色 0.4–0.7，红色 &gt; 0.7</td>
+</tr>
+<tr>
+<td>Source</td>
+<td><code>lineage.source</code></td>
+<td>80px</td>
+<td>小标签徽章</td>
+</tr>
+<tr>
+<td>Status</td>
+<td><code>failure_mode</code></td>
+<td>64px</td>
+<td>绿色对勾或红色 <code>!</code> 徽章</td>
+</tr>
+</tbody>
+</table></div>
+<p>表格行为：</p>
+<ul>
+<li>点击任意行 → 导航到 <code>/factor/:factor_id</code> 并预加载该因子</li>
+<li>悬停任意行 → 显示一个带 IC 迷你走势图（最近 60 天）的小预览弹出框</li>
+<li>表格采用虚拟化（react-virtual）以保证 1000+ 行时的性能</li>
+<li>表头固定</li>
+</ul>
+<h3 id="3-5-agent-活动信息流">3.5  Agent 活动信息流</h3>
+<p>右列（40%）。在当前或最近的 agent session 中触发的因子评估的实时信息流。</p>
+<h4 id="session-摘要面板-信息流顶部">Session 摘要面板（信息流顶部）</h4>
+<blockquote>
+<p>尚未接入：还没有 session-stream 接口。右栏目前显示因子库里 RankICIR 最高的因子（见第 2 节截图）。本节其余内容是目标设计。</p>
+</blockquote>
+<h4 id="信息流条目">信息流条目</h4>
+<p>每个条目是一张卡片，包含：</p>
+<ul>
+<li>新条目从顶部动画进入（CSS 下滑过渡）</li>
+<li>最多可见 50 个条目；较旧的条目在底部淡出</li>
+<li>失败的评估以红色左边框和 <code>failure_mode</code> 代码显示</li>
+<li>点击任意条目 → 导航到 <code>/factor/:factor_id</code></li>
+<li>&quot;Pause feed&quot; 开关冻结自动滚动，以便用户阅读</li>
+</ul>
+<p>轮询：新条目通过对 <code>GET /v1/events/session-stream</code> 的 SSE 订阅获取。</p>
+<h3 id="3-6-数据日历">3.6  数据日历</h3>
+<p>排行榜 + 信息流行下方的全宽条带。一个类 GitHub 贡献热力图，按交易日显示数据可用性。</p>
+<p>单元格颜色：</p>
+<ul>
+<li>深绿：100% 覆盖率（所有标的都有数据）</li>
+<li>中绿：&gt; 95% 覆盖率</li>
+<li>琥珀色：80–95% 覆盖率</li>
+<li>红色：&lt; 80% 覆盖率</li>
+<li>浅灰：非交易日（周末 / 假日）</li>
+</ul>
+<p>交互：</p>
+<ul>
+<li>悬停单元格 → 工具提示：<code>Dec 15 2024  101/101 symbols  Last sync: 21:05 UTC</code></li>
+<li>点击红色/琥珀色单元格 → 在日历下方展开一个内联数据质量面板，列出缺失的标的</li>
+<li>左侧的年份标签可点击以滚动到该年份</li>
+</ul>
+<hr />
+<h2 id="4-因子库分析">4. 因子库分析</h2>
+<h3 id="4-1-页面布局">4.1  页面布局</h3>
+<figure class="doc-shot"><img src="/doc/content/assets/screens/cn/library.png" alt="因子库，详情模式" loading="lazy" /></figure>
+<p>左右分栏可调整大小——用户可在 25%–50% 之间拖动分隔条。</p>
+<h3 id="4-2-模式标签页">4.2  模式标签页</h3>
+<p>五个标签：因子详情、相关性矩阵、Alpha 空间图、IC 热力图、血缘。</p>
+<p>模式状态以 <code>?mode=matrix</code> 的形式持久化到 URL 中。</p>
+<h3 id="4-3-因子列表-左面板">4.3  因子列表（左面板）</h3>
+<h4 id="过滤栏">过滤栏</h4>
+<ul>
+<li>全文搜索针对表达式字符串运行（小型库时在客户端，&gt; 500 个因子时在服务端）</li>
+<li>滑块在释放时（而非拖动时）更新结果，以避免过多的 API 调用</li>
+<li>&quot;Clear filters&quot; 按钮上带有激活过滤器数量徽章</li>
+</ul>
+<h4 id="列表项">列表项</h4>
+<ul>
+<li>用于多选的复选框</li>
+<li>等宽字体的表达式，截断显示，完整文本在工具提示中</li>
+<li>ICIR 显示为水平条（填充比例 = ICIR / 2.0，为最大刻度）</li>
+<li>衰减半衰期</li>
+<li>冗余度徽章：<code>● unique</code>（绿色）、<code>◐ similar</code>（琥珀色）、<code>● redundant</code>（红色）</li>
+<li>来源标签：<code>AGENT</code>、<code>HUMAN</code>、<code>WQ101</code>、<code>IMPORTED</code></li>
+<li>点击项主体：选中它并更新右面板</li>
+<li>点击复选框：加入多选而不改变右面板</li>
+</ul>
+<p>选中项带有蓝色左边框。激活项（最后点击的）带有略深的背景。</p>
+<h4 id="批量操作栏-当勾选-1-项时出现">批量操作栏（当勾选 ≥ 1 项时出现）</h4>
+<ul>
+<li>Export：为所选因子下载 FactorReport JSON 或 CSV</li>
+<li>Tag：下拉框以添加标签（新建或选择已有）</li>
+<li>Compare：切换到相关性矩阵模式，预填入所选因子</li>
+<li>Delete：显示列出表达式的确认弹窗；确认删除后调用 <code>DELETE /v1/library/factors</code></li>
+</ul>
+<h3 id="4-4-模式-a-因子详情">4.4  模式 A — 因子详情</h3>
+<p>默认模式。当从列表中选中一个因子时显示。</p>
+<p>右面板布局：</p>
+<p>详情面板见 4.1 节的截图。</p>
+<p>&quot;Open in tester →&quot; 按钮导航到 <code>/factor/abc123</code>。</p>
+<h3 id="4-5-模式-b-相关性矩阵">4.5  模式 B — 相关性矩阵</h3>
+<p>整个右面板是一张热力图。</p>
+<figure class="doc-shot"><img src="/doc/content/assets/screens/cn/library-matrix.png" alt="因子库，相关性矩阵" loading="lazy" /></figure>
+<p>热力图：</p>
+<ul>
+<li>行和列为因子表达式（截断显示）</li>
+<li>单元格颜色：发散色阶，红色 = 高正相关，白色 = 0，蓝色 = 高负相关</li>
+<li>阈值叠加：高于滑块值的单元格获得红色对角划线</li>
+<li>当 &quot;Cluster&quot; 打开时，因子按层次聚类重新排序（在客户端使用 <code>ml-hclust</code> 库的 hclust 计算）</li>
+<li>悬停任意单元格：工具提示显示 <code>ts_corr... × cs_rank...  correlation: 0.83</code></li>
+<li>点击任意单元格：打开两个因子每日值的散点图弹窗</li>
+</ul>
+<p>热力图下方的摘要：</p>
+<p>&quot;Preview pruning&quot; 打开一个侧抽屉，列出将被移除的 8 个因子，在每一对中保留 RankICIR 较高的那个。</p>
+<h3 id="4-6-模式-c-alpha-空间图">4.6  模式 C — Alpha 空间图</h3>
+<p>整个右面板是一张 2D 散点图。</p>
+<p>每个点的位置通过对成对秩相关距离矩阵（1 - |corr|）运行 UMAP 计算得出。行为相似的因子聚集在一起；正交的因子相距较远。</p>
+<p>图形：</p>
+<ul>
+<li>每个点是一个因子</li>
+<li>默认：颜色 = RankICIR（绿 → 黄 → 红色阶），大小 = 固定</li>
+<li>&quot;Color by&quot; 选项：RankICIR、来源（AGENT/HUMAN/WQ101）、衰减半衰期、冗余度</li>
+<li>悬停：带表达式、RankICIR、衰减的工具提示</li>
+<li>点击：选中因子，将左面板切换到该因子，如果分栏视图处于激活状态则同时在模式 A 面板中显示详情</li>
+<li>&quot;Show gaps&quot; 叠加层：绘制现有点的凸包并高亮空白的内部区域——这些是 agent 应当瞄准的未探索 alpha 区域</li>
+<li>支持平移和缩放（d3-zoom）</li>
+</ul>
+<p>UMAP 在页面加载时或因子集变化时使用 <code>umap-js</code> 在客户端计算。对于 &gt; 300 个因子会出现加载旋转指示器（通常 1–3 秒）。</p>
+<h3 id="4-7-模式-d-ic-热力图">4.7  模式 D — IC 热力图</h3>
+<p>整个右面板。一个矩阵，其中行 = 因子，列 = 交易日期，单元格 = 当天的 IC 值。</p>
+<ul>
+<li>行是与左面板列表相同顺序的因子（遵循当前过滤器）</li>
+<li>列是交易日，按月分组</li>
+<li>颜色：正 IC 为绿色，负 IC 为红色，~0 为白色</li>
+<li>色阶滑块设置饱和度锚点（默认 ±0.15 = 满红/满绿）</li>
+<li>悬停单元格：<code>Factor: ts_corr(close,volume,20)  Date: Nov 15 2024  IC: 0.061</code></li>
+<li>点击行标签：在左面板中选中因子，在模式 A 中显示详情</li>
+</ul>
+<p>此视图让市场状态（regime）效应一目了然——一条竖直的红色带意味着所有因子在那些日期都失效了（市场事件）。一条水平的红色带意味着某一个因子持续失效。</p>
+<h3 id="4-8-模式-e-因子血缘">4.8  模式 E — 因子血缘</h3>
+<p>一张展示因子来源的有向图。</p>
+<p>节点：</p>
+<ul>
+<li><code>[PROMPT]</code> — LLM prompt（显示模型、时间戳、prompt 哈希）</li>
+<li><code>[FACTOR]</code> — 因子表达式（显示表达式、RankICIR）</li>
+<li><code>[SNAPSHOT]</code> — 用于评估的数据快照</li>
+</ul>
+<p>边：</p>
+<ul>
+<li><code>[PROMPT] → [FACTOR]</code> — &quot;generated&quot;</li>
+<li><code>[FACTOR] + [SNAPSHOT] → [FACTOR]</code> — &quot;evaluated on&quot;</li>
+</ul>
+<p>布局：使用 dagre 布局算法的自上而下 DAG。</p>
+<p>交互：</p>
+<ul>
+<li>悬停节点：带完整细节的工具提示</li>
+<li>点击 <code>[FACTOR]</code> 节点：在左面板中选中，在模式 A 中显示详情</li>
+<li>点击 <code>[PROMPT]</code> 节点：打开带完整 prompt 文本的弹窗</li>
+<li>双击 <code>[SNAPSHOT]</code> 节点：打开过滤到该快照日期的数据日历</li>
+</ul>
+<hr />
+<h2 id="5-单因子测试">5. 单因子测试</h2>
+<h3 id="5-1-页面布局">5.1  页面布局</h3>
+<figure class="doc-shot"><img src="/doc/content/assets/screens/cn/factor.png" alt="单因子测试的结果" loading="lazy" /><figcaption>评估完成后的单因子测试</figcaption></figure>
+<p>在窄屏（&lt; 1200px）上，摘要面板移动到结果网格下方，且结果网格变为 1 列。</p>
+<h3 id="5-2-表达式编辑器">5.2  表达式编辑器</h3>
+<p>一个占据约 180px 高度（4–6 行）的 Monaco 编辑器实例。可通过拖动底边调整大小。</p>
+<h4 id="编辑器上方的工具栏">编辑器上方的工具栏</h4>
+<ul>
+<li>语法切换：显示当前激活的语法；点击可切换高亮模式</li>
+<li>转换语法：在 qlib 与 Python 语法之间重写当前表达式（在进程内调用 <code>syntax-bridge</code> 工具，无 API 调用）</li>
+<li>评估按钮：触发评估；点击后显示加载旋转指示器，完成时替换为延迟徽章（例如 <code>342ms</code>）</li>
+<li>历史：最近 20 个已评估表达式的下拉框，点击可恢复</li>
+<li>算子文档：打开一个抽屉，以可搜索的参考形式展示完整的 <code>OPERATOR_SCHEMA</code></li>
+</ul>
+<h4 id="编辑器行为">编辑器行为</h4>
+<ul>
+<li>默认高度：4 行（随内容展开至最多 8 行后开始滚动）</li>
+<li>键盘快捷键：<code>Cmd+Enter</code>（Mac）/ <code>Ctrl+Enter</code>（Windows）触发评估</li>
+<li>带有 <code>factor_id</code> 路由参数加载时：编辑器预填充该因子的表达式</li>
+<li>语法错误下划线随用户输入出现，来源为在 Web Worker 中运行的解析器</li>
+<li>AST 树渲染在编辑器正下方的可折叠面板中，默认隐藏；&quot;AST&quot; 展开链接可切换其显示</li>
+</ul>
+<h4 id="ast-展开面板">AST 展开面板</h4>
+<p>渲染为缩进树。节点类型使用不同颜色：FieldNode（青绿色）、LitNode（琥珀色）、OpNode（蓝色）、BinOp（灰色）。</p>
+<h3 id="5-3-配置行">5.3  配置行</h3>
+<p>编辑器下方的一条水平条带，带有六个控件。控件紧凑（高度 36px）。</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>控件</th>
+<th>选项</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>股票池</td>
+<td>继承自全局状态；显示当前值；可按每次评估覆盖</td>
+<td>在此更改不会更新全局状态</td>
+</tr>
+<tr>
+<td>周期</td>
+<td>继承自全局状态；可覆盖</td>
+<td>同上</td>
+</tr>
+<tr>
+<td>执行</td>
+<td><code>next_open</code>（默认）、<code>next_close</code></td>
+<td>工具提示解释每一项。<code>vwap</code> 被禁用——MASSIVE 日聚合数据源没有日内/VWAP 数据</td>
+</tr>
+<tr>
+<td>时间跨度</td>
+<td>多选复选框：1d、5d、10d、20d（全部默认选中）</td>
+<td>影响衰减曲线范围</td>
+</tr>
+<tr>
+<td>中性化</td>
+<td>None（默认）、Sector、Industry、Market cap</td>
+<td>在计算 IC 前应用 <code>cs_neutralize</code></td>
+</tr>
+<tr>
+<td>评估按钮</td>
+<td>主要行动号召，也可由 <code>Cmd+Enter</code> 触发</td>
+<td>完成时延迟徽章替换旋转指示器</td>
+</tr>
+</tbody>
+</table></div>
+<p>当股票池或周期与全局状态不同时，控件会显示一个小的 <code>*</code> 指示器和一个工具提示：&quot;此评估使用了与你的全局设置不同的股票池/周期。&quot;</p>
+<h3 id="5-4-结果网格">5.4  结果网格</h3>
+<p>以 2×3 网格排列的六张图表卡片。图表卡片共享一个通用的卡片外壳：</p>
+<ul>
+<li>标题：14px，中等字重</li>
+<li>解读提示：12px 弱化文字，单行，根据结果更新</li>
+<li><code>↓</code> 下载图标：将图表数据导出为 CSV</li>
+<li>图表区域填充剩余空间；最小高度 220px</li>
+</ul>
+<p>图表渐进式渲染——每张卡片在其数据通过 SSE 到达前显示加载骨架屏。</p>
+<h4 id="卡片-1-ic-与-rankic-时间序列">卡片 1 — IC 与 RankIC 时间序列</h4>
+<p><strong>图表类型：</strong> 折线图（Recharts <code>LineChart</code>）</p>
+<p><strong>数据：</strong> 来自 <code>eval.ic_series</code> SSE 事件的 <code>ic[]</code>、<code>rank_ic[]</code>、<code>dates[]</code></p>
+<p><strong>系列：</strong></p>
+<ul>
+<li>IC：蓝色细线（1.5px）</li>
+<li>RankIC：青绿色细线（1.5px）</li>
+<li>滚动 63 日均值 IC：蓝色粗线（3px）</li>
+<li>±0.02 显著性带：浅灰色填充区域</li>
+</ul>
+<p><strong>坐标轴：</strong></p>
+<ul>
+<li>X：交易日期，月度刻度，缩写的月份标签</li>
+<li>Y：默认范围 [-0.15, 0.15]；若值超出则自动缩放</li>
+</ul>
+<p><strong>注释：</strong></p>
+<ul>
+<li>在主要市场事件处的垂直虚线（2020 年 3 月 COVID 崩盘、2022 年美联储加息）；通过 &quot;Show events&quot; 复选框切换</li>
+<li>卡片头部的摘要统计：<code>IC: 0.032  ICIR: 0.43  RankIC: 0.047  RankICIR: 0.61</code></li>
+</ul>
+<p><strong>解读提示：</strong> <code>&quot;Consistent positive signal. IC is stable across the period.&quot;</code> / <code>&quot;Unstable IC — signal reverses in bear markets.&quot;</code></p>
+<h4 id="卡片-2-衰减曲线">卡片 2 — 衰减曲线</h4>
+<p><strong>图表类型：</strong> 柱状图（Recharts <code>BarChart</code>）</p>
+<p><strong>数据：</strong> 来自 <code>eval.decay</code> SSE 事件的 <code>ic_by_horizon</code>、<code>halflife</code></p>
+<p><strong>柱：</strong></p>
+<ul>
+<li>每个时间跨度一根柱（1d、5d、10d、20d）</li>
+<li>柱高 = 该时间跨度下的 RankIC</li>
+<li>误差线（细线）显示每个时间跨度下每日 IC 的 ±1 标准差</li>
+</ul>
+<p><strong>叠加线：</strong></p>
+<ul>
+<li>指数衰减拟合：穿过柱顶的虚线</li>
+<li>半衰期注释：指向 50% IC 水平的标注标签</li>
+</ul>
+<p><strong>解读提示：</strong> <code>&quot;Signal half-life: 12 days. Suitable for weekly rebalancing.&quot;</code></p>
+<h4 id="卡片-3-分组收益分析">卡片 3 — 分组收益分析</h4>
+<p><strong>图表类型：</strong> 带可选叠加线的柱状图</p>
+<p><strong>数据：</strong> 来自 <code>eval.groups</code> SSE 事件的 <code>quintile_returns</code></p>
+<p><strong>柱：</strong></p>
+<ul>
+<li>5 根柱，每个五分位一根（Q1 = 做空，Q5 = 做多）</li>
+<li>颜色：Q1 红色，Q2–Q4 灰色，Q5 绿色</li>
+<li>每根柱上方的数值标签（例如 <code>-0.12%</code>、<code>+0.15%</code>）</li>
+</ul>
+<p><strong>图表上方的控件：</strong></p>
+<ul>
+<li>收益类型切换：<code>Raw</code> / <code>Market-adjusted</code> / <code>Sector-adjusted</code></li>
+<li>时间跨度选择器（1d、5d、10d、20d）——更改时更新图表</li>
+</ul>
+<p><strong>叠加线：</strong> 多空价差（Q5 − Q1），显示在次 Y 轴上</p>
+<p><strong>解读提示：</strong> <code>&quot;Monotonic spread of 0.27%/day long-short. Strong signal.&quot;</code> / <code>&quot;Non-monotonic — Q3 outperforms Q5. Factor may be non-linear.&quot;</code></p>
+<h4 id="卡片-4-因子热力图">卡片 4 — 因子热力图</h4>
+<p><strong>图表类型：</strong> 自定义 SVG 日历热力图</p>
+<p><strong>数据：</strong> 来自 <code>eval.ic_series</code> SSE 事件的 <code>ic[]</code>、<code>dates[]</code>（与卡片 1 相同的数据）</p>
+<p><strong>布局：</strong></p>
+<ul>
+<li>列：交易日，每天一个单元格，4px 宽</li>
+<li>行：每年一行</li>
+<li>月份标签在顶部；年份标签在左侧</li>
+<li>单元格颜色：绿色（正 IC）→ 白色（零）→ 红色（负 IC），对称的发散色阶</li>
+</ul>
+<p><strong>交互：</strong></p>
+<ul>
+<li>悬停单元格：工具提示 <code>Dec 15 2024  IC: 0.061</code></li>
+<li>通过图表下方的小滑块调整色阶（默认 ±0.10）</li>
+</ul>
+<p><strong>解读提示：</strong> <code>&quot;Strong in 2021–2022. Signal weakens post-2023 rate hikes.&quot;</code></p>
+<h4 id="卡片-5-换手率分析">卡片 5 — 换手率分析</h4>
+<p><strong>图表类型：</strong> 双轴折线图</p>
+<p><strong>数据：</strong> 由 <code>factor_vals</code>（秩自相关）和成本模型计算得出</p>
+<p><strong>系列：</strong></p>
+<ul>
+<li>主 Y 轴：63 日滚动秩自相关（蓝色线）</li>
+<li>次 Y 轴：扣除交易成本后的估计净 IC（橙色虚线）</li>
+</ul>
+<p><strong>参考线：</strong> 在 <code>autocorr = 0.8</code>（典型的&quot;低换手率&quot;阈值）处的水平线</p>
+<p><strong>图表下方的摘要：</strong></p>
+<pre><code>Avg autocorrelation: 0.83  ·  Estimated cost drag: 0.008 IC  ·  Net IC: 0.039
+</code></pre>
+<p><strong>解读提示：</strong> <code>&quot;Low turnover factor. Transaction costs consume ~17% of gross IC.&quot;</code></p>
+<h4 id="卡片-6-收益分布">卡片 6 — 收益分布</h4>
+<p><strong>图表类型：</strong> 叠加直方图（带两个数据系列的 Recharts <code>BarChart</code>）</p>
+<p><strong>数据：</strong> Q1（做空）和 Q5（做多）五分位的远期收益分布</p>
+<p><strong>系列：</strong></p>
+<ul>
+<li>Q5（做多）收益：绿色柱，40% 不透明度</li>
+<li>Q1（做空）收益：红色柱，40% 不透明度</li>
+<li>叠加在每个直方图上的 KDE 平滑线（通过 <code>kernel-density-estimator</code> 工具计算）</li>
+</ul>
+<p><strong>图表下方的统计面板：</strong></p>
+<pre><code>                 Q5 (Long)    Q1 (Short)
+Mean return:     +0.0015      -0.0012
+Std dev:          0.0089       0.0091
+t-statistic:     2.34  (p &lt; 0.02)
+</code></pre>
+<p><strong>解读提示：</strong> <code>&quot;Distributions well-separated. Long-short return is statistically significant.&quot;</code></p>
+<h3 id="5-5-摘要面板">5.5  摘要面板</h3>
+<p>固定 300px 的右列。显示结构化的 FactorReport。</p>
+<h4 id="加载状态">加载状态</h4>
+<p>评估进行中时：为每个部分显示加载骨架屏。</p>
+<h4 id="已填充状态">已填充状态</h4>
+<ul>
+<li>&quot;Save to library&quot; 按钮：调用 <code>POST /v1/library/factors</code>，显示成功 toast</li>
+<li>&quot;Compare with library →&quot; 按钮：导航到 <code>/library?mode=matrix</code>，将此因子预填入相关性矩阵，与库中 RankICIR 排名前 20 的因子对比</li>
+<li>&quot;Full JSON&quot; 展开项：展开一个 <code>&lt;pre&gt;</code> 块，包含完整的 <code>FactorReport</code> JSON，带语法高亮和复制按钮</li>
+</ul>
+<h4 id="错误状态-当设置了-failure_mode-时">错误状态（当设置了 <code>failure_mode</code> 时）</h4>
+<p>从引擎的 <code>FactorDiagnostics</code>（<code>diagnose().to_dict()</code> 的 <code>errors[]</code> / <code>warnings[]</code> 数组）渲染。头部是诊断 <code>title</code>，代码徽章是稳定的 <code>ASSAY-*</code> id，主体是 <code>message</code> + 插入符号 <code>snippet</code>，修复行是 <code>suggestion</code>。示例——一个真实的 <code>LOOKAHEAD_SHIFT</code>（<code>failure_mode: LOOKAHEAD</code>）：</p>
+<p><code>failure_mode</code> 是 <code>SYNTAX_ERROR</code> · <code>LOOKAHEAD</code> · <code>CONSTANT</code> · <code>ALL_NAN</code> ·
+<code>RUNTIME_ERROR</code> 之一；解析错误（<code>ASSAY-P###</code>）也会内联显示在编辑器中（§9）。
+错误状态会替换整个摘要面板的内容。在错误被检测到之前，图表仍会用任何可用的部分数据进行渲染。</p>
+<hr />
+<h2 id="6-共享组件">6. 共享组件</h2>
+<h3 id="6-1-factorreportcard">6.1  <code>&lt;FactorReportCard /&gt;</code></h3>
+<p>在排行榜和 agent 信息流中使用的紧凑卡片。接受一个 <code>FactorSummary</code> 或 <code>FactorReport</code> 属性。</p>
+<pre><code class="language-typescript">interface FactorReportCardProps {
+  factor:    FactorSummary | FactorReport
+  compact?:  boolean          // true = no sparkline, 1 line height
+  onClick?:  () =&gt; void
+  selected?: boolean
+}
+</code></pre>
+<h3 id="6-2-icsparkline">6.2  <code>&lt;ICSparkline /&gt;</code></h3>
+<p>一个极简的 60 天 IC 走势图。用于排行榜悬停预览和因子详情卡片。</p>
+<pre><code class="language-typescript">interface ICSparklineProps {
+  ic:        number[]   // last 60 values
+  width?:    number     // default 120
+  height?:   number     // default 32
+  color?:    string     // default: blue if mean &gt; 0, red if mean &lt; 0
+}
+</code></pre>
+<h3 id="6-3-redundancybadge">6.3  <code>&lt;RedundancyBadge /&gt;</code></h3>
+<pre><code class="language-typescript">interface RedundancyBadgeProps {
+  score:          number          // 0.0–1.0
+  nearestFactor?: FactorSummary  // shown in tooltip if redundant
+}
+// Renders: &quot;● unique&quot; (score &lt; 0.4), &quot;◐ similar&quot; (0.4–0.7), &quot;● redundant&quot; (&gt; 0.7)
+</code></pre>
+<h3 id="6-4-expressiontag">6.4  <code>&lt;ExpressionTag /&gt;</code></h3>
+<p>一个显示截断因子表达式的等宽字体药丸标签。悬停时工具提示显示完整表达式。</p>
+<pre><code class="language-typescript">interface ExpressionTagProps {
+  expr:      string
+  maxChars?: number    // default 40
+  onClick?:  () =&gt; void
+}
+</code></pre>
+<h3 id="6-5-factorreportjson">6.5  <code>&lt;FactorReportJSON /&gt;</code></h3>
+<p>带复制按钮和行数徽章的语法高亮 JSON 显示。</p>
+<pre><code class="language-typescript">interface FactorReportJSONProps {
+  report:  FactorReport
+  maxHeight?: number    // default 400, scroll if taller
+}
+</code></pre>
+<h3 id="6-6-skeletonchart">6.6  <code>&lt;SkeletonChart /&gt;</code></h3>
+<p>大小与图表卡片匹配的动画加载骨架屏。在 SSE 事件待处理时使用。</p>
+<pre><code class="language-typescript">interface SkeletonChartProps {
+  height?:  number  // default 220
+  type?:    &quot;line&quot; | &quot;bar&quot; | &quot;heatmap&quot;  // affects skeleton shape
+}
+</code></pre>
+<hr />
+<h2 id="7-状态管理">7. 状态管理</h2>
+<p>所有状态都在 Zustand store 中。不使用 Redux。不使用 Context API 管理状态（仅用于 DI/配置）。</p>
+<h3 id="7-1-全局-store">7.1  全局 store</h3>
+<pre><code class="language-typescript">// src/store/global.ts
+
+interface GlobalState {
+  // User-controlled global settings
+  universe:         string               // &quot;NASDAQ100&quot;
+  period:           [string, string]     // [&quot;2020-01-01&quot;, &quot;2024-12-31&quot;]
+  sessionId:        string | null        // created after universe/period set
+  sessionSetupMs:   number | null        // how long session creation took
+
+  // Actions
+  setUniverse:      (u: string) =&gt; void
+  setPeriod:        (p: [string, string]) =&gt; void
+  createSession:    () =&gt; Promise&lt;void&gt;
+  invalidateSession:() =&gt; void
+}
+</code></pre>
+<h3 id="7-2-库-store">7.2  库 store</h3>
+<pre><code class="language-typescript">// src/store/library.ts
+
+interface LibraryState {
+  // Client-side cache of library factors (augments React Query)
+  savedFactorIds:  Set&lt;string&gt;         // factors the user saved in this session
+  selectedIds:     Set&lt;string&gt;         // multi-select state
+  activeFactorId:  string | null       // currently viewed factor in detail panel
+  activeMode:      LibraryMode         // &quot;detail&quot; | &quot;matrix&quot; | &quot;map&quot; | &quot;heatmap&quot; | &quot;lineage&quot;
+  filters:         LibraryFilters
+
+  // Actions
+  selectFactor:    (id: string) =&gt; void
+  toggleSelect:    (id: string) =&gt; void
+  clearSelect:     () =&gt; void
+  setMode:         (mode: LibraryMode) =&gt; void
+  setFilters:      (f: Partial&lt;LibraryFilters&gt;) =&gt; void
+  markSaved:       (id: string) =&gt; void
+}
+</code></pre>
+<h3 id="7-3-评估-store">7.3  评估 store</h3>
+<pre><code class="language-typescript">// src/store/evaluation.ts
+
+interface EvalState {
+  // Current evaluation in the Single Factor Test page
+  expr:            string
+  isEvaluating:    boolean
+  events:          EvalEvent[]          // streaming events received so far
+  report:          FactorReport | null  // set when eval.complete arrives
+  error:           EvalError | null
+  latencyMs:       number | null
+
+  // History (last 20 evaluations in this session)
+  history:         Array&lt;{ expr: string; report: FactorReport }&gt;
+
+  // Actions
+  setExpr:         (expr: string) =&gt; void
+  startEval:       () =&gt; void
+  appendEvent:     (e: EvalEvent) =&gt; void
+  completeEval:    (report: FactorReport, ms: number) =&gt; void
+  setError:        (e: EvalError) =&gt; void
+  clearResults:    () =&gt; void
+  restoreFromHistory: (idx: number) =&gt; void
+}
+</code></pre>
+<hr />
+<h2 id="8-数据获取与流式传输">8. 数据获取与流式传输</h2>
+<p>React Query 管理所有服务端状态。自定义 hook 封装了 fetch + SSE 逻辑。</p>
+<h3 id="8-1-查询键">8.1  查询键</h3>
+<pre><code class="language-typescript">// Consistent key structure for cache invalidation
+const queryKeys = {
+  system:    {status: [&quot;system&quot;, &quot;status&quot;], calendar: (year: number) =&gt; [&quot;system&quot;, &quot;calendar&quot;, year]},
+  library:   {list: (filters: LibraryFilters) =&gt; [&quot;library&quot;, &quot;list&quot;, filters],
+              factor: (id: string) =&gt; [&quot;library&quot;, &quot;factor&quot;, id],
+              correlation: (ids: string[]) =&gt; [&quot;library&quot;, &quot;corr&quot;, ids.sort().join(&quot;,&quot;)],
+              alphaSpace: (ids: string[]) =&gt; [&quot;library&quot;, &quot;umap&quot;, ids.sort().join(&quot;,&quot;)]},
+  session:   {create: (u: string, p: string) =&gt; [&quot;session&quot;, u, p]},
+}
+</code></pre>
+<h3 id="8-2-评估流式-hook">8.2  评估流式 hook</h3>
+<pre><code class="language-typescript">// src/api/hooks/useEvaluate.ts
+
+export function useEvaluate() {
+  const store = useEvalStore()
+  const global = useGlobal()
+
+  const evaluate = useCallback(async (overrides?: Partial&lt;EvalRequest&gt;) =&gt; {
+    const req: EvalRequest = {
+      expr:      store.expr,
+      universe:  global.universe,
+      period:    global.period,
+      horizons:  [1, 5, 10, 20],
+      stream:    true,
+      session_id: global.sessionId,
+      ...overrides,
+    }
+
+    store.startEval()
+    const startMs = Date.now()
+
+    try {
+      const res = await fetch(&quot;/v1/factor/evaluate&quot;, {
+        method:  &quot;POST&quot;,
+        headers: { &quot;Content-Type&quot;: &quot;application/json&quot;, &quot;X-API-Key&quot;: getApiKey() },
+        body:    JSON.stringify(req),
+      })
+
+      if (!res.ok) {
+        const err = await res.json()
+        store.setError(err.error)
+        return
+      }
+
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = &quot;&quot;
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split(&quot;\n&quot;)
+        buffer = lines.pop() ?? &quot;&quot;          // keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (!line.startsWith(&quot;data: &quot;)) continue
+          const event = JSON.parse(line.slice(6)) as EvalEvent
+          store.appendEvent(event)
+
+          if (event.type === &quot;eval.complete&quot;) {
+            store.completeEval(event.data as FactorReport, Date.now() - startMs)
+          }
+        }
+      }
+    } catch (e) {
+      store.setError({ code: &quot;NETWORK_ERROR&quot;, message: String(e) })
+    }
+  }, [store, global])
+
+  return { evaluate, isEvaluating: store.isEvaluating, events: store.events }
+}
+</code></pre>
+<h3 id="8-3-库查询">8.3  库查询</h3>
+<pre><code class="language-typescript">// src/api/hooks/useLibrary.ts
+
+export function useLibraryList(filters: LibraryFilters) {
+  return useQuery({
+    queryKey: queryKeys.library.list(filters),
+    queryFn:  () =&gt; api.library.list(filters),
+    staleTime: 30_000,    // 30s — library changes slowly
+    refetchOnWindowFocus: true,
+  })
+}
+
+export function useCorrelationMatrix(factorIds: string[], universe: string) {
+  return useQuery({
+    queryKey: queryKeys.library.correlation(factorIds),
+    queryFn:  () =&gt; api.library.correlationMatrix(factorIds, universe),
+    enabled:  factorIds.length &gt;= 2,
+    staleTime: 5 * 60_000,   // 5 min — correlation is expensive to compute
+  })
+}
+</code></pre>
+<hr />
+<h2 id="9-monaco-编辑器扩展">9. Monaco 编辑器扩展</h2>
+<h3 id="9-1-语言注册">9.1  语言注册</h3>
+<pre><code class="language-typescript">// src/components/editor/assay-lang.ts
+
+export function setupAssayLanguage(schema: OperatorSchema) {
+  monaco.languages.register({ id: &quot;assay&quot; })
+
+  // ── Token rules ──────────────────────────────────────────────
+  monaco.languages.setMonarchTokensProvider(&quot;assay&quot;, {
+    tokenizer: {
+      root: [
+        [/\$[a-z_]+/,                      &quot;variable.predefined&quot;],   // $close
+        [/\b(ts_|cs_|calc_)[a-z_]+\b/,     &quot;keyword&quot;],               // ts_mean
+        [/\b(Ref|Mean|Std|Corr|EMA|Rank|Delta|Resi|Sum|Product|IdxMax|IdxMin)\b/, &quot;keyword.control&quot;],
+        [/\b(open|high|low|close|volume|transactions)\b/,  &quot;variable&quot;],  // MASSIVE day-agg fields; no vwap/market_cap
+        [/\d+(\.\d+)?/,                    &quot;number&quot;],
+        [/[+\-*/().,&lt;&gt;?:]/,               &quot;operator&quot;],
+        [/&quot;[^&quot;]*&quot;/,                        &quot;string&quot;],
+      ]
+    }
+  })
+
+  // ── Autocomplete ─────────────────────────────────────────────
+  monaco.languages.registerCompletionItemProvider(&quot;assay&quot;, {
+    triggerCharacters: [&quot;(&quot;, &quot;_&quot;],
+    provideCompletionItems(model, position) {
+      const wordInfo = model.getWordUntilPosition(position)
+      const range = {
+        startLineNumber: position.lineNumber,
+        endLineNumber:   position.lineNumber,
+        startColumn:     wordInfo.startColumn,
+        endColumn:       wordInfo.endColumn,
+      }
+
+      const operatorSuggestions = Object.entries(schema).map(([name, op]) =&gt; ({
+        label:            name,
+        kind:             monaco.languages.CompletionItemKind.Function,
+        documentation:    { value: `**${op.signature}**\n\n${op.description}\n\n*Output: ${op.output_range}*` },
+        detail:           op.signature,
+        insertText:       op.insert_snippet,   // &quot;ts_corr(${1:x}, ${2:y}, ${3:d})&quot;
+        insertTextRules:  monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+        range,
+        sortText:         &quot;0&quot; + name,          // operators appear above fields
+      }))
+
+      const fieldSuggestions = [&quot;close&quot;,&quot;open&quot;,&quot;high&quot;,&quot;low&quot;,&quot;volume&quot;,&quot;transactions&quot;].map(f =&gt; ({
+        label:    f,
+        kind:     monaco.languages.CompletionItemKind.Field,
+        detail:   &quot;data field&quot;,
+        insertText: f,
+        range,
+        sortText: &quot;1&quot; + f,
+      }))
+
+      return { suggestions: [...operatorSuggestions, ...fieldSuggestions] }
+    }
+  })
+
+  // ── Signature help (parameter hints) ─────────────────────────
+  monaco.languages.registerSignatureHelpProvider(&quot;assay&quot;, {
+    signatureHelpTriggerCharacters:   [&quot;(&quot;],
+    signatureHelpRetriggerCharacters: [&quot;,&quot;],
+    provideSignatureHelp(model, position) {
+      // Walk backwards from cursor to find enclosing function name and arg index
+      const { fnName, argIndex } = parseCallContext(model, position)
+      if (!fnName || !schema[fnName]) return null
+
+      const op = schema[fnName]
+      return {
+        value: {
+          signatures: [{
+            label:      op.signature,
+            documentation: op.description,
+            parameters: op.params.map(p =&gt; ({
+              label:         p.name,
+              documentation: `${p.type}  range: ${p.min}–${p.max}`
+            })),
+            activeParameter: argIndex,
+          }],
+          activeSignature: 0,
+          activeParameter: argIndex,
+        },
+        dispose: () =&gt; {}
+      }
+    }
+  })
+
+  // ── Inline error (parse validation via Web Worker) ───────────
+  const worker = new Worker(new URL(&quot;./parse-worker.ts&quot;, import.meta.url))
+  let currentModel: monaco.editor.ITextModel | null = null
+
+  monaco.editor.onDidCreateModel(model =&gt; {
+    if (model.getLanguageId() !== &quot;assay&quot;) return
+    currentModel = model
+
+    const update = debounce(() =&gt; {
+      worker.postMessage({ code: model.getValue() })
+    }, 300)
+
+    model.onDidChangeContent(update)
+    update()
+  })
+
+  worker.onmessage = ({ data: errors }) =&gt; {
+    if (!currentModel) return
+    monaco.editor.setModelMarkers(
+      currentModel, &quot;assay&quot;,
+      errors.map((e: ParseError) =&gt; ({
+        severity: monaco.MarkerSeverity.Error,
+        startLineNumber: e.line,  startColumn: e.col,
+        endLineNumber:   e.line,  endColumn: e.col + e.length,
+        message: e.message,
+      }))
+    )
+  }
+}
+</code></pre>
+<h3 id="9-2-语法桥-qlib-python-转换">9.2  语法桥（qlib ↔ Python 转换）</h3>
+<pre><code class="language-typescript">// src/components/editor/syntax-bridge.ts
+
+export function toAssayPython(qlibExpr: string): string {
+  return qlibExpr
+    .replace(/\$(\w+)/g, &quot;$1&quot;)                       // $close → close
+    .replace(/\bRef\(([^,]+),\s*(\d+)\)/g,  &quot;ts_delay($1, $2)&quot;)
+    .replace(/\bMean\(([^,]+),\s*(\d+)\)/g, &quot;ts_mean($1, $2)&quot;)
+    .replace(/\bStd\(([^,]+),\s*(\d+)\)/g,  &quot;ts_std($1, $2)&quot;)
+    .replace(/\bCorr\(([^,]+),\s*([^,]+),\s*(\d+)\)/g, &quot;ts_corr($1, $2, $3)&quot;)
+    .replace(/\bEMA\(([^,]+),\s*(\d+)\)/g,  &quot;ts_ema($1, $2)&quot;)
+    .replace(/\bRank\(([^)]+)\)/g,           &quot;cs_rank($1)&quot;)
+    .replace(/\bDelta\(([^,]+),\s*(\d+)\)/g,&quot;ts_delta($1, $2)&quot;)
+    .replace(/\bSum\(([^,]+),\s*(\d+)\)/g,  &quot;ts_sum($1, $2)&quot;)
+    .replace(/\bIdxMax\(([^,]+),\s*(\d+)\)/g,&quot;ts_argmax($1, $2)&quot;)
+    .replace(/\bIdxMin\(([^,]+),\s*(\d+)\)/g,&quot;ts_argmin($1, $2)&quot;)
+}
+
+export function toQlib(assayExpr: string): string {
+  return assayExpr
+    .replace(/\bts_delay\(([^,]+),\s*(\d+)\)/g,  &quot;Ref(\$$1, $2)&quot;)
+    .replace(/\bts_mean\(([^,]+),\s*(\d+)\)/g,   &quot;Mean(\$$1, $2)&quot;)
+    .replace(/\bts_std\(([^,]+),\s*(\d+)\)/g,    &quot;Std(\$$1, $2)&quot;)
+    .replace(/\bts_corr\(([^,]+),\s*([^,]+),\s*(\d+)\)/g, &quot;Corr(\$$1, \$$2, $3)&quot;)
+    .replace(/\bts_ema\(([^,]+),\s*(\d+)\)/g,    &quot;EMA(\$$1, $2)&quot;)
+    .replace(/\bcs_rank\(([^)]+)\)/g,             &quot;Rank($1)&quot;)
+    .replace(/\bts_delta\(([^,]+),\s*(\d+)\)/g,  &quot;Delta(\$$1, $2)&quot;)
+    .replace(/\bts_sum\(([^,]+),\s*(\d+)\)/g,    &quot;Sum(\$$1, $2)&quot;)
+    .replace(/\bclose\b/g, &quot;$close&quot;)
+    .replace(/\bvolume\b/g, &quot;$volume&quot;)
+    .replace(/\bopen\b/g, &quot;$open&quot;)
+    .replace(/\bhigh\b/g, &quot;$high&quot;)
+    .replace(/\blow\b/g, &quot;$low&quot;)
+    .replace(/\btransactions\b/g, &quot;$transactions&quot;)
+}
+</code></pre>
+<hr />
+<h2 id="10-路由">10. 路由</h2>
+<pre><code class="language-typescript">// src/main.tsx
+
+import { BrowserRouter, Routes, Route, Navigate } from &quot;react-router-dom&quot;
+import { Shell } from &quot;./components/Shell&quot;
+import Dashboard from &quot;./pages/Dashboard&quot;
+import FactorLibrary from &quot;./pages/FactorLibrary&quot;
+import SingleFactorTest from &quot;./pages/SingleFactorTest&quot;
+
+export default function App() {
+  return (
+    &lt;BrowserRouter&gt;
+      &lt;Routes&gt;
+        &lt;Route path=&quot;/&quot; element={&lt;Shell /&gt;}&gt;
+          &lt;Route index element={&lt;Navigate to=&quot;/dashboard&quot; replace /&gt;} /&gt;
+          &lt;Route path=&quot;dashboard&quot; element={&lt;Dashboard /&gt;} /&gt;
+          &lt;Route path=&quot;library&quot;   element={&lt;FactorLibrary /&gt;} /&gt;
+          &lt;Route path=&quot;factor&quot;    element={&lt;SingleFactorTest /&gt;} /&gt;
+          &lt;Route path=&quot;factor/:factor_id&quot; element={&lt;SingleFactorTest /&gt;} /&gt;
+        &lt;/Route&gt;
+      &lt;/Routes&gt;
+    &lt;/BrowserRouter&gt;
+  )
+}
+</code></pre>
+<p>URL 状态同步——股票池、周期和库模式通过一个自定义 <code>useUrlSync</code> hook 以查询参数的形式持久化到 URL。回退导航会恢复用户离开时的确切状态。</p>
+<hr />
+<h2 id="11-设计令牌">11. 设计令牌</h2>
+<p>所有视觉设计值都是 Tailwind CSS 自定义属性，在 <code>tailwind.config.ts</code> 中扩展。</p>
+<h3 id="11-1-颜色">11.1  颜色</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>令牌</th>
+<th>值</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--color-navy</code></td>
+<td><code>#1B2A4A</code></td>
+<td>标题、logo</td>
+</tr>
+<tr>
+<td><code>--color-blue</code></td>
+<td><code>#2D5BE3</code></td>
+<td>主要操作、激活标签页、链接</td>
+</tr>
+<tr>
+<td><code>--color-teal</code></td>
+<td><code>#0E8A7E</code></td>
+<td>RankIC 线、正向信号</td>
+</tr>
+<tr>
+<td><code>--color-amber</code></td>
+<td><code>#B87C1A</code></td>
+<td>警告、标注</td>
+</tr>
+<tr>
+<td><code>--color-red</code></td>
+<td><code>#C0392B</code></td>
+<td>错误、负 IC、冗余徽章</td>
+</tr>
+<tr>
+<td><code>--color-green</code></td>
+<td><code>#1E7B4B</code></td>
+<td>成功、正 IC、唯一徽章</td>
+</tr>
+<tr>
+<td><code>--color-gray-1</code></td>
+<td><code>#F4F6FA</code></td>
+<td>交替表格行背景</td>
+</tr>
+<tr>
+<td><code>--color-gray-4</code></td>
+<td><code>#8892AA</code></td>
+<td>弱化文字、标签</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="11-2-字号刻度">11.2  字号刻度</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>用途</th>
+<th>尺寸</th>
+<th>字重</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>页面标题（h1）</td>
+<td>24px</td>
+<td>500</td>
+</tr>
+<tr>
+<td>章节标题（h2）</td>
+<td>18px</td>
+<td>500</td>
+</tr>
+<tr>
+<td>卡片标题</td>
+<td>14px</td>
+<td>500</td>
+</tr>
+<tr>
+<td>正文文字</td>
+<td>14px</td>
+<td>400</td>
+</tr>
+<tr>
+<td>表格文字</td>
+<td>13px</td>
+<td>400</td>
+</tr>
+<tr>
+<td>标签 / 提示</td>
+<td>12px</td>
+<td>400</td>
+</tr>
+<tr>
+<td>等宽字体（表达式）</td>
+<td>13px</td>
+<td>400（JetBrains Mono）</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="11-3-间距">11.3  间距</h3>
+<p>基础单位：4px。常用间距：4、8、12、16、24、32、48px。</p>
+<h3 id="11-4-边框圆角">11.4  边框圆角</h3>
+<ul>
+<li>卡片、面板：8px（<code>--border-radius-md</code>）</li>
+<li>徽章、标签：4px</li>
+<li>按钮：6px</li>
+<li>工具提示：4px</li>
+</ul>
+<h3 id="11-5-阴影">11.5  阴影</h3>
+<p>无装饰性阴影。仅焦点环：聚焦的表单元素上使用 <code>box-shadow: 0 0 0 2px var(--color-blue)</code>。</p>
+<hr />
+<p><em>— Assay WebUI 详细设计 · AlphaBench 项目 —</em></p>

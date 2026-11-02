@@ -16,14 +16,15 @@
 // Contract: export render(root, ctx). Zero deps.
 
 import * as ind from "../indicators.js";
+import { P } from "../palette.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const STYLE_ID = "chart-page-style";
-const UP = "#E0443E";   // 涨 — red (A-share convention)
-const DOWN = "#1FA85A"; // 跌 — green
+const UP = P.up;   // 涨 — red (A-share convention)
+const DOWN = P.down; // 跌 — green
 const MA_DEFS = [
-  { n: 5, color: "#2D5BE3" }, { n: 10, color: "#B87C1A" },
-  { n: 20, color: "#8E44AD" }, { n: 60, color: "#0E8A7E" },
+  { n: 5, color: P.primary }, { n: 10, color: P.amber },
+  { n: 20, color: P.purple }, { n: 60, color: P.second },
 ];
 const TIMEFRAMES = [
   { code: "1min", key: "tf1m" }, { code: "5min", key: "tf5m" }, { code: "15min", key: "tf15m" },
@@ -64,7 +65,7 @@ function injectStyle(ctx) {
 .chart-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-btn); overflow: hidden; }
 .chart-seg button { border: none; background: var(--bg); cursor: pointer; font-size: 13px; padding: 5px 10px; color: var(--text-muted); }
 .chart-seg button + button { border-left: 1px solid var(--border); }
-.chart-seg button.is-active { background: var(--blue, #2D5BE3); color: #fff; }
+.chart-seg button.is-active { background: var(--blue, #2D5BE3); color: var(--on-accent); }
 .chart-indbar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .chart-chip { border: 1px solid var(--border); background: var(--bg); cursor: pointer; font-size: 12px; padding: 3px 9px; border-radius: 999px; color: var(--text-muted); }
 .chart-chip.is-on { background: var(--navy, #1f2937); color: #fff; border-color: var(--navy, #1f2937); }
@@ -73,15 +74,15 @@ function injectStyle(ctx) {
 .chart-host { position: relative; width: 100%; }
 .chart-host svg { width: 100%; height: auto; display: block; cursor: crosshair; touch-action: none; }
 .chart-host.is-drag svg { cursor: grabbing; }
-.chart-legend2 { position: absolute; top: 8px; left: 10px; font-size: 12px; pointer-events: none; background: rgba(255,255,255,0.82); border-radius: 6px; padding: 3px 8px; }
+.chart-legend2 { position: absolute; top: 8px; left: 10px; font-size: 12px; pointer-events: none; background: var(--glass); border-radius: 6px; padding: 3px 8px; }
 .chart-legend2 .seg { margin-right: 10px; font-family: var(--font-mono); white-space: nowrap; }
 .chart-hint { position: absolute; bottom: 6px; right: 12px; font-size: 11px; color: var(--text-muted); pointer-events: none; }
 .chart-msg { padding: 40px; text-align: center; color: var(--text-muted); }
-.ck-cross { stroke: #8892AA; stroke-width: 1; stroke-dasharray: 4 3; pointer-events: none; }
+.ck-cross { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 4 3; pointer-events: none; }
 .ck-tag { fill: var(--navy, #1f2937); } .ck-tag-txt { fill: #fff; font-size: 10px; font-family: var(--font-mono); }
 .ck-grid { stroke: var(--border, #e5e7eb); stroke-width: 1; }
 .ck-axis { fill: var(--text-muted, #8892AA); font-size: 10px; font-family: var(--font-mono); }
-.ck-zero { stroke: #C9CFDB; stroke-width: 1; stroke-dasharray: 2 2; }
+.ck-zero { stroke: var(--gray-3); stroke-width: 1; stroke-dasharray: 2 2; }
 .ck-psep { stroke: var(--border, #e5e7eb); stroke-width: 1; }
 `;
   document.head.appendChild(ctx.el("style", { id: STYLE_ID }, css));
@@ -249,7 +250,7 @@ function mountChart(ctx, host, state) {
     // ---- price panel ----
     const overlays = [];
     if (state.overlays.has("ma")) for (const d of MA_DEFS) overlays.push({ values: S.ma[d.n], color: d.color });
-    if (state.overlays.has("boll")) { overlays.push({ values: S.boll.upper, color: "#9AA4B8" }); overlays.push({ values: S.boll.mid, color: "#5B6678" }); overlays.push({ values: S.boll.lower, color: "#9AA4B8" }); }
+    if (state.overlays.has("boll")) { overlays.push({ values: S.boll.upper, color: P.muted }); overlays.push({ values: S.boll.mid, color: P.text }); overlays.push({ values: S.boll.lower, color: P.muted }); }
     let lo = Infinity, hi = -Infinity;
     for (let i = A; i <= B; i++) { if (isN(S.low[i])) lo = Math.min(lo, S.low[i]); if (isN(S.high[i])) hi = Math.max(hi, S.high[i]); for (const o of overlays) { const v = o.values[i]; if (isN(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } } }
     if (!isFinite(lo)) { lo = 0; hi = 1; }
@@ -299,12 +300,12 @@ function mountChart(ctx, host, state) {
     if (state.overlays.has("ma")) for (const d of MA_DEFS) { const v = S.ma[d.n][gi]; if (isN(v)) seg(`MA${d.n} ${fmtNum(v)}`, d.color); }
     for (const key of subs) {
       if (key === "vol") seg(`VOL ${fmtNum(S.vol[gi])}`);
-      else if (key === "macd") seg(`DIF ${fmtNum(S.macd.dif[gi])} DEA ${fmtNum(S.macd.dea[gi])}`, "#2D5BE3");
-      else if (key === "rsi") seg(`RSI ${fmtNum(S.rsi[gi])}`, "#8E44AD");
-      else if (key === "kdj") seg(`K ${fmtNum(S.kdj.k[gi])} D ${fmtNum(S.kdj.d[gi])} J ${fmtNum(S.kdj.j[gi])}`, "#2D5BE3");
-      else if (key === "atr") seg(`ATR ${fmtNum(S.atr[gi])}`, "#0E8A7E");
-      else if (key === "obv") seg(`OBV ${fmtNum(S.obv[gi])}`, "#2D5BE3");
-      else if (key === "alpha" && S.alpha) seg(`α ${fmtNum(S.alpha[gi])}`, "#C0392B");
+      else if (key === "macd") seg(`DIF ${fmtNum(S.macd.dif[gi])} DEA ${fmtNum(S.macd.dea[gi])}`, P.primary);
+      else if (key === "rsi") seg(`RSI ${fmtNum(S.rsi[gi])}`, P.purple);
+      else if (key === "kdj") seg(`K ${fmtNum(S.kdj.k[gi])} D ${fmtNum(S.kdj.d[gi])} J ${fmtNum(S.kdj.j[gi])}`, P.primary);
+      else if (key === "atr") seg(`ATR ${fmtNum(S.atr[gi])}`, P.second);
+      else if (key === "obv") seg(`OBV ${fmtNum(S.obv[gi])}`, P.primary);
+      else if (key === "alpha" && S.alpha) seg(`α ${fmtNum(S.alpha[gi])}`, P.down);
     }
   }
 
@@ -395,20 +396,20 @@ function drawSub(svg, ctx, key, S, A, B, cx, cw, G) {
     const ext = Math.max(1e-9, ...winFin(S.macd.dif).map(Math.abs), ...winFin(S.macd.dea).map(Math.abs), ...winFin(S.macd.hist).map(Math.abs)); lo = -ext; hi = ext;
     y = makeScale(lo, hi, top, h, 0.06); zero();
     for (let i = A; i <= B; i++) { const v = S.macd.hist[i]; if (!isN(v)) continue; const h0 = y(0), hy = y(v); svg.appendChild(svgEl("rect", { x: cx(i - A) - cw / 2, y: Math.min(h0, hy), width: cw, height: Math.max(1, Math.abs(hy - h0)), fill: v >= 0 ? UP : DOWN, opacity: 0.8 })); }
-    line(S.macd.dif, "#2D5BE3"); line(S.macd.dea, "#B87C1A");
+    line(S.macd.dif, P.primary); line(S.macd.dea, P.amber);
   } else if (key === "rsi") {
     lo = 0; hi = 100; y = makeScale(0, 100, top, h, 0);
     for (const g of [30, 50, 70]) svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: y(g), y2: y(g), class: "ck-zero" }));
-    line(S.rsi, "#8E44AD");
+    line(S.rsi, P.purple);
   } else if (key === "kdj") {
     const all = [...winFin(S.kdj.k), ...winFin(S.kdj.d), ...winFin(S.kdj.j)]; lo = Math.min(0, ...all); hi = Math.max(100, ...all);
-    y = makeScale(lo, hi, top, h, 0.04); line(S.kdj.k, "#2D5BE3"); line(S.kdj.d, "#B87C1A"); line(S.kdj.j, "#8E44AD");
+    y = makeScale(lo, hi, top, h, 0.04); line(S.kdj.k, P.primary); line(S.kdj.d, P.amber); line(S.kdj.j, P.purple);
   } else if (key === "atr") {
-    hi = Math.max(1e-9, ...winFin(S.atr)); y = makeScale(0, hi, top, h, 0.06); line(S.atr, "#0E8A7E");
+    hi = Math.max(1e-9, ...winFin(S.atr)); y = makeScale(0, hi, top, h, 0.06); line(S.atr, P.second);
   } else if (key === "obv") {
-    const f = winFin(S.obv); lo = f.length ? Math.min(...f) : 0; hi = f.length ? Math.max(...f) : 1; y = makeScale(lo, hi, top, h, 0.06); line(S.obv, "#2D5BE3");
+    const f = winFin(S.obv); lo = f.length ? Math.min(...f) : 0; hi = f.length ? Math.max(...f) : 1; y = makeScale(lo, hi, top, h, 0.06); line(S.obv, P.primary);
   } else if (key === "alpha") {
-    const f = winFin(S.alpha); lo = f.length ? Math.min(...f) : -1; hi = f.length ? Math.max(...f) : 1; y = makeScale(lo, hi, top, h, 0.08); zero(); line(S.alpha, "#C0392B", 1.4);
+    const f = winFin(S.alpha); lo = f.length ? Math.min(...f) : -1; hi = f.length ? Math.max(...f) : 1; y = makeScale(lo, hi, top, h, 0.08); zero(); line(S.alpha, P.down, 1.4);
   }
   svg.appendChild(svgEl("text", { x: padL + 2, y: top + 11, class: "ck-axis", "text-anchor": "start" }, label));
   svg.appendChild(svgEl("text", { x: padL - 4, y: top + 9, class: "ck-axis", "text-anchor": "end" }, fmt(hi)));

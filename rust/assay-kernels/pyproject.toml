@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "assay-kernels"
+version = "0.2.0"
+description = "Native cross-sectional kernels for Assay (ranks, IC, quantile buckets)"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.24"]
+
+[tool.maturin]
+module-name = "assay_kernels"
+features = ["pyo3/extension-module"]

@@ -14,9 +14,10 @@ Alpha 挖掘。在同一套引擎之上，它提供四种接入方式——Pytho
 
 ## 📚 文档
 
-完整的设计规范与使用指南在 **[docs/](docs/cn/README.md)**：
+完整的设计规范与使用指南在 **[docs/](docs/cn/README.md)**，线上 Doc Hub 在 **https://assay.qfinverse.com/doc/**（任何部署的 `/doc/`；改完文档后运行 `python scripts/build_doc_hub.py` 重新生成）：
 
 - **从这里开始：** [快速上手](docs/cn/guide/getting-started.md)
+- **美股数据：** [QFinVerse 日频面板](docs/cn/guide/qfv-data.md)
 - **数据与正确性：** [数据与复权](docs/cn/guide/data-and-adjustment.md)
   （[English](docs/en/guide/data-and-adjustment.md)）—— 数据层、点对点读取，以及因子在
   **拆股与分红** 下看到的价格。

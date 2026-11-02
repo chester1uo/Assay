@@ -1,0 +1,3621 @@
+{
+ "repo": "https://github.com/QFinVerse/Assay",
+ "groups": [
+  {
+   "id": "start",
+   "label": {
+    "en": "Get started",
+    "zh": "入门"
+   },
+   "pages": [
+    "guide/getting-started",
+    "guide/webui",
+    "guide/cli"
+   ]
+  },
+  {
+   "id": "data",
+   "label": {
+    "en": "Data",
+    "zh": "数据"
+   },
+   "pages": [
+    "guide/qfv-data",
+    "guide/data-and-adjustment",
+    "guide/data-pipeline",
+    "guide/multi-market",
+    "guide/tushare"
+   ]
+  },
+  {
+   "id": "research",
+   "label": {
+    "en": "Research",
+    "zh": "研究"
+   },
+   "pages": [
+    "guide/factor-combination",
+    "guide/portfolio-backtest",
+    "guide/precompute-cse",
+    "guide/performance"
+   ]
+  },
+  {
+   "id": "api",
+   "label": {
+    "en": "Interfaces",
+    "zh": "接口"
+   },
+   "pages": [
+    "guide/rest-api",
+    "guide/python-sdk",
+    "guide/mcp-server"
+   ]
+  },
+  {
+   "id": "design",
+   "label": {
+    "en": "Design",
+    "zh": "设计"
+   },
+   "pages": [
+    "design/architecture",
+    "design/engineering",
+    "design/portfolio-backtest",
+    "design/minute-backtesting",
+    "design/operator-compatibility",
+    "design/webui"
+   ]
+  },
+  {
+   "id": "reports",
+   "label": {
+    "en": "Reports",
+    "zh": "报告"
+   },
+   "pages": [
+    "reports/alpha101"
+   ]
+  }
+ ],
+ "pages": {
+  "guide/getting-started": {
+   "group": "start",
+   "title": {
+    "en": "Getting Started",
+    "zh": "快速开始"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "use-the-hosted-site",
+      "text": "Use the hosted site",
+      "level": 2
+     },
+     {
+      "id": "run-it-yourself",
+      "text": "Run it yourself",
+      "level": 2
+     },
+     {
+      "id": "1-install",
+      "text": "1. Install",
+      "level": 3
+     },
+     {
+      "id": "2-point-it-at-data",
+      "text": "2. Point it at data",
+      "level": 3
+     },
+     {
+      "id": "3-evaluate-a-factor",
+      "text": "3. Evaluate a factor",
+      "level": 3
+     },
+     {
+      "id": "4-backtest-a-portfolio",
+      "text": "4. Backtest a portfolio",
+      "level": 3
+     },
+     {
+      "id": "5-start-the-server",
+      "text": "5. Start the server",
+      "level": 3
+     },
+     {
+      "id": "where-to-go-next",
+      "text": "Where to go next",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "使用线上站点",
+      "text": "使用线上站点",
+      "level": 2
+     },
+     {
+      "id": "自己部署",
+      "text": "自己部署",
+      "level": 2
+     },
+     {
+      "id": "1-安装",
+      "text": "1. 安装",
+      "level": 3
+     },
+     {
+      "id": "2-配置数据",
+      "text": "2. 配置数据",
+      "level": 3
+     },
+     {
+      "id": "3-评估一个因子",
+      "text": "3. 评估一个因子",
+      "level": 3
+     },
+     {
+      "id": "4-组合回测",
+      "text": "4. 组合回测",
+      "level": 3
+     },
+     {
+      "id": "5-启动服务",
+      "text": "5. 启动服务",
+      "level": 3
+     },
+     {
+      "id": "接下来",
+      "text": "接下来",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-11-02"
+  },
+  "guide/webui": {
+   "group": "start",
+   "title": {
+    "en": "WebUI",
+    "zh": "WebUI"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "layout",
+      "text": "Layout",
+      "level": 2
+     },
+     {
+      "id": "pages",
+      "text": "Pages",
+      "level": 2
+     },
+     {
+      "id": "accounts",
+      "text": "Accounts",
+      "level": 2
+     },
+     {
+      "id": "tips",
+      "text": "Tips",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "布局",
+      "text": "布局",
+      "level": 2
+     },
+     {
+      "id": "页面",
+      "text": "页面",
+      "level": 2
+     },
+     {
+      "id": "账户",
+      "text": "账户",
+      "level": 2
+     },
+     {
+      "id": "提示",
+      "text": "提示",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-11-02"
+  },
+  "guide/cli": {
+   "group": "start",
+   "title": {
+    "en": "CLI Reference",
+    "zh": "CLI 参考"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "data-pipeline",
+      "text": "Data pipeline",
+      "level": 2
+     },
+     {
+      "id": "factor-engine",
+      "text": "Factor engine",
+      "level": 2
+     },
+     {
+      "id": "backtest-library-sdk-backed",
+      "text": "Backtest & library (SDK-backed)",
+      "level": 2
+     },
+     {
+      "id": "servers",
+      "text": "Servers",
+      "level": 2
+     },
+     {
+      "id": "examples",
+      "text": "Examples",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "数据流水线",
+      "text": "数据流水线",
+      "level": 2
+     },
+     {
+      "id": "因子引擎",
+      "text": "因子引擎",
+      "level": 2
+     },
+     {
+      "id": "回测与库-由-sdk-支撑",
+      "text": "回测与库（由 SDK 支撑）",
+      "level": 2
+     },
+     {
+      "id": "服务器",
+      "text": "服务器",
+      "level": 2
+     },
+     {
+      "id": "示例",
+      "text": "示例",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-07-04"
+  },
+  "guide/qfv-data": {
+   "group": "data",
+   "title": {
+    "en": "US data from QFinVerse",
+    "zh": "美股数据（QFinVerse）"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "setup",
+      "text": "Setup",
+      "level": 2
+     },
+     {
+      "id": "universes",
+      "text": "Universes",
+      "level": 2
+     },
+     {
+      "id": "securities",
+      "text": "Securities",
+      "level": 2
+     },
+     {
+      "id": "corporate-actions",
+      "text": "Corporate actions",
+      "level": 2
+     },
+     {
+      "id": "speed",
+      "text": "Speed",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "配置",
+      "text": "配置",
+      "level": 2
+     },
+     {
+      "id": "股票池",
+      "text": "股票池",
+      "level": 2
+     },
+     {
+      "id": "证券-id",
+      "text": "证券 ID",
+      "level": 2
+     },
+     {
+      "id": "公司行动",
+      "text": "公司行动",
+      "level": 2
+     },
+     {
+      "id": "速度",
+      "text": "速度",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-11-02"
+  },
+  "guide/data-and-adjustment": {
+   "group": "data",
+   "title": {
+    "en": "Data & Adjustment",
+    "zh": "数据与复权"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "1-two-layers-raw-assay",
+      "text": "1. Two layers: RAW → ASSAY",
+      "level": 2
+     },
+     {
+      "id": "the-assay-stores",
+      "text": "The ASSAY stores",
+      "level": 3
+     },
+     {
+      "id": "2-bi-temporal-date-vs-as_of_date",
+      "text": "2. Bi-temporal: date vs as_of_date",
+      "level": 2
+     },
+     {
+      "id": "3-how-factors-see-prices-under-splits-dividends",
+      "text": "3. How factors see prices under splits & dividends",
+      "level": 2
+     },
+     {
+      "id": "3-1-splits-share-changes",
+      "text": "3.1 Splits & share changes",
+      "level": 3
+     },
+     {
+      "id": "3-2-cash-dividends-adj-total-only",
+      "text": "3.2 Cash dividends (adj=\"total\" only)",
+      "level": 3
+     },
+     {
+      "id": "3-3-adjustment-modes-adj",
+      "text": "3.3 Adjustment modes (adj)",
+      "level": 3
+     },
+     {
+      "id": "3-4-choosing-adj-for-a-factor",
+      "text": "3.4 Choosing adj for a factor",
+      "level": 3
+     },
+     {
+      "id": "4-china-a-share-specifics",
+      "text": "4. China A-share specifics",
+      "level": 2
+     },
+     {
+      "id": "5-reproduce-it-yourself",
+      "text": "5. Reproduce it yourself",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "1-两层-raw-assay",
+      "text": "1. 两层：RAW → ASSAY",
+      "level": 2
+     },
+     {
+      "id": "assay-存储",
+      "text": "ASSAY 存储",
+      "level": 3
+     },
+     {
+      "id": "2-双时间-date-与-as_of_date",
+      "text": "2. 双时间：date 与 as_of_date",
+      "level": 2
+     },
+     {
+      "id": "3-因子在拆股与分红下看到的价格",
+      "text": "3. 因子在拆股与分红下看到的价格",
+      "level": 2
+     },
+     {
+      "id": "3-1-拆股与股本变更",
+      "text": "3.1 拆股与股本变更",
+      "level": 3
+     },
+     {
+      "id": "3-2-现金分红-仅-adj-total",
+      "text": "3.2 现金分红（仅 adj=\"total\"）",
+      "level": 3
+     },
+     {
+      "id": "3-3-复权模式-adj",
+      "text": "3.3 复权模式（adj）",
+      "level": 3
+     },
+     {
+      "id": "3-4-为因子选择-adj",
+      "text": "3.4 为因子选择 adj",
+      "level": 3
+     },
+     {
+      "id": "4-a-股特有事项",
+      "text": "4. A 股特有事项",
+      "level": 2
+     },
+     {
+      "id": "5-自己复现",
+      "text": "5. 自己复现",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-07-04"
+  },
+  "guide/data-pipeline": {
+   "group": "data",
+   "title": {
+    "en": "Data Pipeline",
+    "zh": "数据管理"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "local-source",
+      "text": "Local source",
+      "level": 2
+     },
+     {
+      "id": "stores",
+      "text": "Stores",
+      "level": 2
+     },
+     {
+      "id": "one-shot-prepare",
+      "text": "One-shot prepare",
+      "level": 2
+     },
+     {
+      "id": "data-manager-webui-api",
+      "text": "Data Manager (WebUI / API)",
+      "level": 2
+     },
+     {
+      "id": "individual-stages",
+      "text": "Individual stages",
+      "level": 2
+     },
+     {
+      "id": "inspect-verify",
+      "text": "Inspect & verify",
+      "level": 2
+     },
+     {
+      "id": "separate-data-folders",
+      "text": "Separate data folders",
+      "level": 2
+     },
+     {
+      "id": "known-data-caveats",
+      "text": "Known data caveats",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "本地数据源",
+      "text": "本地数据源",
+      "level": 2
+     },
+     {
+      "id": "存储",
+      "text": "存储",
+      "level": 2
+     },
+     {
+      "id": "一键准备",
+      "text": "一键准备",
+      "level": 2
+     },
+     {
+      "id": "数据管理-webui-api",
+      "text": "数据管理（WebUI / API）",
+      "level": 2
+     },
+     {
+      "id": "各个阶段",
+      "text": "各个阶段",
+      "level": 2
+     },
+     {
+      "id": "检查与验证",
+      "text": "检查与验证",
+      "level": 2
+     },
+     {
+      "id": "分开的数据文件夹",
+      "text": "分开的数据文件夹",
+      "level": 2
+     },
+     {
+      "id": "已知的数据注意事项",
+      "text": "已知的数据注意事项",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-11-02"
+  },
+  "guide/multi-market": {
+   "group": "data",
+   "title": {
+    "en": "Multi-market support (China A-share + Hong Kong)",
+    "zh": "多市场支持(中国 A 股 + 香港)"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "1-ingest-raw-tushare-canonical-cn-stores",
+      "text": "1. Ingest: raw Tushare → canonical CN stores",
+      "level": 2
+     },
+     {
+      "id": "2-trading-constraints-in-the-portfolio-backtest",
+      "text": "2. Trading constraints in the portfolio backtest",
+      "level": 2
+     },
+     {
+      "id": "3-running-a-cn-backtest",
+      "text": "3. Running a CN backtest",
+      "level": 2
+     },
+     {
+      "id": "4-hong-kong",
+      "text": "4. Hong Kong",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "1-导入-原始-tushare-标准-cn-存储",
+      "text": "1. 导入:原始 Tushare → 标准 CN 存储",
+      "level": 2
+     },
+     {
+      "id": "2-组合回测中的交易约束",
+      "text": "2. 组合回测中的交易约束",
+      "level": 2
+     },
+     {
+      "id": "3-运行一次-cn-回测",
+      "text": "3. 运行一次 CN 回测",
+      "level": 2
+     },
+     {
+      "id": "4-香港",
+      "text": "4. 香港",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-08-01"
+  },
+  "guide/tushare": {
+   "group": "data",
+   "title": {
+    "en": "Tushare data source (China A-share + Hong Kong)",
+    "zh": "Tushare 数据源(中国 A 股 + 香港)"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "scope",
+      "text": "Scope",
+      "level": 2
+     },
+     {
+      "id": "endpoint-and-credentials",
+      "text": "Endpoint and credentials",
+      "level": 2
+     },
+     {
+      "id": "running",
+      "text": "Running",
+      "level": 2
+     },
+     {
+      "id": "on-disk-layout-tushare_data_dir-default-data-tushare_data",
+      "text": "On-disk layout ($TUSHARE_DATA_DIR, default /data/tushare_data)",
+      "level": 2
+     },
+     {
+      "id": "why-cn-is-sharded-per-symbol-and-hk-per-date",
+      "text": "Why CN is sharded per symbol and HK per date",
+      "level": 3
+     },
+     {
+      "id": "adjustment-splits-dividends-merges",
+      "text": "Adjustment (splits / dividends / merges)",
+      "level": 2
+     },
+     {
+      "id": "hk-corporate-actions",
+      "text": "HK corporate actions",
+      "level": 2
+     },
+     {
+      "id": "measured-accuracy",
+      "text": "Measured accuracy",
+      "level": 3
+     },
+     {
+      "id": "known-limitations",
+      "text": "Known limitations",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "范围",
+      "text": "范围",
+      "level": 2
+     },
+     {
+      "id": "接口地址与凭证",
+      "text": "接口地址与凭证",
+      "level": 2
+     },
+     {
+      "id": "运行",
+      "text": "运行",
+      "level": 2
+     },
+     {
+      "id": "磁盘布局-tushare_data_dir-默认-data-tushare_data",
+      "text": "磁盘布局($TUSHARE_DATA_DIR,默认 /data/tushare_data)",
+      "level": 2
+     },
+     {
+      "id": "为什么-cn-按标的分片而-hk-按日期分片",
+      "text": "为什么 CN 按标的分片而 HK 按日期分片",
+      "level": 3
+     },
+     {
+      "id": "复权-拆股-分红-合并",
+      "text": "复权(拆股 / 分红 / 合并)",
+      "level": 2
+     },
+     {
+      "id": "hk-公司行为",
+      "text": "HK 公司行为",
+      "level": 2
+     },
+     {
+      "id": "实测精度",
+      "text": "实测精度",
+      "level": 3
+     },
+     {
+      "id": "已知限制",
+      "text": "已知限制",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-08-01"
+  },
+  "guide/factor-combination": {
+   "group": "research",
+   "title": {
+    "en": "Factor Combination",
+    "zh": "因子合成"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "pipeline",
+      "text": "Pipeline",
+      "level": 2
+     },
+     {
+      "id": "methods",
+      "text": "Methods",
+      "level": 2
+     },
+     {
+      "id": "analytic-optimization-always-available-numpy-scipy",
+      "text": "Analytic / optimization (always available — numpy + scipy)",
+      "level": 3
+     },
+     {
+      "id": "learned-models-qlib-style-optional-libraries",
+      "text": "Learned models (qlib-style — optional libraries)",
+      "level": 3
+     },
+     {
+      "id": "rest",
+      "text": "REST",
+      "level": 2
+     },
+     {
+      "id": "saving-reloading-runs",
+      "text": "Saving & reloading runs",
+      "level": 2
+     },
+     {
+      "id": "response-shape",
+      "text": "Response (shape)",
+      "level": 3
+     },
+     {
+      "id": "sdk",
+      "text": "SDK",
+      "level": 2
+     },
+     {
+      "id": "notes-caveats",
+      "text": "Notes & caveats",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "流程",
+      "text": "流程",
+      "level": 2
+     },
+     {
+      "id": "方法",
+      "text": "方法",
+      "level": 2
+     },
+     {
+      "id": "解析-优化-始终可用-numpy-scipy",
+      "text": "解析 / 优化（始终可用——numpy + scipy）",
+      "level": 3
+     },
+     {
+      "id": "学习型模型-qlib-风格-可选库",
+      "text": "学习型模型（qlib 风格——可选库）",
+      "level": 3
+     },
+     {
+      "id": "rest",
+      "text": "REST",
+      "level": 2
+     },
+     {
+      "id": "保存与重新加载运行结果",
+      "text": "保存与重新加载运行结果",
+      "level": 2
+     },
+     {
+      "id": "响应-结构",
+      "text": "响应（结构）",
+      "level": 3
+     },
+     {
+      "id": "sdk",
+      "text": "SDK",
+      "level": 2
+     },
+     {
+      "id": "说明与注意事项",
+      "text": "说明与注意事项",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-07-04"
+  },
+  "guide/portfolio-backtest": {
+   "group": "research",
+   "title": {
+    "en": "Portfolio Backtest",
+    "zh": "组合回测"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "quick-start",
+      "text": "Quick start",
+      "level": 2
+     },
+     {
+      "id": "long-short-dollar-neutral",
+      "text": "Long/short, dollar-neutral",
+      "level": 2
+     },
+     {
+      "id": "weight-methods",
+      "text": "Weight methods",
+      "level": 2
+     },
+     {
+      "id": "key-config-groups",
+      "text": "Key config groups",
+      "level": 2
+     },
+     {
+      "id": "metrics-in-the-report",
+      "text": "Metrics in the report",
+      "level": 2
+     },
+     {
+      "id": "a-share",
+      "text": "A-share",
+      "level": 2
+     },
+     {
+      "id": "caveats-on-the-current-dataset",
+      "text": "Caveats on the current dataset",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "快速开始",
+      "text": "快速开始",
+      "level": 2
+     },
+     {
+      "id": "多空-美元中性",
+      "text": "多空、美元中性",
+      "level": 2
+     },
+     {
+      "id": "权重方法",
+      "text": "权重方法",
+      "level": 2
+     },
+     {
+      "id": "关键配置分组",
+      "text": "关键配置分组",
+      "level": 2
+     },
+     {
+      "id": "报告中的指标",
+      "text": "报告中的指标",
+      "level": 2
+     },
+     {
+      "id": "a-股",
+      "text": "A 股",
+      "level": 2
+     },
+     {
+      "id": "当前数据集的注意事项",
+      "text": "当前数据集的注意事项",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-07-04"
+  },
+  "guide/precompute-cse": {
+   "group": "research",
+   "title": {
+    "en": "Precompute & Common Sub-Expression Elimination (CSE)",
+    "zh": "预计算与公共子表达式消除（CSE）"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "measured",
+      "text": "Measured",
+      "level": 3
+     },
+     {
+      "id": "find-the-common-sub-expressions",
+      "text": "Find the common sub-expressions",
+      "level": 2
+     },
+     {
+      "id": "build-the-precompute-store",
+      "text": "Build the precompute store",
+      "level": 2
+     },
+     {
+      "id": "auto-update-by-history",
+      "text": "Auto-update by history",
+      "level": 3
+     },
+     {
+      "id": "coupled-to-the-daily-data-update",
+      "text": "Coupled to the daily data update",
+      "level": 3
+     },
+     {
+      "id": "use-it-to-accelerate-a-sweep",
+      "text": "Use it to accelerate a sweep",
+      "level": 2
+     },
+     {
+      "id": "when-to-use-which",
+      "text": "When to use which",
+      "level": 2
+     },
+     {
+      "id": "how-it-works-internals",
+      "text": "How it works (internals)",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "实测",
+      "text": "实测",
+      "level": 3
+     },
+     {
+      "id": "找出公共子表达式",
+      "text": "找出公共子表达式",
+      "level": 2
+     },
+     {
+      "id": "构建预计算存储",
+      "text": "构建预计算存储",
+      "level": 2
+     },
+     {
+      "id": "按历史自动更新",
+      "text": "按历史自动更新",
+      "level": 3
+     },
+     {
+      "id": "与每日数据更新耦合",
+      "text": "与每日数据更新耦合",
+      "level": 3
+     },
+     {
+      "id": "用它来加速扫描",
+      "text": "用它来加速扫描",
+      "level": 2
+     },
+     {
+      "id": "何时用哪个",
+      "text": "何时用哪个",
+      "level": 2
+     },
+     {
+      "id": "工作原理-内部",
+      "text": "工作原理（内部）",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-07-04"
+  },
+  "guide/performance": {
+   "group": "research",
+   "title": {
+    "en": "Performance & Caching",
+    "zh": "性能与缓存"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "caches",
+      "text": "Caches",
+      "level": 2
+     },
+     {
+      "id": "run-the-benchmark",
+      "text": "Run the benchmark",
+      "level": 2
+     },
+     {
+      "id": "representative-numbers",
+      "text": "Representative numbers",
+      "level": 2
+     },
+     {
+      "id": "notes",
+      "text": "Notes",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "缓存",
+      "text": "缓存",
+      "level": 2
+     },
+     {
+      "id": "运行基准",
+      "text": "运行基准",
+      "level": 2
+     },
+     {
+      "id": "代表性数值",
+      "text": "代表性数值",
+      "level": 2
+     },
+     {
+      "id": "说明",
+      "text": "说明",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-07-04"
+  },
+  "guide/rest-api": {
+   "group": "api",
+   "title": {
+    "en": "REST API",
+    "zh": "REST API"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "auth",
+      "text": "Auth",
+      "level": 2
+     },
+     {
+      "id": "account-endpoints",
+      "text": "Account endpoints",
+      "level": 3
+     },
+     {
+      "id": "endpoints",
+      "text": "Endpoints",
+      "level": 2
+     },
+     {
+      "id": "data-manager-admin-endpoints",
+      "text": "Data-manager (admin) endpoints",
+      "level": 3
+     },
+     {
+      "id": "evaluate-blocking",
+      "text": "Evaluate — blocking",
+      "level": 2
+     },
+     {
+      "id": "evaluate-sse-stream",
+      "text": "Evaluate — SSE stream",
+      "level": 2
+     },
+     {
+      "id": "portfolio-backtest",
+      "text": "Portfolio backtest",
+      "level": 2
+     },
+     {
+      "id": "error-schema",
+      "text": "Error schema",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "鉴权",
+      "text": "鉴权",
+      "level": 2
+     },
+     {
+      "id": "账户接口",
+      "text": "账户接口",
+      "level": 3
+     },
+     {
+      "id": "端点",
+      "text": "端点",
+      "level": 2
+     },
+     {
+      "id": "数据管理器-管理员-端点",
+      "text": "数据管理器（管理员）端点",
+      "level": 3
+     },
+     {
+      "id": "评估-阻塞式",
+      "text": "评估 —— 阻塞式",
+      "level": 2
+     },
+     {
+      "id": "评估-sse-流",
+      "text": "评估 —— SSE 流",
+      "level": 2
+     },
+     {
+      "id": "组合回测",
+      "text": "组合回测",
+      "level": 2
+     },
+     {
+      "id": "错误-schema",
+      "text": "错误 schema",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-11-02"
+  },
+  "guide/python-sdk": {
+   "group": "api",
+   "title": {
+    "en": "Python SDK",
+    "zh": "Python SDK"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "single-factor-evaluation",
+      "text": "Single-factor evaluation",
+      "level": 2
+     },
+     {
+      "id": "batch-evaluation",
+      "text": "Batch evaluation",
+      "level": 2
+     },
+     {
+      "id": "sessions-amortize-panel-load",
+      "text": "Sessions (amortize panel load)",
+      "level": 2
+     },
+     {
+      "id": "streaming-async",
+      "text": "Streaming (async)",
+      "level": 2
+     },
+     {
+      "id": "factor-library",
+      "text": "Factor library",
+      "level": 2
+     },
+     {
+      "id": "portfolio-backtest",
+      "text": "Portfolio backtest",
+      "level": 2
+     },
+     {
+      "id": "custom-config",
+      "text": "Custom config",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "单因子评估",
+      "text": "单因子评估",
+      "level": 2
+     },
+     {
+      "id": "批量评估",
+      "text": "批量评估",
+      "level": 2
+     },
+     {
+      "id": "会话-session-摊销面板加载",
+      "text": "会话（Session，摊销面板加载）",
+      "level": 2
+     },
+     {
+      "id": "流式-异步",
+      "text": "流式（异步）",
+      "level": 2
+     },
+     {
+      "id": "因子库",
+      "text": "因子库",
+      "level": 2
+     },
+     {
+      "id": "组合回测",
+      "text": "组合回测",
+      "level": 2
+     },
+     {
+      "id": "自定义配置",
+      "text": "自定义配置",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-07-04"
+  },
+  "guide/mcp-server": {
+   "group": "api",
+   "title": {
+    "en": "MCP Server",
+    "zh": "MCP Server"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "run",
+      "text": "Run",
+      "level": 2
+     },
+     {
+      "id": "tools-11",
+      "text": "Tools (11)",
+      "level": 2
+     },
+     {
+      "id": "claude-desktop-config",
+      "text": "Claude Desktop config",
+      "level": 2
+     },
+     {
+      "id": "typical-agent-loop",
+      "text": "Typical agent loop",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "运行",
+      "text": "运行",
+      "level": 2
+     },
+     {
+      "id": "工具-11-个",
+      "text": "工具（11 个）",
+      "level": 2
+     },
+     {
+      "id": "claude-desktop-配置",
+      "text": "Claude Desktop 配置",
+      "level": 2
+     },
+     {
+      "id": "典型的-agent-循环",
+      "text": "典型的 agent 循环",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-11-02"
+  },
+  "design/architecture": {
+   "group": "design",
+   "title": {
+    "en": "Assay — Full-Stack Architecture Design",
+    "zh": "Assay — 全栈架构设计"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "table-of-contents",
+      "text": "Table of Contents",
+      "level": 2
+     },
+     {
+      "id": "1-architecture-overview",
+      "text": "1. Architecture Overview",
+      "level": 2
+     },
+     {
+      "id": "1-1-design-philosophy",
+      "text": "1.1  Design philosophy",
+      "level": 3
+     },
+     {
+      "id": "1-2-layer-diagram",
+      "text": "1.2  Layer diagram",
+      "level": 3
+     },
+     {
+      "id": "1-3-surface-comparison",
+      "text": "1.3  Surface comparison",
+      "level": 3
+     },
+     {
+      "id": "2-core-engine-shared-backend",
+      "text": "2. Core Engine (Shared Backend)",
+      "level": 2
+     },
+     {
+      "id": "2-1-what-exists-today-the-engine-entry-point",
+      "text": "2.1  What exists today — the engine entry point ✅",
+      "level": 3
+     },
+     {
+      "id": "3-functional-python-api",
+      "text": "3. Functional Python API",
+      "level": 2
+     },
+     {
+      "id": "3-1-installation-and-initialization",
+      "text": "3.1  Installation and initialization 📋",
+      "level": 3
+     },
+     {
+      "id": "3-2-single-factor-evaluation",
+      "text": "3.2  Single factor evaluation",
+      "level": 3
+     },
+     {
+      "id": "3-3-batch-evaluation",
+      "text": "3.3  Batch evaluation",
+      "level": 3
+     },
+     {
+      "id": "3-4-session-context-amortize-setup-costs",
+      "text": "3.4  Session context (amortize setup costs)",
+      "level": 3
+     },
+     {
+      "id": "3-5-custom-python-factor-functions",
+      "text": "3.5  Custom Python factor functions",
+      "level": 3
+     },
+     {
+      "id": "3-6-factor-library-access",
+      "text": "3.6  Factor library access",
+      "level": 3
+     },
+     {
+      "id": "3-7-streaming-async",
+      "text": "3.7  Streaming (async)",
+      "level": 3
+     },
+     {
+      "id": "4-rest-api",
+      "text": "4. REST API",
+      "level": 2
+     },
+     {
+      "id": "4-1-base-url-and-versioning",
+      "text": "4.1  Base URL and versioning",
+      "level": 3
+     },
+     {
+      "id": "4-2-evaluation-endpoints",
+      "text": "4.2  Evaluation endpoints",
+      "level": 3
+     },
+     {
+      "id": "4-3-library-endpoints",
+      "text": "4.3  Library endpoints",
+      "level": 3
+     },
+     {
+      "id": "4-4-system-endpoints",
+      "text": "4.4  System endpoints",
+      "level": 3
+     },
+     {
+      "id": "4-5-fastapi-application-structure",
+      "text": "4.5  FastAPI application structure",
+      "level": 3
+     },
+     {
+      "id": "4-6-error-schema",
+      "text": "4.6  Error schema",
+      "level": 3
+     },
+     {
+      "id": "5-webui-frontend",
+      "text": "5. WebUI Frontend",
+      "level": 2
+     },
+     {
+      "id": "5-1-tech-stack",
+      "text": "5.1  Tech stack",
+      "level": 3
+     },
+     {
+      "id": "5-2-project-structure",
+      "text": "5.2  Project structure",
+      "level": 3
+     },
+     {
+      "id": "5-3-sse-streaming-hook",
+      "text": "5.3  SSE streaming hook",
+      "level": 3
+     },
+     {
+      "id": "5-4-monaco-assay-language-extension",
+      "text": "5.4  Monaco Assay language extension",
+      "level": 3
+     },
+     {
+      "id": "5-5-global-state",
+      "text": "5.5  Global state",
+      "level": 3
+     },
+     {
+      "id": "6-mcp-server-for-agents",
+      "text": "6. MCP Server for Agents",
+      "level": 2
+     },
+     {
+      "id": "6-1-protocol",
+      "text": "6.1  Protocol",
+      "level": 3
+     },
+     {
+      "id": "6-2-exposed-tools",
+      "text": "6.2  Exposed tools",
+      "level": 3
+     },
+     {
+      "id": "6-3-tool-definitions",
+      "text": "6.3  Tool definitions",
+      "level": 3
+     },
+     {
+      "id": "6-4-mcp-server-implementation",
+      "text": "6.4  MCP server implementation",
+      "level": 3
+     },
+     {
+      "id": "6-5-mcp-server-startup",
+      "text": "6.5  MCP server startup",
+      "level": 3
+     },
+     {
+      "id": "6-6-operator-schema-injection",
+      "text": "6.6  Operator schema injection",
+      "level": 3
+     },
+     {
+      "id": "6-7-typical-agent-loop",
+      "text": "6.7  Typical agent loop",
+      "level": 3
+     },
+     {
+      "id": "7-cross-cutting-concerns",
+      "text": "7. Cross-Cutting Concerns",
+      "level": 2
+     },
+     {
+      "id": "7-1-authentication-optional-api-key",
+      "text": "7.1  Authentication ✅ (optional API key)",
+      "level": 3
+     },
+     {
+      "id": "7-2-rate-limiting",
+      "text": "7.2  Rate limiting 📋",
+      "level": 3
+     },
+     {
+      "id": "7-3-observability",
+      "text": "7.3  Observability 📋",
+      "level": 3
+     },
+     {
+      "id": "7-4-configuration-today-env-vars-env",
+      "text": "7.4  Configuration ✅ (today: env vars + .env)",
+      "level": 3
+     },
+     {
+      "id": "8-deployment",
+      "text": "8. Deployment",
+      "level": 2
+     },
+     {
+      "id": "8-1a-local-development-today",
+      "text": "8.1a  Local development today ✅",
+      "level": 3
+     },
+     {
+      "id": "8-1b-planned-researcher-workflow",
+      "text": "8.1b  Planned researcher workflow 📋",
+      "level": 3
+     },
+     {
+      "id": "8-2-service-topology",
+      "text": "8.2  Service topology",
+      "level": 3
+     },
+     {
+      "id": "8-3-docker-compose",
+      "text": "8.3  Docker Compose 📋",
+      "level": 3
+     },
+     {
+      "id": "8-4-package-layout",
+      "text": "8.4  Package layout",
+      "level": 3
+     }
+    ],
+    "zh": [
+     {
+      "id": "目录",
+      "text": "目录",
+      "level": 2
+     },
+     {
+      "id": "1-架构概览",
+      "text": "1. 架构概览",
+      "level": 2
+     },
+     {
+      "id": "1-1-设计理念",
+      "text": "1.1  设计理念",
+      "level": 3
+     },
+     {
+      "id": "1-2-分层图",
+      "text": "1.2  分层图",
+      "level": 3
+     },
+     {
+      "id": "1-3-界面对比",
+      "text": "1.3  界面对比",
+      "level": 3
+     },
+     {
+      "id": "2-核心引擎-共享后端",
+      "text": "2. 核心引擎（共享后端）",
+      "level": 2
+     },
+     {
+      "id": "2-1-今日已有-引擎入口点",
+      "text": "2.1  今日已有——引擎入口点 ✅",
+      "level": 3
+     },
+     {
+      "id": "3-函数式-python-api",
+      "text": "3. 函数式 Python API",
+      "level": 2
+     },
+     {
+      "id": "3-1-安装与初始化",
+      "text": "3.1  安装与初始化 📋",
+      "level": 3
+     },
+     {
+      "id": "3-2-单因子评估",
+      "text": "3.2  单因子评估",
+      "level": 3
+     },
+     {
+      "id": "3-3-批量评估",
+      "text": "3.3  批量评估",
+      "level": 3
+     },
+     {
+      "id": "3-4-会话上下文-摊薄设置成本",
+      "text": "3.4  会话上下文（摊薄设置成本）",
+      "level": 3
+     },
+     {
+      "id": "3-5-自定义-python-因子函数",
+      "text": "3.5  自定义 Python 因子函数",
+      "level": 3
+     },
+     {
+      "id": "3-6-因子库访问",
+      "text": "3.6  因子库访问",
+      "level": 3
+     },
+     {
+      "id": "3-7-流式-异步",
+      "text": "3.7  流式（异步）",
+      "level": 3
+     },
+     {
+      "id": "4-rest-api",
+      "text": "4. REST API",
+      "level": 2
+     },
+     {
+      "id": "4-1-基础-url-与版本控制",
+      "text": "4.1  基础 URL 与版本控制",
+      "level": 3
+     },
+     {
+      "id": "4-2-评估端点",
+      "text": "4.2  评估端点",
+      "level": 3
+     },
+     {
+      "id": "4-3-库端点",
+      "text": "4.3  库端点",
+      "level": 3
+     },
+     {
+      "id": "4-4-系统端点",
+      "text": "4.4  系统端点",
+      "level": 3
+     },
+     {
+      "id": "4-5-fastapi-应用结构",
+      "text": "4.5  FastAPI 应用结构",
+      "level": 3
+     },
+     {
+      "id": "4-6-错误-schema",
+      "text": "4.6  错误 schema",
+      "level": 3
+     },
+     {
+      "id": "5-webui-前端",
+      "text": "5. WebUI 前端",
+      "level": 2
+     },
+     {
+      "id": "5-1-技术栈",
+      "text": "5.1  技术栈",
+      "level": 3
+     },
+     {
+      "id": "5-2-项目结构",
+      "text": "5.2  项目结构",
+      "level": 3
+     },
+     {
+      "id": "5-3-sse-流式-hook",
+      "text": "5.3  SSE 流式 hook",
+      "level": 3
+     },
+     {
+      "id": "5-4-monaco-assay-语言扩展",
+      "text": "5.4  Monaco Assay 语言扩展",
+      "level": 3
+     },
+     {
+      "id": "5-5-全局状态",
+      "text": "5.5  全局状态",
+      "level": 3
+     },
+     {
+      "id": "6-面向-agent-的-mcp-服务器",
+      "text": "6. 面向 Agent 的 MCP 服务器",
+      "level": 2
+     },
+     {
+      "id": "6-1-协议",
+      "text": "6.1  协议",
+      "level": 3
+     },
+     {
+      "id": "6-2-暴露的工具",
+      "text": "6.2  暴露的工具",
+      "level": 3
+     },
+     {
+      "id": "6-3-工具定义",
+      "text": "6.3  工具定义",
+      "level": 3
+     },
+     {
+      "id": "6-4-mcp-服务器实现",
+      "text": "6.4  MCP 服务器实现",
+      "level": 3
+     },
+     {
+      "id": "6-5-mcp-服务器启动",
+      "text": "6.5  MCP 服务器启动",
+      "level": 3
+     },
+     {
+      "id": "6-6-算子-schema-注入",
+      "text": "6.6  算子 schema 注入",
+      "level": 3
+     },
+     {
+      "id": "6-7-典型的-agent-循环",
+      "text": "6.7  典型的 agent 循环",
+      "level": 3
+     },
+     {
+      "id": "7-横切关注点",
+      "text": "7. 横切关注点",
+      "level": 2
+     },
+     {
+      "id": "7-1-认证-可选-api-key",
+      "text": "7.1  认证 ✅（可选 API key）",
+      "level": 3
+     },
+     {
+      "id": "7-2-限流",
+      "text": "7.2  限流 📋",
+      "level": 3
+     },
+     {
+      "id": "7-3-可观测性",
+      "text": "7.3  可观测性 📋",
+      "level": 3
+     },
+     {
+      "id": "7-4-配置-今日-环境变量-env",
+      "text": "7.4  配置 ✅（今日：环境变量 + .env）",
+      "level": 3
+     },
+     {
+      "id": "8-部署",
+      "text": "8. 部署",
+      "level": 2
+     },
+     {
+      "id": "8-1a-今日的本地开发",
+      "text": "8.1a  今日的本地开发 ✅",
+      "level": 3
+     },
+     {
+      "id": "8-1b-规划中的研究员工作流",
+      "text": "8.1b  规划中的研究员工作流 📋",
+      "level": 3
+     },
+     {
+      "id": "8-2-服务拓扑",
+      "text": "8.2  服务拓扑",
+      "level": 3
+     },
+     {
+      "id": "8-3-docker-compose",
+      "text": "8.3  Docker Compose 📋",
+      "level": 3
+     },
+     {
+      "id": "8-4-包布局",
+      "text": "8.4  包布局",
+      "level": 3
+     }
+    ]
+   },
+   "updated": "2026-11-02"
+  },
+  "design/engineering": {
+   "group": "design",
+   "title": {
+    "en": "ASSAY — Engineering Documentation",
+    "zh": "ASSAY — 工程文档"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "a-high-performance-factor-backtesting-engine-for-agent-driven-alpha-mining",
+      "text": "A High-Performance Factor Backtesting Engine for Agent-Driven Alpha Mining",
+      "level": 3
+     },
+     {
+      "id": "table-of-contents",
+      "text": "Table of Contents",
+      "level": 2
+     },
+     {
+      "id": "1-introduction",
+      "text": "1. Introduction",
+      "level": 2
+     },
+     {
+      "id": "1-1-motivation",
+      "text": "1.1  Motivation",
+      "level": 3
+     },
+     {
+      "id": "1-2-design-goals",
+      "text": "1.2  Design Goals",
+      "level": 3
+     },
+     {
+      "id": "1-3-scope-of-this-document",
+      "text": "1.3  Scope of This Document",
+      "level": 3
+     },
+     {
+      "id": "2-system-architecture",
+      "text": "2. System Architecture",
+      "level": 2
+     },
+     {
+      "id": "2-1-layer-overview",
+      "text": "2.1  Layer Overview",
+      "level": 3
+     },
+     {
+      "id": "2-2-data-flow",
+      "text": "2.2  Data Flow",
+      "level": 3
+     },
+     {
+      "id": "2-3-key-design-decisions",
+      "text": "2.3  Key Design Decisions",
+      "level": 3
+     },
+     {
+      "id": "3-data-layer",
+      "text": "3. Data Layer",
+      "level": 2
+     },
+     {
+      "id": "3-1-massive-integration-us-equities",
+      "text": "3.1  Massive Integration (US Equities)",
+      "level": 3
+     },
+     {
+      "id": "3-2-storage-schema",
+      "text": "3.2  Storage Schema",
+      "level": 3
+     },
+     {
+      "id": "3-3-corporate-action-handling",
+      "text": "3.3  Corporate Action Handling",
+      "level": 3
+     },
+     {
+      "id": "3-4-point-in-time-query-interface",
+      "text": "3.4  Point-in-Time Query Interface",
+      "level": 3
+     },
+     {
+      "id": "3-5-eventscheduler",
+      "text": "3.5  EventScheduler",
+      "level": 3
+     },
+     {
+      "id": "4-factor-execution-engine",
+      "text": "4. Factor Execution Engine",
+      "level": 2
+     },
+     {
+      "id": "4-1-dual-syntax-parser",
+      "text": "4.1  Dual-Syntax Parser",
+      "level": 3
+     },
+     {
+      "id": "4-2-operator-registry",
+      "text": "4.2  Operator Registry",
+      "level": 3
+     },
+     {
+      "id": "4-3-dag-construction-and-cse",
+      "text": "4.3  DAG Construction and CSE",
+      "level": 3
+     },
+     {
+      "id": "4-4-execution-planning",
+      "text": "4.4  Execution Planning",
+      "level": 3
+     },
+     {
+      "id": "4-5-parallel-execution",
+      "text": "4.5  Parallel Execution",
+      "level": 3
+     },
+     {
+      "id": "5-cache-system",
+      "text": "5. Cache System",
+      "level": 2
+     },
+     {
+      "id": "5-1-architecture-overview",
+      "text": "5.1  Architecture Overview",
+      "level": 3
+     },
+     {
+      "id": "5-2-l1-operator-cache",
+      "text": "5.2  L1 Operator Cache",
+      "level": 3
+     },
+     {
+      "id": "5-3-incremental-o-1-daily-update",
+      "text": "5.3  Incremental O(1) Daily Update",
+      "level": 3
+     },
+     {
+      "id": "5-4-l2-factor-string-cache",
+      "text": "5.4  L2 Factor String Cache",
+      "level": 3
+     },
+     {
+      "id": "5-5-cache-invalidation-policy",
+      "text": "5.5  Cache Invalidation Policy",
+      "level": 3
+     },
+     {
+      "id": "6-backtest-and-evaluation-layer",
+      "text": "6. Backtest and Evaluation Layer",
+      "level": 2
+     },
+     {
+      "id": "6-1-forward-returns",
+      "text": "6.1  Forward Returns",
+      "level": 3
+     },
+     {
+      "id": "6-2-ic-and-rankic-computation",
+      "text": "6.2  IC and RankIC Computation",
+      "level": 3
+     },
+     {
+      "id": "6-3-decay-analysis",
+      "text": "6.3  Decay Analysis",
+      "level": 3
+     },
+     {
+      "id": "6-4-batch-evaluation",
+      "text": "6.4  Batch Evaluation",
+      "level": 3
+     },
+     {
+      "id": "6-5-cost-model",
+      "text": "6.5  Cost Model",
+      "level": 3
+     },
+     {
+      "id": "7-user-interface",
+      "text": "7. User Interface",
+      "level": 2
+     },
+     {
+      "id": "7-1-python-sdk",
+      "text": "7.1  Python SDK",
+      "level": 3
+     },
+     {
+      "id": "7-2-factorreport-schema",
+      "text": "7.2  FactorReport Schema",
+      "level": 3
+     },
+     {
+      "id": "7-3-agent-api",
+      "text": "7.3  Agent API",
+      "level": 3
+     },
+     {
+      "id": "7-4-cli",
+      "text": "7.4  CLI",
+      "level": 3
+     },
+     {
+      "id": "8-performance",
+      "text": "8. Performance",
+      "level": 2
+     },
+     {
+      "id": "8-1-benchmark-configuration",
+      "text": "8.1  Benchmark Configuration",
+      "level": 3
+     },
+     {
+      "id": "8-2-measured-performance-v0-1-cold-run",
+      "text": "8.2  Measured Performance (v0.1, cold run)",
+      "level": 3
+     },
+     {
+      "id": "8-3-hot-path-breakdown",
+      "text": "8.3  Hot Path Breakdown",
+      "level": 3
+     },
+     {
+      "id": "8-4-planned-optimizations",
+      "text": "8.4  Planned Optimizations",
+      "level": 3
+     },
+     {
+      "id": "8-5-theoretical-performance-bounds",
+      "text": "8.5  Theoretical Performance Bounds",
+      "level": 3
+     },
+     {
+      "id": "9-implementation-roadmap",
+      "text": "9. Implementation Roadmap",
+      "level": 2
+     },
+     {
+      "id": "10-appendix",
+      "text": "10. Appendix",
+      "level": 2
+     },
+     {
+      "id": "a-operator-quick-reference",
+      "text": "A.  Operator Quick Reference",
+      "level": 3
+     },
+     {
+      "id": "b-qlib-expression-mapping",
+      "text": "B.  qlib Expression Mapping",
+      "level": 3
+     }
+    ],
+    "zh": [
+     {
+      "id": "面向-agent-驱动的-alpha-挖掘的高性能因子回测引擎",
+      "text": "面向 Agent 驱动的 Alpha 挖掘的高性能因子回测引擎",
+      "level": 3
+     },
+     {
+      "id": "目录",
+      "text": "目录",
+      "level": 2
+     },
+     {
+      "id": "1-引言",
+      "text": "1. 引言",
+      "level": 2
+     },
+     {
+      "id": "1-1-动机",
+      "text": "1.1  动机",
+      "level": 3
+     },
+     {
+      "id": "1-2-设计目标",
+      "text": "1.2  设计目标",
+      "level": 3
+     },
+     {
+      "id": "1-3-本文档的范围",
+      "text": "1.3  本文档的范围",
+      "level": 3
+     },
+     {
+      "id": "2-系统架构",
+      "text": "2. 系统架构",
+      "level": 2
+     },
+     {
+      "id": "2-1-分层概览",
+      "text": "2.1  分层概览",
+      "level": 3
+     },
+     {
+      "id": "2-2-数据流",
+      "text": "2.2  数据流",
+      "level": 3
+     },
+     {
+      "id": "2-3-关键设计决策",
+      "text": "2.3  关键设计决策",
+      "level": 3
+     },
+     {
+      "id": "3-数据层",
+      "text": "3. 数据层",
+      "level": 2
+     },
+     {
+      "id": "3-1-massive-集成-美股",
+      "text": "3.1  Massive 集成（美股）",
+      "level": 3
+     },
+     {
+      "id": "3-2-存储模式",
+      "text": "3.2  存储模式",
+      "level": 3
+     },
+     {
+      "id": "3-3-公司行为处理",
+      "text": "3.3  公司行为处理",
+      "level": 3
+     },
+     {
+      "id": "3-4-点对点-pit-查询接口",
+      "text": "3.4  点对点（PIT）查询接口",
+      "level": 3
+     },
+     {
+      "id": "3-5-eventscheduler",
+      "text": "3.5  EventScheduler",
+      "level": 3
+     },
+     {
+      "id": "4-因子执行引擎",
+      "text": "4. 因子执行引擎",
+      "level": 2
+     },
+     {
+      "id": "4-1-双语法解析器",
+      "text": "4.1  双语法解析器",
+      "level": 3
+     },
+     {
+      "id": "4-2-算子注册表",
+      "text": "4.2  算子注册表",
+      "level": 3
+     },
+     {
+      "id": "4-3-dag-构建与-cse",
+      "text": "4.3  DAG 构建与 CSE",
+      "level": 3
+     },
+     {
+      "id": "4-4-执行规划",
+      "text": "4.4  执行规划",
+      "level": 3
+     },
+     {
+      "id": "4-5-并行执行",
+      "text": "4.5  并行执行",
+      "level": 3
+     },
+     {
+      "id": "5-缓存系统",
+      "text": "5. 缓存系统",
+      "level": 2
+     },
+     {
+      "id": "5-1-架构概览",
+      "text": "5.1  架构概览",
+      "level": 3
+     },
+     {
+      "id": "5-2-l1-算子缓存",
+      "text": "5.2  L1 算子缓存",
+      "level": 3
+     },
+     {
+      "id": "5-3-增量-o-1-日度更新",
+      "text": "5.3  增量 O(1) 日度更新",
+      "level": 3
+     },
+     {
+      "id": "5-4-l2-因子字符串缓存",
+      "text": "5.4  L2 因子字符串缓存",
+      "level": 3
+     },
+     {
+      "id": "5-5-缓存失效策略",
+      "text": "5.5  缓存失效策略",
+      "level": 3
+     },
+     {
+      "id": "6-回测与评估层",
+      "text": "6. 回测与评估层",
+      "level": 2
+     },
+     {
+      "id": "6-1-前向收益",
+      "text": "6.1  前向收益",
+      "level": 3
+     },
+     {
+      "id": "6-2-ic-与-rankic-计算",
+      "text": "6.2  IC 与 RankIC 计算",
+      "level": 3
+     },
+     {
+      "id": "6-3-衰减分析",
+      "text": "6.3  衰减分析",
+      "level": 3
+     },
+     {
+      "id": "6-4-批量评估",
+      "text": "6.4  批量评估",
+      "level": 3
+     },
+     {
+      "id": "6-5-成本模型",
+      "text": "6.5  成本模型",
+      "level": 3
+     },
+     {
+      "id": "7-用户界面",
+      "text": "7. 用户界面",
+      "level": 2
+     },
+     {
+      "id": "7-1-python-sdk",
+      "text": "7.1  Python SDK",
+      "level": 3
+     },
+     {
+      "id": "7-2-factorreport-模式",
+      "text": "7.2  FactorReport 模式",
+      "level": 3
+     },
+     {
+      "id": "7-3-agent-api",
+      "text": "7.3  Agent API",
+      "level": 3
+     },
+     {
+      "id": "7-4-cli",
+      "text": "7.4  CLI",
+      "level": 3
+     },
+     {
+      "id": "8-性能",
+      "text": "8. 性能",
+      "level": 2
+     },
+     {
+      "id": "8-1-基准测试配置",
+      "text": "8.1  基准测试配置",
+      "level": 3
+     },
+     {
+      "id": "8-2-实测性能-v0-1-冷运行",
+      "text": "8.2  实测性能（v0.1,冷运行）",
+      "level": 3
+     },
+     {
+      "id": "8-3-热路径拆解",
+      "text": "8.3  热路径拆解",
+      "level": 3
+     },
+     {
+      "id": "8-4-计划中的优化",
+      "text": "8.4  计划中的优化",
+      "level": 3
+     },
+     {
+      "id": "8-5-理论性能界限",
+      "text": "8.5  理论性能界限",
+      "level": 3
+     },
+     {
+      "id": "9-实现路线图",
+      "text": "9. 实现路线图",
+      "level": 2
+     },
+     {
+      "id": "10-附录",
+      "text": "10. 附录",
+      "level": 2
+     },
+     {
+      "id": "a-算子速查表",
+      "text": "A.  算子速查表",
+      "level": 3
+     },
+     {
+      "id": "b-qlib-表达式映射",
+      "text": "B.  qlib 表达式映射",
+      "level": 3
+     }
+    ]
+   },
+   "updated": "2026-11-02"
+  },
+  "design/portfolio-backtest": {
+   "group": "design",
+   "title": {
+    "en": "Assay — Portfolio Backtest Design",
+    "zh": "Assay — 组合回测设计"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "1-overview",
+      "text": "1. Overview",
+      "level": 2
+     },
+     {
+      "id": "1-1-pipeline",
+      "text": "1.1 Pipeline",
+      "level": 3
+     },
+     {
+      "id": "2-configuration",
+      "text": "2. Configuration",
+      "level": 2
+     },
+     {
+      "id": "3-rebalance-algorithms",
+      "text": "3. Rebalance algorithms",
+      "level": 2
+     },
+     {
+      "id": "4-performance-metrics",
+      "text": "4. Performance metrics",
+      "level": 2
+     },
+     {
+      "id": "5-portfolioreport-schema",
+      "text": "5. PortfolioReport schema",
+      "level": 2
+     },
+     {
+      "id": "6-market-comparison",
+      "text": "6. Market comparison",
+      "level": 2
+     },
+     {
+      "id": "7-correctness-notes",
+      "text": "7. Correctness notes",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "1-概述",
+      "text": "1. 概述",
+      "level": 2
+     },
+     {
+      "id": "1-1-流水线",
+      "text": "1.1 流水线",
+      "level": 3
+     },
+     {
+      "id": "2-配置",
+      "text": "2. 配置",
+      "level": 2
+     },
+     {
+      "id": "3-再平衡算法",
+      "text": "3. 再平衡算法",
+      "level": 2
+     },
+     {
+      "id": "4-绩效指标",
+      "text": "4. 绩效指标",
+      "level": 2
+     },
+     {
+      "id": "5-portfolioreport-schema",
+      "text": "5. PortfolioReport schema",
+      "level": 2
+     },
+     {
+      "id": "6-市场对比",
+      "text": "6. 市场对比",
+      "level": 2
+     },
+     {
+      "id": "7-正确性说明",
+      "text": "7. 正确性说明",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-11-02"
+  },
+  "design/minute-backtesting": {
+   "group": "design",
+   "title": {
+    "en": "Minute-Level (Intraday) Backtesting — Engineering Design (FINAL)",
+    "zh": "分钟级（日内）回测 — 工程设计（最终版）"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "1-overview-goals",
+      "text": "1. Overview & goals",
+      "level": 2
+     },
+     {
+      "id": "goals",
+      "text": "Goals",
+      "level": 3
+     },
+     {
+      "id": "synthesis-decision",
+      "text": "Synthesis decision",
+      "level": 3
+     },
+     {
+      "id": "2-data-model-storage",
+      "text": "2. Data model & storage",
+      "level": 2
+     },
+     {
+      "id": "2-1-the-frequency-value-object-src-assay-data-frequency-py-new",
+      "text": "2.1 The Frequency value object — src/assay/data/frequency.py (new)",
+      "level": 3
+     },
+     {
+      "id": "2-2-schemas-src-assay-data-schemas-py",
+      "text": "2.2 Schemas — src/assay/data/schemas.py",
+      "level": 3
+     },
+     {
+      "id": "2-3-partition-layout",
+      "text": "2.3 Partition layout",
+      "level": 3
+     },
+     {
+      "id": "2-4-ingestion-of-minute_aggs",
+      "text": "2.4 Ingestion of minute_aggs",
+      "level": 3
+     },
+     {
+      "id": "3-time-axis-calendar",
+      "text": "3. Time axis & calendar",
+      "level": 2
+     },
+     {
+      "id": "3-1-bar-grid",
+      "text": "3.1 Bar grid",
+      "level": 3
+     },
+     {
+      "id": "3-2-calendar-additions-src-assay-data-calendar-py",
+      "text": "3.2 Calendar additions — src/assay/data/calendar.py",
+      "level": 3
+     },
+     {
+      "id": "3-3-periods_per_year-annualization",
+      "text": "3.3 periods_per_year (annualization)",
+      "level": 3
+     },
+     {
+      "id": "4-point-in-time-semantics-intraday",
+      "text": "4. Point-in-time semantics intraday",
+      "level": 2
+     },
+     {
+      "id": "4-1-per-bar-knowledge-time",
+      "text": "4.1 Per-bar knowledge time",
+      "level": 3
+     },
+     {
+      "id": "4-2-get_panel-widening-intraday-as_of-must-dominate-end",
+      "text": "4.2 get_panel widening — intraday as_of must dominate end",
+      "level": 3
+     },
+     {
+      "id": "4-3-resampling-preserves-pit-lazy-session-anchored-calendar-complete",
+      "text": "4.3 Resampling preserves PIT — lazy, session-anchored, calendar-complete",
+      "level": 3
+     },
+     {
+      "id": "4-4-corp-actions-universe-eod-knowability-cut-resolves-the-critical-look-ahead",
+      "text": "4.4 Corp actions & universe — EOD-knowability cut (resolves the CRITICAL look-ahead)",
+      "level": 3
+     },
+     {
+      "id": "5-engine-changes",
+      "text": "5. Engine changes",
+      "level": 2
+     },
+     {
+      "id": "5-1-time-axis-name-dtype-the-one-hard-corruption-bug",
+      "text": "5.1 Time-axis name/dtype (the one hard corruption bug)",
+      "level": 3
+     },
+     {
+      "id": "5-2-overnight-gap-session-boundary-handling-reconciled-with-carry-over",
+      "text": "5.2 Overnight-gap / session-boundary handling, reconciled with carry-over",
+      "level": 3
+     },
+     {
+      "id": "5-3-window-units-runtime-session-aware-not-a-parse-time-scalar-resolves-the-half-day-finding",
+      "text": "5.3 Window units — runtime session-aware, not a parse-time scalar (resolves the half-day finding)",
+      "level": 3
+     },
+     {
+      "id": "5-4-cross-sectional-ops-vectorize-cs_rank-the-real-alpha-101-hotspot",
+      "text": "5.4 Cross-sectional ops — vectorize cs_rank (the real Alpha-101 hotspot)",
+      "level": 3
+     },
+     {
+      "id": "5-5-diagnostics",
+      "text": "5.5 Diagnostics",
+      "level": 3
+     },
+     {
+      "id": "6-forward-returns-evaluation-at-minute-horizons",
+      "text": "6. Forward returns & evaluation at minute horizons",
+      "level": 2
+     },
+     {
+      "id": "6-1-forward_returns-bar-triple-masking-explicit-policy-enum-resolves-the-masking-bypass-finding",
+      "text": "6.1 forward_returns — bar triple masking + explicit policy enum (resolves the masking-bypass finding)",
+      "level": 3
+     },
+     {
+      "id": "6-2-units-at-the-service-boundary",
+      "text": "6.2 Units at the service boundary",
+      "level": 3
+     },
+     {
+      "id": "7-portfolio-backtest-intraday",
+      "text": "7. Portfolio backtest intraday",
+      "level": 2
+     },
+     {
+      "id": "7-1-annualization-default-aggregate-to-daily",
+      "text": "7.1 Annualization (default = aggregate to daily)",
+      "level": 3
+     },
+     {
+      "id": "7-2-rebalance-scheduler-rebalance-py",
+      "text": "7.2 Rebalance scheduler (rebalance.py)",
+      "level": 3
+     },
+     {
+      "id": "7-3-execution-costs-accounting-dual-offset-field-with-explicit-precedence-resolves-the-offset-finding",
+      "text": "7.3 Execution, costs, accounting — dual offset field with explicit precedence (resolves the offset finding)",
+      "level": 3
+     },
+     {
+      "id": "8-scale-performance",
+      "text": "8. Scale & performance",
+      "level": 2
+     },
+     {
+      "id": "8-1-io",
+      "text": "8.1 IO",
+      "level": 3
+     },
+     {
+      "id": "8-2-memory-the-window-tensor-chunked-evaluator",
+      "text": "8.2 Memory — the window tensor + chunked evaluator",
+      "level": 3
+     },
+     {
+      "id": "8-3-caches",
+      "text": "8.3 Caches",
+      "level": 3
+     },
+     {
+      "id": "8-4-memory-budget-subsystem-net-new-its-own-milestone-resolves-the-vaporware-critical",
+      "text": "8.4 Memory-budget subsystem (NET-NEW — its own milestone, resolves the \"vaporware\" CRITICAL)",
+      "level": 3
+     },
+     {
+      "id": "8-5-wall-clock-gate",
+      "text": "8.5 Wall-clock gate",
+      "level": 3
+     },
+     {
+      "id": "9-api-sdk-cli-config-surface",
+      "text": "9. API / SDK / CLI / config surface",
+      "level": 2
+     },
+     {
+      "id": "10-backward-compatibility-migration",
+      "text": "10. Backward compatibility & migration",
+      "level": 2
+     },
+     {
+      "id": "11-phased-implementation-plan",
+      "text": "11. Phased implementation plan",
+      "level": 2
+     },
+     {
+      "id": "12-open-questions-residual-risks",
+      "text": "12. Open questions & residual risks",
+      "level": 2
+     },
+     {
+      "id": "resolved-review-issues",
+      "text": "Resolved review issues",
+      "level": 2
+     },
+     {
+      "id": "recommended-first-milestone",
+      "text": "Recommended first milestone",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "1-概述与目标",
+      "text": "1. 概述与目标",
+      "level": 2
+     },
+     {
+      "id": "目标",
+      "text": "目标",
+      "level": 3
+     },
+     {
+      "id": "综合决策",
+      "text": "综合决策",
+      "level": 3
+     },
+     {
+      "id": "2-数据模型与存储",
+      "text": "2. 数据模型与存储",
+      "level": 2
+     },
+     {
+      "id": "2-1-frequency-值对象-src-assay-data-frequency-py-新增",
+      "text": "2.1 Frequency 值对象 — src/assay/data/frequency.py（新增）",
+      "level": 3
+     },
+     {
+      "id": "2-2-schema-src-assay-data-schemas-py",
+      "text": "2.2 Schema — src/assay/data/schemas.py",
+      "level": 3
+     },
+     {
+      "id": "2-3-分区布局",
+      "text": "2.3 分区布局",
+      "level": 3
+     },
+     {
+      "id": "2-4-minute_aggs-的摄取",
+      "text": "2.4 minute_aggs 的摄取",
+      "level": 3
+     },
+     {
+      "id": "3-时间轴与日历",
+      "text": "3. 时间轴与日历",
+      "level": 2
+     },
+     {
+      "id": "3-1-bar-网格",
+      "text": "3.1 Bar 网格",
+      "level": 3
+     },
+     {
+      "id": "3-2-日历新增-src-assay-data-calendar-py",
+      "text": "3.2 日历新增 — src/assay/data/calendar.py",
+      "level": 3
+     },
+     {
+      "id": "3-3-periods_per_year-年化",
+      "text": "3.3 periods_per_year（年化）",
+      "level": 3
+     },
+     {
+      "id": "4-日内点对点语义",
+      "text": "4. 日内点对点语义",
+      "level": 2
+     },
+     {
+      "id": "4-1-逐-bar-的知识时刻",
+      "text": "4.1 逐 bar 的知识时刻",
+      "level": 3
+     },
+     {
+      "id": "4-2-get_panel-拓宽-日内-as_of-必须支配-end",
+      "text": "4.2 get_panel 拓宽 — 日内 as_of 必须支配 end",
+      "level": 3
+     },
+     {
+      "id": "4-3-重采样保持-pit-惰性-以时段为锚-日历完整",
+      "text": "4.3 重采样保持 PIT — 惰性、以时段为锚、日历完整",
+      "level": 3
+     },
+     {
+      "id": "4-4-公司行为与股票池-日终可知性切割-解决了那个-critical-前视问题",
+      "text": "4.4 公司行为与股票池 — 日终可知性切割（解决了那个 CRITICAL 前视问题）",
+      "level": 3
+     },
+     {
+      "id": "5-引擎改动",
+      "text": "5. 引擎改动",
+      "level": 2
+     },
+     {
+      "id": "5-1-时间轴名称-dtype-那一个硬性数据损坏缺陷",
+      "text": "5.1 时间轴名称/dtype（那一个硬性数据损坏缺陷）",
+      "level": 3
+     },
+     {
+      "id": "5-2-隔夜跳空-时段边界处理-与结转协调一致",
+      "text": "5.2 隔夜跳空 / 时段边界处理，与结转协调一致",
+      "level": 3
+     },
+     {
+      "id": "5-3-窗口单位-运行时感知时段-而非解析期标量-解决了半日交易问题",
+      "text": "5.3 窗口单位 — 运行时感知时段，而非解析期标量（解决了半日交易问题）",
+      "level": 3
+     },
+     {
+      "id": "5-4-截面算子-向量化-cs_rank-真正的-alpha-101-热点",
+      "text": "5.4 截面算子 — 向量化 cs_rank（真正的 Alpha-101 热点）",
+      "level": 3
+     },
+     {
+      "id": "5-5-诊断",
+      "text": "5.5 诊断",
+      "level": 3
+     },
+     {
+      "id": "6-分钟前瞻期的前瞻收益与评估",
+      "text": "6. 分钟前瞻期的前瞻收益与评估",
+      "level": 2
+     },
+     {
+      "id": "6-1-forward_returns-bar-三元组掩码-显式策略枚举-解决了掩码绕过问题",
+      "text": "6.1 forward_returns — bar 三元组掩码 + 显式策略枚举（解决了掩码绕过问题）",
+      "level": 3
+     },
+     {
+      "id": "6-2-服务边界处的单位",
+      "text": "6.2 服务边界处的单位",
+      "level": 3
+     },
+     {
+      "id": "7-日内组合回测",
+      "text": "7. 日内组合回测",
+      "level": 2
+     },
+     {
+      "id": "7-1-年化-默认-聚合到日频",
+      "text": "7.1 年化（默认 = 聚合到日频）",
+      "level": 3
+     },
+     {
+      "id": "7-2-再平衡调度器-rebalance-py",
+      "text": "7.2 再平衡调度器（rebalance.py）",
+      "level": 3
+     },
+     {
+      "id": "7-3-执行-成本-账务-带显式优先级的双偏移字段-解决了偏移问题",
+      "text": "7.3 执行、成本、账务 — 带显式优先级的双偏移字段（解决了偏移问题）",
+      "level": 3
+     },
+     {
+      "id": "8-规模与性能",
+      "text": "8. 规模与性能",
+      "level": 2
+     },
+     {
+      "id": "8-1-io",
+      "text": "8.1 IO",
+      "level": 3
+     },
+     {
+      "id": "8-2-内存-窗口张量-分块求值器",
+      "text": "8.2 内存 — 窗口张量 + 分块求值器",
+      "level": 3
+     },
+     {
+      "id": "8-3-缓存",
+      "text": "8.3 缓存",
+      "level": 3
+     },
+     {
+      "id": "8-4-内存预算子系统-全新-独立的里程碑-解决了那个-空气产品-critical",
+      "text": "8.4 内存预算子系统（全新——独立的里程碑，解决了那个“空气产品”CRITICAL）",
+      "level": 3
+     },
+     {
+      "id": "8-5-挂钟门",
+      "text": "8.5 挂钟门",
+      "level": 3
+     },
+     {
+      "id": "9-api-sdk-cli-config-表面",
+      "text": "9. API / SDK / CLI / config 表面",
+      "level": 2
+     },
+     {
+      "id": "10-向后兼容与迁移",
+      "text": "10. 向后兼容与迁移",
+      "level": 2
+     },
+     {
+      "id": "11-分阶段实施计划",
+      "text": "11. 分阶段实施计划",
+      "level": 2
+     },
+     {
+      "id": "12-开放问题与残余风险",
+      "text": "12. 开放问题与残余风险",
+      "level": 2
+     },
+     {
+      "id": "已解决的评审问题",
+      "text": "已解决的评审问题",
+      "level": 2
+     },
+     {
+      "id": "推荐的首个里程碑",
+      "text": "推荐的首个里程碑",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-07-04"
+  },
+  "design/operator-compatibility": {
+   "group": "design",
+   "title": {
+    "en": "Assay Operator Compatibility Table",
+    "zh": "Assay 算子兼容对照表"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "alpha-101-qlib-assay-native-三方对照",
+      "text": "Alpha 101 · qlib · Assay Native — 三方对照",
+      "level": 2
+     },
+     {
+      "id": "一-时序算子-time-series-operators",
+      "text": "一、时序算子（Time-Series Operators）",
+      "level": 2
+     },
+     {
+      "id": "二-截面算子-cross-sectional-operators",
+      "text": "二、截面算子（Cross-Sectional Operators）",
+      "level": 2
+     },
+     {
+      "id": "三-数学-逐元素算子-mathematical-operators",
+      "text": "三、数学 / 逐元素算子（Mathematical Operators）",
+      "level": 2
+     },
+     {
+      "id": "四-特殊字段-预计算量-built-in-fields",
+      "text": "四、特殊字段 / 预计算量（Built-in Fields）",
+      "level": 2
+     },
+     {
+      "id": "五-特殊语法兼容说明",
+      "text": "五、特殊语法兼容说明",
+      "level": 2
+     },
+     {
+      "id": "5-1-adv-d-的处理",
+      "text": "5.1  adv{d} 的处理",
+      "level": 3
+     },
+     {
+      "id": "5-2-signedpower-vs-pow",
+      "text": "5.2  SignedPower vs pow",
+      "level": 3
+     },
+     {
+      "id": "5-3-ts_rank-vs-rank",
+      "text": "5.3  Ts_Rank vs rank",
+      "level": 3
+     },
+     {
+      "id": "5-4-indneutralize-的-indclass-参数",
+      "text": "5.4  IndNeutralize 的 IndClass 参数",
+      "level": 3
+     },
+     {
+      "id": "5-5-qlib-前缀字段",
+      "text": "5.5  qlib $ 前缀字段",
+      "level": 3
+     },
+     {
+      "id": "5-6-中缀算子-与",
+      "text": "5.6  中缀算子 ^ 与 ||",
+      "level": 3
+     },
+     {
+      "id": "六-alpha-101-覆盖情况验证",
+      "text": "六、Alpha 101 覆盖情况验证",
+      "level": 2
+     },
+     {
+      "id": "alpha-1",
+      "text": "Alpha#1",
+      "level": 3
+     },
+     {
+      "id": "alpha-7",
+      "text": "Alpha#7",
+      "level": 3
+     },
+     {
+      "id": "alpha-58-窗口按论文-floor-取整-3-92795-3-7-89291-7-5-50322-5",
+      "text": "Alpha#58  （窗口按论文 floor 取整：3.92795→3, 7.89291→7, 5.50322→5）",
+      "level": 3
+     },
+     {
+      "id": "alpha-98-floor-4-58418-4-20-8187-20-8-62571-8-6-95668-6",
+      "text": "Alpha#98  （floor：4.58418→4, 20.8187→20, 8.62571→8, 6.95668→6）",
+      "level": 3
+     },
+     {
+      "id": "七-不支持-有歧义的情况",
+      "text": "七、不支持 / 有歧义的情况",
+      "level": 2
+     },
+     {
+      "id": "八-实现状态-implementation-status",
+      "text": "八、实现状态（Implementation Status）",
+      "level": 2
+     },
+     {
+      "id": "自定义算子-custom-operators",
+      "text": "自定义算子（Custom Operators）",
+      "level": 3
+     }
+    ],
+    "zh": [
+     {
+      "id": "alpha-101-qlib-assay-原生-三方对照",
+      "text": "Alpha 101 · qlib · Assay 原生 — 三方对照",
+      "level": 2
+     },
+     {
+      "id": "一-时序算子-time-series-operators",
+      "text": "一、时序算子（Time-Series Operators）",
+      "level": 2
+     },
+     {
+      "id": "二-截面算子-cross-sectional-operators",
+      "text": "二、截面算子（Cross-Sectional Operators）",
+      "level": 2
+     },
+     {
+      "id": "三-数学-逐元素算子-mathematical-operators",
+      "text": "三、数学 / 逐元素算子（Mathematical Operators）",
+      "level": 2
+     },
+     {
+      "id": "四-特殊字段-预计算量-built-in-fields",
+      "text": "四、特殊字段 / 预计算量（Built-in Fields）",
+      "level": 2
+     },
+     {
+      "id": "五-特殊语法兼容说明",
+      "text": "五、特殊语法兼容说明",
+      "level": 2
+     },
+     {
+      "id": "5-1-adv-d-的处理",
+      "text": "5.1  adv{d} 的处理",
+      "level": 3
+     },
+     {
+      "id": "5-2-signedpower-vs-pow",
+      "text": "5.2  SignedPower vs pow",
+      "level": 3
+     },
+     {
+      "id": "5-3-ts_rank-vs-rank",
+      "text": "5.3  Ts_Rank vs rank",
+      "level": 3
+     },
+     {
+      "id": "5-4-indneutralize-的-indclass-参数",
+      "text": "5.4  IndNeutralize 的 IndClass 参数",
+      "level": 3
+     },
+     {
+      "id": "5-5-qlib-前缀字段",
+      "text": "5.5  qlib $ 前缀字段",
+      "level": 3
+     },
+     {
+      "id": "5-6-中缀算子-与",
+      "text": "5.6  中缀算子 ^ 与 ||",
+      "level": 3
+     },
+     {
+      "id": "六-alpha-101-覆盖情况验证",
+      "text": "六、Alpha 101 覆盖情况验证",
+      "level": 2
+     },
+     {
+      "id": "alpha-1",
+      "text": "Alpha#1",
+      "level": 3
+     },
+     {
+      "id": "alpha-7",
+      "text": "Alpha#7",
+      "level": 3
+     },
+     {
+      "id": "alpha-58-窗口按论文-floor-取整-3-92795-3-7-89291-7-5-50322-5",
+      "text": "Alpha#58  （窗口按论文 floor 取整：3.92795→3, 7.89291→7, 5.50322→5）",
+      "level": 3
+     },
+     {
+      "id": "alpha-98-floor-4-58418-4-20-8187-20-8-62571-8-6-95668-6",
+      "text": "Alpha#98  （floor：4.58418→4, 20.8187→20, 8.62571→8, 6.95668→6）",
+      "level": 3
+     },
+     {
+      "id": "七-不支持-有歧义的情况",
+      "text": "七、不支持 / 有歧义的情况",
+      "level": 2
+     },
+     {
+      "id": "八-实现状态-implementation-status",
+      "text": "八、实现状态（Implementation Status）",
+      "level": 2
+     },
+     {
+      "id": "自定义算子-custom-operators",
+      "text": "自定义算子（Custom Operators）",
+      "level": 3
+     }
+    ]
+   },
+   "updated": "2026-07-04"
+  },
+  "design/webui": {
+   "group": "design",
+   "title": {
+    "en": "Assay WebUI — Detailed Design",
+    "zh": "Assay WebUI — 详细设计"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "table-of-contents",
+      "text": "Table of Contents",
+      "level": 2
+     },
+     {
+      "id": "1-information-architecture",
+      "text": "1. Information Architecture",
+      "level": 2
+     },
+     {
+      "id": "2-global-shell",
+      "text": "2. Global Shell",
+      "level": 2
+     },
+     {
+      "id": "2-1-layout",
+      "text": "2.1  Layout",
+      "level": 3
+     },
+     {
+      "id": "2-2-sidebar",
+      "text": "2.2  Sidebar",
+      "level": 3
+     },
+     {
+      "id": "2-3-context-bar",
+      "text": "2.3  Context bar",
+      "level": 3
+     },
+     {
+      "id": "2-4-sign-in",
+      "text": "2.4  Sign-in",
+      "level": 3
+     },
+     {
+      "id": "3-dashboard",
+      "text": "3. Dashboard",
+      "level": 2
+     },
+     {
+      "id": "3-1-page-layout",
+      "text": "3.1  Page layout",
+      "level": 3
+     },
+     {
+      "id": "3-2-statusbar",
+      "text": "3.2  StatusBar",
+      "level": 3
+     },
+     {
+      "id": "3-3-kpi-row",
+      "text": "3.3  KPI Row",
+      "level": 3
+     },
+     {
+      "id": "3-4-factor-leaderboard",
+      "text": "3.4  Factor Leaderboard",
+      "level": 3
+     },
+     {
+      "id": "3-5-agent-activity-feed",
+      "text": "3.5  Agent Activity Feed",
+      "level": 3
+     },
+     {
+      "id": "3-6-data-calendar",
+      "text": "3.6  Data Calendar",
+      "level": 3
+     },
+     {
+      "id": "4-factor-library-analysis",
+      "text": "4. Factor Library Analysis",
+      "level": 2
+     },
+     {
+      "id": "4-1-page-layout",
+      "text": "4.1  Page layout",
+      "level": 3
+     },
+     {
+      "id": "4-2-mode-tabs",
+      "text": "4.2  Mode tabs",
+      "level": 3
+     },
+     {
+      "id": "4-3-factor-list-left-panel",
+      "text": "4.3  Factor List (left panel)",
+      "level": 3
+     },
+     {
+      "id": "4-4-mode-a-factor-detail",
+      "text": "4.4  Mode A — Factor Detail",
+      "level": 3
+     },
+     {
+      "id": "4-5-mode-b-correlation-matrix",
+      "text": "4.5  Mode B — Correlation Matrix",
+      "level": 3
+     },
+     {
+      "id": "4-6-mode-c-alpha-space-map",
+      "text": "4.6  Mode C — Alpha Space Map",
+      "level": 3
+     },
+     {
+      "id": "4-7-mode-d-ic-heatmap",
+      "text": "4.7  Mode D — IC Heatmap",
+      "level": 3
+     },
+     {
+      "id": "4-8-mode-e-factor-lineage",
+      "text": "4.8  Mode E — Factor Lineage",
+      "level": 3
+     },
+     {
+      "id": "5-single-factor-test",
+      "text": "5. Single Factor Test",
+      "level": 2
+     },
+     {
+      "id": "5-1-page-layout",
+      "text": "5.1  Page layout",
+      "level": 3
+     },
+     {
+      "id": "5-2-expression-editor",
+      "text": "5.2  Expression Editor",
+      "level": 3
+     },
+     {
+      "id": "5-3-config-row",
+      "text": "5.3  Config Row",
+      "level": 3
+     },
+     {
+      "id": "5-4-results-grid",
+      "text": "5.4  Results Grid",
+      "level": 3
+     },
+     {
+      "id": "5-5-summary-panel",
+      "text": "5.5  Summary Panel",
+      "level": 3
+     },
+     {
+      "id": "6-shared-components",
+      "text": "6. Shared Components",
+      "level": 2
+     },
+     {
+      "id": "6-1-factorreportcard",
+      "text": "6.1  <FactorReportCard />",
+      "level": 3
+     },
+     {
+      "id": "6-2-icsparkline",
+      "text": "6.2  <ICSparkline />",
+      "level": 3
+     },
+     {
+      "id": "6-3-redundancybadge",
+      "text": "6.3  <RedundancyBadge />",
+      "level": 3
+     },
+     {
+      "id": "6-4-expressiontag",
+      "text": "6.4  <ExpressionTag />",
+      "level": 3
+     },
+     {
+      "id": "6-5-factorreportjson",
+      "text": "6.5  <FactorReportJSON />",
+      "level": 3
+     },
+     {
+      "id": "6-6-skeletonchart",
+      "text": "6.6  <SkeletonChart />",
+      "level": 3
+     },
+     {
+      "id": "7-state-management",
+      "text": "7. State Management",
+      "level": 2
+     },
+     {
+      "id": "7-1-global-store",
+      "text": "7.1  Global store",
+      "level": 3
+     },
+     {
+      "id": "7-2-library-store",
+      "text": "7.2  Library store",
+      "level": 3
+     },
+     {
+      "id": "7-3-evaluation-store",
+      "text": "7.3  Evaluation store",
+      "level": 3
+     },
+     {
+      "id": "8-data-fetching-streaming",
+      "text": "8. Data Fetching & Streaming",
+      "level": 2
+     },
+     {
+      "id": "8-1-query-keys",
+      "text": "8.1  Query keys",
+      "level": 3
+     },
+     {
+      "id": "8-2-evaluation-streaming-hook",
+      "text": "8.2  Evaluation streaming hook",
+      "level": 3
+     },
+     {
+      "id": "8-3-library-queries",
+      "text": "8.3  Library queries",
+      "level": 3
+     },
+     {
+      "id": "9-monaco-editor-extension",
+      "text": "9. Monaco Editor Extension",
+      "level": 2
+     },
+     {
+      "id": "9-1-language-registration",
+      "text": "9.1  Language registration",
+      "level": 3
+     },
+     {
+      "id": "9-2-syntax-bridge-qlib-python-conversion",
+      "text": "9.2  Syntax bridge (qlib ↔ Python conversion)",
+      "level": 3
+     },
+     {
+      "id": "10-routing",
+      "text": "10. Routing",
+      "level": 2
+     },
+     {
+      "id": "11-design-tokens",
+      "text": "11. Design Tokens",
+      "level": 2
+     },
+     {
+      "id": "11-1-colors",
+      "text": "11.1  Colors",
+      "level": 3
+     },
+     {
+      "id": "11-2-typography-scale",
+      "text": "11.2  Typography scale",
+      "level": 3
+     },
+     {
+      "id": "11-3-spacing",
+      "text": "11.3  Spacing",
+      "level": 3
+     },
+     {
+      "id": "11-4-border-radius",
+      "text": "11.4  Border radius",
+      "level": 3
+     },
+     {
+      "id": "11-5-shadows",
+      "text": "11.5  Shadows",
+      "level": 3
+     }
+    ],
+    "zh": [
+     {
+      "id": "目录",
+      "text": "目录",
+      "level": 2
+     },
+     {
+      "id": "1-信息架构",
+      "text": "1. 信息架构",
+      "level": 2
+     },
+     {
+      "id": "2-全局框架",
+      "text": "2. 全局框架",
+      "level": 2
+     },
+     {
+      "id": "2-1-布局",
+      "text": "2.1  布局",
+      "level": 3
+     },
+     {
+      "id": "2-2-侧栏",
+      "text": "2.2  侧栏",
+      "level": 3
+     },
+     {
+      "id": "2-3-上下文栏",
+      "text": "2.3  上下文栏",
+      "level": 3
+     },
+     {
+      "id": "2-4-登录",
+      "text": "2.4  登录",
+      "level": 3
+     },
+     {
+      "id": "3-仪表盘",
+      "text": "3. 仪表盘",
+      "level": 2
+     },
+     {
+      "id": "3-1-页面布局",
+      "text": "3.1  页面布局",
+      "level": 3
+     },
+     {
+      "id": "3-2-statusbar",
+      "text": "3.2  StatusBar",
+      "level": 3
+     },
+     {
+      "id": "3-3-指标卡",
+      "text": "3.3  指标卡",
+      "level": 3
+     },
+     {
+      "id": "3-4-因子排行榜",
+      "text": "3.4  因子排行榜",
+      "level": 3
+     },
+     {
+      "id": "3-5-agent-活动信息流",
+      "text": "3.5  Agent 活动信息流",
+      "level": 3
+     },
+     {
+      "id": "3-6-数据日历",
+      "text": "3.6  数据日历",
+      "level": 3
+     },
+     {
+      "id": "4-因子库分析",
+      "text": "4. 因子库分析",
+      "level": 2
+     },
+     {
+      "id": "4-1-页面布局",
+      "text": "4.1  页面布局",
+      "level": 3
+     },
+     {
+      "id": "4-2-模式标签页",
+      "text": "4.2  模式标签页",
+      "level": 3
+     },
+     {
+      "id": "4-3-因子列表-左面板",
+      "text": "4.3  因子列表（左面板）",
+      "level": 3
+     },
+     {
+      "id": "4-4-模式-a-因子详情",
+      "text": "4.4  模式 A — 因子详情",
+      "level": 3
+     },
+     {
+      "id": "4-5-模式-b-相关性矩阵",
+      "text": "4.5  模式 B — 相关性矩阵",
+      "level": 3
+     },
+     {
+      "id": "4-6-模式-c-alpha-空间图",
+      "text": "4.6  模式 C — Alpha 空间图",
+      "level": 3
+     },
+     {
+      "id": "4-7-模式-d-ic-热力图",
+      "text": "4.7  模式 D — IC 热力图",
+      "level": 3
+     },
+     {
+      "id": "4-8-模式-e-因子血缘",
+      "text": "4.8  模式 E — 因子血缘",
+      "level": 3
+     },
+     {
+      "id": "5-单因子测试",
+      "text": "5. 单因子测试",
+      "level": 2
+     },
+     {
+      "id": "5-1-页面布局",
+      "text": "5.1  页面布局",
+      "level": 3
+     },
+     {
+      "id": "5-2-表达式编辑器",
+      "text": "5.2  表达式编辑器",
+      "level": 3
+     },
+     {
+      "id": "5-3-配置行",
+      "text": "5.3  配置行",
+      "level": 3
+     },
+     {
+      "id": "5-4-结果网格",
+      "text": "5.4  结果网格",
+      "level": 3
+     },
+     {
+      "id": "5-5-摘要面板",
+      "text": "5.5  摘要面板",
+      "level": 3
+     },
+     {
+      "id": "6-共享组件",
+      "text": "6. 共享组件",
+      "level": 2
+     },
+     {
+      "id": "6-1-factorreportcard",
+      "text": "6.1  <FactorReportCard />",
+      "level": 3
+     },
+     {
+      "id": "6-2-icsparkline",
+      "text": "6.2  <ICSparkline />",
+      "level": 3
+     },
+     {
+      "id": "6-3-redundancybadge",
+      "text": "6.3  <RedundancyBadge />",
+      "level": 3
+     },
+     {
+      "id": "6-4-expressiontag",
+      "text": "6.4  <ExpressionTag />",
+      "level": 3
+     },
+     {
+      "id": "6-5-factorreportjson",
+      "text": "6.5  <FactorReportJSON />",
+      "level": 3
+     },
+     {
+      "id": "6-6-skeletonchart",
+      "text": "6.6  <SkeletonChart />",
+      "level": 3
+     },
+     {
+      "id": "7-状态管理",
+      "text": "7. 状态管理",
+      "level": 2
+     },
+     {
+      "id": "7-1-全局-store",
+      "text": "7.1  全局 store",
+      "level": 3
+     },
+     {
+      "id": "7-2-库-store",
+      "text": "7.2  库 store",
+      "level": 3
+     },
+     {
+      "id": "7-3-评估-store",
+      "text": "7.3  评估 store",
+      "level": 3
+     },
+     {
+      "id": "8-数据获取与流式传输",
+      "text": "8. 数据获取与流式传输",
+      "level": 2
+     },
+     {
+      "id": "8-1-查询键",
+      "text": "8.1  查询键",
+      "level": 3
+     },
+     {
+      "id": "8-2-评估流式-hook",
+      "text": "8.2  评估流式 hook",
+      "level": 3
+     },
+     {
+      "id": "8-3-库查询",
+      "text": "8.3  库查询",
+      "level": 3
+     },
+     {
+      "id": "9-monaco-编辑器扩展",
+      "text": "9. Monaco 编辑器扩展",
+      "level": 2
+     },
+     {
+      "id": "9-1-语言注册",
+      "text": "9.1  语言注册",
+      "level": 3
+     },
+     {
+      "id": "9-2-语法桥-qlib-python-转换",
+      "text": "9.2  语法桥（qlib ↔ Python 转换）",
+      "level": 3
+     },
+     {
+      "id": "10-路由",
+      "text": "10. 路由",
+      "level": 2
+     },
+     {
+      "id": "11-设计令牌",
+      "text": "11. 设计令牌",
+      "level": 2
+     },
+     {
+      "id": "11-1-颜色",
+      "text": "11.1  颜色",
+      "level": 3
+     },
+     {
+      "id": "11-2-字号刻度",
+      "text": "11.2  字号刻度",
+      "level": 3
+     },
+     {
+      "id": "11-3-间距",
+      "text": "11.3  间距",
+      "level": 3
+     },
+     {
+      "id": "11-4-边框圆角",
+      "text": "11.4  边框圆角",
+      "level": 3
+     },
+     {
+      "id": "11-5-阴影",
+      "text": "11.5  阴影",
+      "level": 3
+     }
+    ]
+   },
+   "updated": "2026-11-02"
+  },
+  "reports/alpha101": {
+   "group": "reports",
+   "title": {
+    "en": "Alpha-101 Test Report",
+    "zh": "Alpha-101 测试报告"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "summary",
+      "text": "Summary",
+      "level": 2
+     },
+     {
+      "id": "operator-usage-across-the-101-alphas",
+      "text": "Operator usage across the 101 alphas",
+      "level": 2
+     },
+     {
+      "id": "per-alpha-detail",
+      "text": "Per-alpha detail",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "摘要",
+      "text": "摘要",
+      "level": 2
+     },
+     {
+      "id": "101-个-alpha-中的算子使用情况",
+      "text": "101 个 alpha 中的算子使用情况",
+      "level": 2
+     },
+     {
+      "id": "逐个-alpha-详情",
+      "text": "逐个 alpha 详情",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-07-04"
+  }
+ }
+}

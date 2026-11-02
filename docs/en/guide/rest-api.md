@@ -12,8 +12,37 @@ python -m assay.cli serve-api --port 8000      # or: uvicorn assay.api.app:app -
 
 ## Auth
 
-Optional API-key auth. Set `ASSAY_API_KEYS` (comma-separated) to require an `X-API-Key` header;
-**unset = open** (works out of the box). Same-origin WebUI needs no key.
+A server runs in one of three modes:
+
+| Mode | Set | Callers identify with |
+|---|---|---|
+| Open | nothing | nothing — every request is allowed (local use) |
+| Service keys | `ASSAY_API_KEYS` (comma-separated), optionally `ASSAY_ADMIN_KEYS` | `X-API-Key` header |
+| Accounts | `ASSAY_ACCOUNTS=1` | the browser session, or a personal key in `X-API-Key` |
+
+With accounts on (as on assay.qfinverse.com), people join by invitation, sign in at `/login`,
+and create personal keys (`asy_...`) on the **Account** page. A key acts as its owner and is
+shown once. Send it as `X-API-Key` (or `Authorization: Bearer`). Service keys keep working next
+to accounts. Admin routes (`/v1/admin/*`, `/auth/users`, `/auth/invites`) need an admin account
+or an admin service key.
+
+```bash
+export ASSAY_KEY=asy_...        # from the Account page
+curl -s -H "X-API-Key: $ASSAY_KEY" https://assay.qfinverse.com/v1/system/universes
+```
+
+### Account endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/auth/status` · `/auth/me` | Server mode; who is signed in |
+| `POST` | `/auth/login` · `/auth/logout` | Start / end a browser session |
+| `POST` | `/auth/register` · `/auth/reset-password` | Sign up with an invitation; set a password from a reset link |
+| `POST` | `/auth/password` · `PATCH /auth/profile` | Change own password / name |
+| `GET/POST/DELETE` | `/auth/keys` | Own API keys (create from a signed-in browser only) |
+| `GET/PATCH/DELETE` | `/auth/users` | Admins: users, roles, disabling |
+| `POST` | `/auth/users/{id}/reset` | Admins: one-time password reset link |
+| `GET/POST/DELETE` | `/auth/invites` | Admins: invitations (role, uses, expiry) |
 
 ## Endpoints
 

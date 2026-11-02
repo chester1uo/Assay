@@ -1,0 +1,1152 @@
+<h1 class="doc-title">Alpha-101 测试报告</h1>
+<p><strong>来源:</strong> Kakushadze (2016),<em>101 Formulaic Alphas</em>,arXiv:1601.00991<br />
+<strong>引擎:</strong> <code>assay.engine</code>(numpy <code>(T×N)</code> 后端) · <strong>目录:</strong> <code>assay.factors.alpha101</code><br />
+<strong>面板:</strong> 合成,420 个交易日 × 30 只标的,连续动态,固定随机种子<br />
+<strong>分组:</strong> 为 <code>indneutralize</code> alpha 提供 sector/industry/subindustry 标签</p>
+<h2 id="摘要">摘要</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>指标</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>pytest(<code>tests/test_alpha101.py</code>)</td>
+<td><strong>210 passed</strong></td>
+</tr>
+<tr>
+<td>Alpha 解析 → 统一 AST</td>
+<td><strong>101 / 101</strong></td>
+</tr>
+<tr>
+<td>Alpha 求值(无错误,形状 420×30)</td>
+<td><strong>101 / 101</strong></td>
+</tr>
+<tr>
+<td>对抗式保真度审计(202 个 agent)</td>
+<td><strong>101 / 101 忠实</strong></td>
+</tr>
+<tr>
+<td>在合成面板上产生有限值</td>
+<td><strong>99 / 101</strong></td>
+</tr>
+<tr>
+<td>在合成面板上全为 NaN(深层链条;在真实数据上可解出)</td>
+<td>[96, 97]</td>
+</tr>
+<tr>
+<td><code>indneutralize</code> alpha(需要 group_data)</td>
+<td>18: [48, 58, 59, 63, 67, 69, 70, 76, 79, 80, 82, 87, 89, 90, 91, 93, 97, 100]</td>
+</tr>
+<tr>
+<td>平均覆盖率(有限占比,有限的 alpha)</td>
+<td>82.1%</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="101-个-alpha-中的算子使用情况">101 个 alpha 中的算子使用情况</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>算子</th>
+<th>类别</th>
+<th>alpha 数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mul</code></td>
+<td>arithmetic</td>
+<td>85</td>
+</tr>
+<tr>
+<td><code>cs_rank</code></td>
+<td>cross-sectional</td>
+<td>77</td>
+</tr>
+<tr>
+<td><code>sub</code></td>
+<td>arithmetic</td>
+<td>67</td>
+</tr>
+<tr>
+<td><code>ts_corr</code></td>
+<td>time-series</td>
+<td>58</td>
+</tr>
+<tr>
+<td><code>ts_mean</code></td>
+<td>time-series</td>
+<td>45</td>
+</tr>
+<tr>
+<td><code>div</code></td>
+<td>arithmetic</td>
+<td>44</td>
+</tr>
+<tr>
+<td><code>add</code></td>
+<td>arithmetic</td>
+<td>44</td>
+</tr>
+<tr>
+<td><code>ts_rank</code></td>
+<td>time-series</td>
+<td>38</td>
+</tr>
+<tr>
+<td><code>ts_delta</code></td>
+<td>time-series</td>
+<td>35</td>
+</tr>
+<tr>
+<td><code>ts_sum</code></td>
+<td>time-series</td>
+<td>30</td>
+</tr>
+<tr>
+<td><code>lt</code></td>
+<td>comparison</td>
+<td>24</td>
+</tr>
+<tr>
+<td><code>ts_decay_linear</code></td>
+<td>time-series</td>
+<td>22</td>
+</tr>
+<tr>
+<td><code>cs_neutralize</code></td>
+<td>cross-sectional</td>
+<td>18</td>
+</tr>
+<tr>
+<td><code>ts_delay</code></td>
+<td>time-series</td>
+<td>17</td>
+</tr>
+<tr>
+<td><code>pow</code></td>
+<td>math</td>
+<td>15</td>
+</tr>
+<tr>
+<td><code>ts_returns</code></td>
+<td>time-series</td>
+<td>12</td>
+</tr>
+<tr>
+<td><code>ts_min</code></td>
+<td>time-series</td>
+<td>12</td>
+</tr>
+<tr>
+<td><code>where</code></td>
+<td>math</td>
+<td>11</td>
+</tr>
+<tr>
+<td><code>ts_max</code></td>
+<td>time-series</td>
+<td>9</td>
+</tr>
+<tr>
+<td><code>ts_std</code></td>
+<td>time-series</td>
+<td>6</td>
+</tr>
+<tr>
+<td><code>sign</code></td>
+<td>math</td>
+<td>6</td>
+</tr>
+<tr>
+<td><code>cs_scale</code></td>
+<td>cross-sectional</td>
+<td>6</td>
+</tr>
+<tr>
+<td><code>abs</code></td>
+<td>math</td>
+<td>5</td>
+</tr>
+<tr>
+<td><code>elem_max</code></td>
+<td>math</td>
+<td>5</td>
+</tr>
+<tr>
+<td><code>ts_argmax</code></td>
+<td>time-series</td>
+<td>4</td>
+</tr>
+<tr>
+<td><code>elem_min</code></td>
+<td>math</td>
+<td>4</td>
+</tr>
+<tr>
+<td><code>log</code></td>
+<td>math</td>
+<td>3</td>
+</tr>
+<tr>
+<td><code>signed_power</code></td>
+<td>math</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>ts_cov</code></td>
+<td>time-series</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>eq</code></td>
+<td>comparison</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>or</code></td>
+<td>logical</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>ts_product</code></td>
+<td>time-series</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>ts_argmin</code></td>
+<td>time-series</td>
+<td>2</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="逐个-alpha-详情">逐个 alpha 详情</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th style="text-align:right">#</th>
+<th style="text-align:right">ops</th>
+<th style="text-align:right">fields</th>
+<th style="text-align:center">group?</th>
+<th style="text-align:right">coverage</th>
+<th style="text-align:right">warm-up row</th>
+<th>expression</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:right">1</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">95%</td>
+<td style="text-align:right">12</td>
+<td><code>(rank(Ts_ArgMax(SignedPower(((returns &lt; 0) ? stddev(returns, 20) ...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">2</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">98%</td>
+<td style="text-align:right">7</td>
+<td><code>(-1 * correlation(rank(delta(log(volume), 2)), rank(((close - ope...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">3</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">91%</td>
+<td style="text-align:right">9</td>
+<td><code>(-1 * correlation(rank(open), rank(volume), 10))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">4</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">98%</td>
+<td style="text-align:right">8</td>
+<td><code>(-1 * Ts_Rank(rank(low), 9))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">5</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">98%</td>
+<td style="text-align:right">9</td>
+<td><code>(rank((open - (sum(vwap, 10) / 10))) * (-1 * abs(rank((close - vw...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">6</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">98%</td>
+<td style="text-align:right">9</td>
+<td><code>(-1 * correlation(open, volume, 10))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">7</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">90%</td>
+<td style="text-align:right">19</td>
+<td><code>((adv20 &lt; volume) ? ((-1 * ts_rank(abs(delta(close, 7)), 60)) * s...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">8</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">96%</td>
+<td style="text-align:right">15</td>
+<td><code>(-1 * rank(((sum(open, 5) * sum(returns, 5)) - delay((sum(open, 5...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">9</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">99%</td>
+<td style="text-align:right">5</td>
+<td><code>((0 &lt; ts_min(delta(close, 1), 5)) ? delta(close, 1) : ((ts_max(de...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">10</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">99%</td>
+<td style="text-align:right">4</td>
+<td><code>rank(((0 &lt; ts_min(delta(close, 1), 4)) ? delta(close, 1) : ((ts_m...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">11</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">99%</td>
+<td style="text-align:right">3</td>
+<td><code>((rank(ts_max((vwap - close), 3)) + rank(ts_min((vwap - close), 3...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">12</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">100%</td>
+<td style="text-align:right">1</td>
+<td><code>(sign(delta(volume, 1)) * (-1 * delta(close, 1)))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">13</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">99%</td>
+<td style="text-align:right">4</td>
+<td><code>(-1 * rank(covariance(rank(close), rank(volume), 5)))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">14</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">98%</td>
+<td style="text-align:right">9</td>
+<td><code>((-1 * rank(delta(returns, 3))) * correlation(open, volume, 10))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">15</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">26%</td>
+<td style="text-align:right">4</td>
+<td><code>(-1 * sum(rank(correlation(rank(high), rank(volume), 3)), 3))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">16</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">99%</td>
+<td style="text-align:right">4</td>
+<td><code>(-1 * rank(covariance(rank(high), rank(volume), 5)))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">17</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">95%</td>
+<td style="text-align:right">23</td>
+<td><code>(((-1 * rank(ts_rank(close, 10))) * rank(delta(delta(close, 1), 1...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">18</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">98%</td>
+<td style="text-align:right">9</td>
+<td><code>(-1 * rank(((stddev(abs((close - open)), 5) + (close - open)) + c...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">19</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">40%</td>
+<td style="text-align:right">250</td>
+<td><code>((-1 * sign(((close - delay(close, 7)) + delta(close, 7)))) * (1 ...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">20</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">100%</td>
+<td style="text-align:right">1</td>
+<td><code>(((-1 * rank((open - delay(high, 1)))) * rank((open - delay(close...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">21</td>
+<td style="text-align:right">11</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">97%</td>
+<td style="text-align:right">7</td>
+<td><code>((((sum(close, 8) / 8) + stddev(close, 8)) &lt; (sum(close, 2) / 2))...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">22</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">95%</td>
+<td style="text-align:right">19</td>
+<td><code>(-1 * (delta(correlation(high, volume, 5), 5) * rank(stddev(close...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">23</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">95%</td>
+<td style="text-align:right">19</td>
+<td><code>(((sum(high, 20) / 20) &lt; high) ? (-1 * delta(high, 2)) : 0)</code></td>
+</tr>
+<tr>
+<td style="text-align:right">24</td>
+<td style="text-align:right">11</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">53%</td>
+<td style="text-align:right">199</td>
+<td><code>((((delta((sum(close, 100) / 100), 100) / delay(close, 100)) &lt; 0....</code></td>
+</tr>
+<tr>
+<td style="text-align:right">25</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">95%</td>
+<td style="text-align:right">19</td>
+<td><code>rank(((((-1 * returns) * adv20) * vwap) * (high - close)))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">26</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">85%</td>
+<td style="text-align:right">10</td>
+<td><code>(-1 * ts_max(correlation(ts_rank(volume, 5), ts_rank(high, 5), 5)...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">27</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">69%</td>
+<td style="text-align:right">6</td>
+<td><code>((0.5 &lt; rank((sum(correlation(rank(volume), rank(vwap), 6), 2) / ...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">28</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">95%</td>
+<td style="text-align:right">23</td>
+<td><code>scale(((correlation(adv20, low, 5) + ((high + low) / 2)) - close))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">29</td>
+<td style="text-align:right">13</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">86%</td>
+<td style="text-align:right">11</td>
+<td><code>(min(product(rank(rank(scale(log(sum(ts_min(rank(rank((-1 * rank(...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">30</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">95%</td>
+<td style="text-align:right">19</td>
+<td><code>(((1.0 - rank(((sign((close - delay(close, 1))) + sign((delay(clo...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">31</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">93%</td>
+<td style="text-align:right">30</td>
+<td><code>((rank(rank(rank(decay_linear((-1 * rank(rank(delta(close, 10))))...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">32</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">44%</td>
+<td style="text-align:right">234</td>
+<td><code>(scale(((sum(close, 7) / 7) - close)) + (20 * scale(correlation(v...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">33</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">100%</td>
+<td style="text-align:right">0</td>
+<td><code>rank((-1 * ((1 - (open / close))^1)))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">34</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">99%</td>
+<td style="text-align:right">5</td>
+<td><code>rank(((1 - rank((stddev(returns, 2) / stddev(returns, 5)))) + (1 ...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">35</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">92%</td>
+<td style="text-align:right">32</td>
+<td><code>((Ts_Rank(volume, 32) * (1 - Ts_Rank(((close + high) - low), 16))...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">36</td>
+<td style="text-align:right">12</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">53%</td>
+<td style="text-align:right">199</td>
+<td><code>(((((2.21 * rank(correlation((close - open), delay(volume, 1), 15...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">37</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">52%</td>
+<td style="text-align:right">200</td>
+<td><code>(rank(correlation(delay((open - close), 1), close, 200)) + rank((...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">38</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">98%</td>
+<td style="text-align:right">9</td>
+<td><code>((-1 * rank(Ts_Rank(close, 10))) * rank((close / open)))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">39</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">40%</td>
+<td style="text-align:right">250</td>
+<td><code>((-1 * rank((delta(close, 7) * (1 - rank(decay_linear((volume / a...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">40</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">98%</td>
+<td style="text-align:right">9</td>
+<td><code>((-1 * rank(stddev(high, 10))) * correlation(high, volume, 10))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">41</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">100%</td>
+<td style="text-align:right">0</td>
+<td><code>(((high * low)^0.5) - vwap)</code></td>
+</tr>
+<tr>
+<td style="text-align:right">42</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">97%</td>
+<td style="text-align:right">0</td>
+<td><code>(rank((vwap - close)) / rank((vwap + close)))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">43</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">91%</td>
+<td style="text-align:right">38</td>
+<td><code>(ts_rank((volume / adv20), 20) * ts_rank((-1 * delta(close, 7)), 8))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">44</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">99%</td>
+<td style="text-align:right">4</td>
+<td><code>(-1 * correlation(high, rank(volume), 5))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">45</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">94%</td>
+<td style="text-align:right">24</td>
+<td><code>(-1 * ((rank((sum(delay(close, 5), 20) / 20)) * correlation(close...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">46</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">95%</td>
+<td style="text-align:right">20</td>
+<td><code>((0.25 &lt; (((delay(close, 20) - delay(close, 10)) / 10) - ((delay(...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">47</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">95%</td>
+<td style="text-align:right">19</td>
+<td><code>((((rank((1 / close)) * volume) / adv20) * ((high * rank((high - ...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">48</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">40%</td>
+<td style="text-align:right">251</td>
+<td><code>(indneutralize(((correlation(delta(close, 1), delta(delay(close, ...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">49</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">95%</td>
+<td style="text-align:right">20</td>
+<td><code>(((((delay(close, 20) - delay(close, 10)) / 10) - ((delay(close, ...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">50</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">52%</td>
+<td style="text-align:right">8</td>
+<td><code>(-1 * ts_max(rank(correlation(rank(volume), rank(vwap), 5)), 5))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">51</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">1</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">95%</td>
+<td style="text-align:right">20</td>
+<td><code>(((((delay(close, 20) - delay(close, 10)) / 10) - ((delay(close, ...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">52</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">43%</td>
+<td style="text-align:right">240</td>
+<td><code>((((-1 * ts_min(low, 5)) + delay(ts_min(low, 5), 5)) * rank(((sum...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">53</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">98%</td>
+<td style="text-align:right">9</td>
+<td><code>(-1 * delta((((close - low) - (high - close)) / (close - low)), 9))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">54</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">100%</td>
+<td style="text-align:right">0</td>
+<td><code>((-1 * ((low - close) * (open^5))) / ((low - high) * (close^5)))</code></td>
+</tr>
+<tr>
+<td style="text-align:right">55</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">96%</td>
+<td style="text-align:right">16</td>
+<td><code>(-1 * correlation(rank(((close - ts_min(low, 12)) / (ts_max(high,...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">56</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">98%</td>
+<td style="text-align:right">10</td>
+<td><code>(0 - (1 * (rank((sum(returns, 10) / sum(sum(returns, 2), 3))) * r...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">57</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">93%</td>
+<td style="text-align:right">30</td>
+<td><code>(0 - (1 * ((close - vwap) / decay_linear(rank(ts_argmax(close, 30...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">58</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">97%</td>
+<td style="text-align:right">12</td>
+<td><code>(-1 * Ts_Rank(decay_linear(correlation(IndNeutralize(vwap, IndCla...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">59</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">94%</td>
+<td style="text-align:right">25</td>
+<td><code>(-1 * Ts_Rank(decay_linear(correlation(IndNeutralize(((vwap * 0.7...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">60</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">98%</td>
+<td style="text-align:right">9</td>
+<td><code>(0 - (1 * ((2 * scale(rank(((((close - low) - (high - close)) / (...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">61</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">54%</td>
+<td style="text-align:right">195</td>
+<td><code>(rank((vwap - ts_min(vwap, 16.1219))) &lt; rank(correlation(vwap, ad...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">62</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">5</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">89%</td>
+<td style="text-align:right">48</td>
+<td><code>((rank(correlation(vwap, sum(adv20, 22.4101), 9.91009)) &lt; rank(((...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">63</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">43%</td>
+<td style="text-align:right">238</td>
+<td><code>((rank(decay_linear(delta(IndNeutralize(close, IndClass.industry)...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">64</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">5</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">65%</td>
+<td style="text-align:right">145</td>
+<td><code>((rank(correlation(sum(((open * 0.178404) + (low * (1 - 0.178404)...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">65</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">83%</td>
+<td style="text-align:right">71</td>
+<td><code>((rank(correlation(((open * 0.00817205) + (vwap * (1 - 0.00817205...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">66</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">96%</td>
+<td style="text-align:right">15</td>
+<td><code>((rank(decay_linear(delta(vwap, 3.51013), 7.23052)) + Ts_Rank(dec...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">67</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">94%</td>
+<td style="text-align:right">1</td>
+<td><code>((rank((high - ts_min(high, 2.14593)))^rank(correlation(IndNeutra...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">68</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">57%</td>
+<td style="text-align:right">33</td>
+<td><code>((Ts_Rank(correlation(rank(high), rank(adv15), 8.91644), 13.9333)...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">69</td>
+<td style="text-align:right">11</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">93%</td>
+<td style="text-align:right">5</td>
+<td><code>((rank(ts_max(delta(IndNeutralize(vwap, IndClass.industry), 2.724...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">70</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">81%</td>
+<td style="text-align:right">1</td>
+<td><code>((rank(delta(vwap, 1.29456))^Ts_Rank(correlation(IndNeutralize(cl...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">71</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">5</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">7%</td>
+<td style="text-align:right">224</td>
+<td><code>max(Ts_Rank(decay_linear(correlation(Ts_Rank(close, 3.43976), Ts_...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">72</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">78%</td>
+<td style="text-align:right">55</td>
+<td><code>(rank(decay_linear(correlation(((high + low) / 2), adv40, 8.93345...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">73</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">95%</td>
+<td style="text-align:right">19</td>
+<td><code>(max(rank(decay_linear(delta(vwap, 4.72775), 2.91864)), Ts_Rank(d...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">74</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">74%</td>
+<td style="text-align:right">79</td>
+<td><code>((rank(correlation(close, sum(adv30, 37.4843), 15.1365)) &lt; rank(c...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">75</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">79%</td>
+<td style="text-align:right">60</td>
+<td><code>(rank(correlation(vwap, volume, 4.24304)) &lt; rank(correlation(rank...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">76</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">67%</td>
+<td style="text-align:right">139</td>
+<td><code>(max(rank(decay_linear(delta(vwap, 1.24383), 11.8259)), Ts_Rank(d...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">77</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">89%</td>
+<td style="text-align:right">45</td>
+<td><code>min(rank(decay_linear(((((high + low) / 2) + high) - (vwap + high...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">78</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">57%</td>
+<td style="text-align:right">4</td>
+<td><code>(rank(correlation(sum(((low * 0.352233) + (vwap * (1 - 0.352233))...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">79</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">30%</td>
+<td style="text-align:right">170</td>
+<td><code>(rank(delta(IndNeutralize(((close * 0.60733) + (open * (1 - 0.607...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">80</td>
+<td style="text-align:right">11</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">96%</td>
+<td style="text-align:right">17</td>
+<td><code>((rank(Sign(delta(IndNeutralize(((open * 0.868128) + (high * (1 -...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">81</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">41%</td>
+<td style="text-align:right">77</td>
+<td><code>((rank(Log(product(rank((rank(correlation(vwap, sum(adv10, 49.605...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">82</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">92%</td>
+<td style="text-align:right">33</td>
+<td><code>(min(rank(decay_linear(delta(open, 1.46063), 14.8717)), Ts_Rank(d...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">83</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">5</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">99%</td>
+<td style="text-align:right">6</td>
+<td><code>((rank(delay(((high - low) / (sum(close, 5) / 5)), 2)) * rank(ran...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">84</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">82%</td>
+<td style="text-align:right">33</td>
+<td><code>SignedPower(Ts_Rank((vwap - ts_max(vwap, 15.3217)), 20.7127), del...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">85</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">90%</td>
+<td style="text-align:right">15</td>
+<td><code>(rank(correlation(((high * 0.876703) + (close * (1 - 0.876703))),...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">86</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">87%</td>
+<td style="text-align:right">56</td>
+<td><code>((Ts_Rank(correlation(close, sum(adv20, 14.7444), 6.00049), 20.41...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">87</td>
+<td style="text-align:right">12</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">74%</td>
+<td style="text-align:right">108</td>
+<td><code>(max(rank(decay_linear(delta(((close * 0.369701) + (vwap * (1 - 0...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">88</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">5</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">25%</td>
+<td style="text-align:right">91</td>
+<td><code>min(rank(decay_linear(((rank(open) + rank(low)) - (rank(high) + r...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">89</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">94%</td>
+<td style="text-align:right">26</td>
+<td><code>(Ts_Rank(decay_linear(correlation(((low * 0.967285) + (low * (1 -...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">90</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">89%</td>
+<td style="text-align:right">45</td>
+<td><code>((rank((close - ts_max(close, 4.66719)))^Ts_Rank(correlation(IndN...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">91</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">92%</td>
+<td style="text-align:right">33</td>
+<td><code>((Ts_Rank(decay_linear(decay_linear(correlation(IndNeutralize(clo...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">92</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">5</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">60%</td>
+<td style="text-align:right">45</td>
+<td><code>min(Ts_Rank(decay_linear(((((high + low) / 2) + close) &lt; (low + o...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">93</td>
+<td style="text-align:right">11</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">69%</td>
+<td style="text-align:right">120</td>
+<td><code>(Ts_Rank(decay_linear(correlation(IndNeutralize(vwap, IndClass.in...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">94</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">2</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">47%</td>
+<td style="text-align:right">10</td>
+<td><code>((rank((vwap - ts_min(vwap, 11.5783)))^Ts_Rank(correlation(Ts_Ran...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">95</td>
+<td style="text-align:right">11</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">81%</td>
+<td style="text-align:right">78</td>
+<td><code>(rank((open - ts_min(open, 12.4105))) &lt; Ts_Rank((rank(correlation...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">96</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">0%</td>
+<td style="text-align:right">—</td>
+<td><code>(max(Ts_Rank(decay_linear(correlation(rank(vwap), rank(volume), 3...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">97</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">0%</td>
+<td style="text-align:right">—</td>
+<td><code>((rank(decay_linear(delta(IndNeutralize(((low * 0.721001) + (vwap...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">98</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">80%</td>
+<td style="text-align:right">52</td>
+<td><code>(rank(decay_linear(correlation(vwap, sum(adv5, 26.4719), 4.58418)...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">99</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">3</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">80%</td>
+<td style="text-align:right">84</td>
+<td><code>((rank(correlation(sum(((high + low) / 2), 19.8975), sum(adv60, 1...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">100</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center">Y</td>
+<td style="text-align:right">92%</td>
+<td style="text-align:right">29</td>
+<td><code>(0 - (1 * (((1.5 * scale(indneutralize(indneutralize(rank(((((clo...</code></td>
+</tr>
+<tr>
+<td style="text-align:right">101</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">4</td>
+<td style="text-align:center"></td>
+<td style="text-align:right">100%</td>
+<td style="text-align:right">0</td>
+<td><code>((close - open) / ((high - low) + .001))</code></td>
+</tr>
+</tbody>
+</table></div>
+<p><em>coverage = 有限的 (date,symbol) 单元格占比;warm-up row = 第一个
+带有任意有限值的交易日索引(对长窗口/深嵌套的 alpha 较大)。</em></p>

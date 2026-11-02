@@ -49,40 +49,10 @@ Assay 在单一共享引擎之上暴露四个消费界面。每个界面都调�
 
 ### 1.2  分层图
 
-方框标注了其构建状态：✅ 已实现，🔶 部分实现，📋 规划中。
+每个方框右上角的圆点标出构建状态：实心绿点为已实现，黄点为部分实现，空心圆为规划中。
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│  Consumption surfaces                                              │
-│                                                                    │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐  │
-│  │  Python SDK  │  │   REST API   │  │  WebUI   │  │   MCP    │  │
-│  │ ✅ assay.*   │  │ ✅ (FastAPI) │  │🔶 vanilla│  │✅(FastMCP)│ │
-│  └──────┬───────┘  └──────┬───────┘  └────┬─────┘  └────┬─────┘  │
-│         │                 │               │              │        │
-│         └─────────────────┴───────────────┴──────────────┘        │
-│                                   │                                │
-├───────────────────────────────────┼────────────────────────────────┤
-│  Service layer   ✅ IMPLEMENTED    │                                │
-│                    ┌──────────────▼──────────────┐                 │
-│                    │      AssayService            │                 │
-│                    │  evaluate() · batch() ·      │                 │
-│                    │  library() · session()       │                 │
-│                    └──────────────┬──────────────┘                 │
-├───────────────────────────────────┼────────────────────────────────┤
-│  Core engine                      │                                │
-│         ┌─────────────────────────┼──────────────────────┐        │
-│         │             ┌───────────▼──────────┐            │        │
-│         │             │   FactorEngine ✅     │            │        │
-│         │             │ Parser ✅ · DAG/CSE 📋 │            │        │
-│         │             └───────────┬──────────┘            │        │
-│  ┌──────┴──────┐   ┌──────────────┴──────┐  ┌──────────┐  │        │
-│  │ DataStore ✅ │   │ Cache 🔶 session+L2 │  │Evaluator │  │        │
-│  │  (Parquet)  │   │  (L1 Arena/incr 📋)  │  │IC/Decay✅│  │        │
-│  └─────────────┘   └─────────────────────┘  └──────────┘  │        │
-│         └─────────────────────────────────────────────────┘        │
-└────────────────────────────────────────────────────────────────────┘
-```
+![Assay 分层](../../assets/figures/cn/architecture.svg)
+
 
 今日已构建：除 React WebUI 外的完整栈——`DataStore`、`FactorEngine` +
 双语法解析器 + 算子 + 诊断、IC/衰减/分组/换手率 `Evaluator`、
@@ -1054,6 +1024,10 @@ assay_evaluate.__doc__ += OPERATOR_DOCS
 
 ### 6.7  典型的 agent 循环
 
+![agent 循环](../../assets/figures/cn/agent-loop.svg)
+
+一次真实会话的样子：
+
 ```
 Agent iteration 1:
   call assay_library_list(limit=10) → "what high-quality factors already exist?"
@@ -1252,27 +1226,19 @@ python
 >>> assay.backtest("ts_returns(close, 20)", universe="NASDAQ100")
 ```
 
-### 8.2  服务拓扑 📋
+### 8.2  服务拓扑
 
-```
-Researcher laptop / server (planned):
+![部署组成](../../assets/figures/cn/topology.svg)
 
-  ┌─────────────────────────────────────────────────┐
-  │  assay server                                   │
-  │                                                 │
-  │  :8000  FastAPI (REST API)                      │
-  │  :3000  Vite (WebUI dev) / Nginx (production)  │
-  │  stdio  MCP server (spawned by agent host)      │
-  │                                                 │
-  │  All three share one AssayService process       │
-  │  (single cache, single DataStore connection)    │
-  └─────────────────────────────────────────────────┘
-```
+一个 `uvicorn` 进程同时提供 REST API、`/auth`、WebUI 和 Doc Hub，所有调用方共用一个引擎、一份缓存和一个数据连接。前面由反向代理处理 TLS。MCP 服务是 agent 宿主通过 stdio 启动的独立进程，在进程内构建同样的 `AssayService`。
+
+- 美股数据读 QFinVerse 日频面板。QFinVerse 每个交易日收盘后重建面板，Assay 在下一次请求时切换到新版本。
+- 因子库和 L2 缓存放在 Assay 数据目录（`ASSAY_DATA_DIR`）；账户存在 `ASSAY_STATE_DIR` 下的 SQLite 里，这个目录要放在本地盘。
+
 
 ### 8.3  Docker Compose 📋
 
-下面的三个镜像（`assay-api`、`assay-ui`、`assay-mcp`）引用了尚未
-构建的应用（`assay.api.app`、UI 包、`assay.mcp.server`）。这是目标栈。
+三个镜像对应的 REST API、WebUI 和 MCP 服务都已实现；下面的 compose 文件只是容器化部署的草案，没有维护。生产环境用 systemd 加反向代理，见 §8.2。
 
 ```yaml
 # docker-compose.yml   📋 PLANNED
