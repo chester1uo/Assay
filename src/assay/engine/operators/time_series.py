@@ -7,12 +7,15 @@ These reduce along axis 0 (time) within each symbol. A rolling window of length
 observation, so they are finite from the first non-NaN day.
 
 Window kernels go through :func:`._base.rolling`, which evaluates them in blocks of
-rows so their ``(T, N, d)`` temporaries stay bounded for long windows.
+rows so their ``(T, N, d)`` temporaries stay bounded for long windows, or hands them
+to the Rust extension (``native=``) when it is loaded.
 """
 
 from __future__ import annotations
 
 import numpy as np
+
+from assay import _native
 
 from ._base import as2d, rolling
 from .registry import register
@@ -48,11 +51,11 @@ def ts_log_returns(x, d):
 
 
 def ts_mean(x, d):
-    return rolling(lambda w: w.mean(axis=-1), d, x)
+    return rolling(lambda w: w.mean(axis=-1), d, x, native="mean")
 
 
 def ts_sum(x, d):
-    return rolling(lambda w: w.sum(axis=-1), d, x)
+    return rolling(lambda w: w.sum(axis=-1), d, x, native="sum")
 
 
 def ts_product(x, d):
@@ -62,15 +65,15 @@ def ts_product(x, d):
 def ts_std(x, d):
     if int(d) < 2:
         raise ValueError("ts_std(x, d) needs d >= 2")
-    return rolling(lambda w: w.std(axis=-1, ddof=1), d, x)
+    return rolling(lambda w: w.std(axis=-1, ddof=1), d, x, native="std")
 
 
 def ts_min(x, d):
-    return rolling(lambda w: w.min(axis=-1), d, x)
+    return rolling(lambda w: w.min(axis=-1), d, x, native="min")
 
 
 def ts_max(x, d):
-    return rolling(lambda w: w.max(axis=-1), d, x)
+    return rolling(lambda w: w.max(axis=-1), d, x, native="max")
 
 
 def _arg_extreme(x, d, want_max: bool):
@@ -82,7 +85,7 @@ def _arg_extreme(x, d, want_max: bool):
         out[~valid] = np.nan
         return out
 
-    return rolling(k, d, x)
+    return rolling(k, d, x, native="argmax" if want_max else "argmin")
 
 
 def ts_argmax(x, d):
@@ -105,14 +108,14 @@ def ts_rank(x, d):
         out[~valid] = np.nan
         return out
 
-    return rolling(k, d, x)
+    return rolling(k, d, x, native="rank")
 
 
 def ts_decay_linear(x, d):
     d = int(d)
     weights = np.arange(1, d + 1, dtype=np.float64)  # newest gets the largest weight
     weights /= weights.sum()
-    return rolling(lambda w: (w * weights).sum(axis=-1), d, x)
+    return rolling(lambda w: (w * weights).sum(axis=-1), d, x, native="decay_linear")
 
 
 def ts_ema(x, d):
@@ -145,6 +148,8 @@ def _central_moment(x, d, power):
 
 
 def ts_skew(x, d):
+    if _native.kernels is not None:
+        return rolling(None, d, x, native="skew")
     m3, m2 = _central_moment(x, d, 3)
     with np.errstate(invalid="ignore", divide="ignore"):
         g1 = m3 / m2**1.5
@@ -152,6 +157,8 @@ def ts_skew(x, d):
 
 
 def ts_kurt(x, d):
+    if _native.kernels is not None:
+        return rolling(None, d, x, native="kurt")
     m4, m2 = _central_moment(x, d, 4)
     with np.errstate(invalid="ignore", divide="ignore"):
         g2 = m4 / m2**2 - 3.0  # excess (Fisher) kurtosis
@@ -170,14 +177,14 @@ def ts_cov(x, y, d):
         ax, ay = _demeaned(wx, wy)
         return (ax * ay).sum(axis=-1) / (int(d) - 1)
 
-    return rolling(k, d, x, y)
+    return rolling(k, d, x, y, native="cov")
 
 
 # -- rolling order-statistics & dispersion (qlib Var/Med/Mad/Count/Quantile) --
 def ts_var(x, d):
     if int(d) < 2:
         raise ValueError("ts_var(x, d) needs d >= 2")
-    return rolling(lambda w: w.var(axis=-1, ddof=1), d, x)
+    return rolling(lambda w: w.var(axis=-1, ddof=1), d, x, native="var")
 
 
 def ts_med(x, d):
@@ -185,7 +192,8 @@ def ts_med(x, d):
 
 
 def ts_mad(x, d):
-    return rolling(lambda w: np.abs(w - w.mean(axis=-1, keepdims=True)).mean(axis=-1), d, x)
+    return rolling(lambda w: np.abs(w - w.mean(axis=-1, keepdims=True)).mean(axis=-1), d, x,
+                   native="mad")
 
 
 def ts_count(x, d):
@@ -196,7 +204,7 @@ def ts_count(x, d):
         cnt[~valid] = np.nan
         return cnt
 
-    return rolling(k, d, x)
+    return rolling(k, d, x, native="count")
 
 
 def ts_quantile(x, d, q):
@@ -217,7 +225,7 @@ def _ls(d):
 
 def ts_slope(x, d):
     _, tc, stt = _ls(d)
-    return rolling(lambda w: (w * tc).sum(axis=-1) / stt, d, x)   # sum((w-xbar)*tc) == sum(w*tc)
+    return rolling(lambda w: (w * tc).sum(axis=-1) / stt, d, x, native="slope")   # sum((w-xbar)*tc) == sum(w*tc)
 
 
 def ts_resi(x, d):
@@ -229,7 +237,7 @@ def ts_resi(x, d):
         intercept = w.mean(axis=-1) - slope * t.mean()
         return w[..., -1] - (intercept + slope * t[-1])
 
-    return rolling(k, d, x)
+    return rolling(k, d, x, native="resi")
 
 
 def ts_rsquare(x, d):
@@ -243,7 +251,7 @@ def ts_rsquare(x, d):
             r2 = (sxt ** 2) / (stt * sxx)
         return np.where(sxx == 0, np.nan, r2)
 
-    return rolling(k, d, x)
+    return rolling(k, d, x, native="rsquare")
 
 
 def ts_corr(x, y, d):
@@ -255,7 +263,7 @@ def ts_corr(x, y, d):
             r = cov / denom
         return np.where(denom == 0, np.nan, r)  # zero variance (e.g. d too small) -> NaN
 
-    return rolling(k, d, x, y)
+    return rolling(k, d, x, y, native="corr")
 
 
 # `incremental` mirrors the appendix table (whether an O(1) daily update exists);

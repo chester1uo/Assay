@@ -1,6 +1,7 @@
-//! Native cross-sectional kernels for Assay.
+//! Native kernels for Assay: cross-sectional (this file) and rolling time-series
+//! (`ts.rs`).
 //!
-//! Every kernel works on a row-major `(T, N)` float64 matrix, one date per row, and
+//! Every cross-sectional kernel works on a row-major `(T, N)` float64 matrix, one date per row, and
 //! treats rows independently, so rows are spread over a rayon pool with the GIL
 //! released. The arithmetic follows the Python/numba references in
 //! `assay.engine.operators.cross_sectional` and `assay.evaluator` step by step (same
@@ -11,6 +12,8 @@ use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray2, PyUntypedArray
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
+mod ts;
 
 fn rows<'a>(a: &'a PyReadonlyArray2<'_, f64>) -> PyResult<(&'a [f64], usize, usize)> {
     let shape = a.shape();
@@ -23,7 +26,7 @@ fn rows<'a>(a: &'a PyReadonlyArray2<'_, f64>) -> PyResult<(&'a [f64], usize, usi
 
 fn same_shape(a: &PyReadonlyArray2<'_, f64>, b: &PyReadonlyArray2<'_, f64>) -> PyResult<()> {
     if a.shape() != b.shape() {
-        return Err(PyValueError::new_err("factor and fwd must share the same (T, N) shape"));
+        return Err(PyValueError::new_err("both matrices must share the same (T, N) shape"));
     }
     Ok(())
 }
@@ -250,6 +253,54 @@ fn group_sums<'py>(
     ))
 }
 
+/// Rolling time-series kernel `op` (one of `ts.rs`'s `UNARY`) over windows of `d` rows,
+/// column by column.
+#[pyfunction]
+fn ts_rolling<'py>(
+    py: Python<'py>,
+    op: &str,
+    x: PyReadonlyArray2<'py, f64>,
+    d: usize,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    if !ts::UNARY.contains(&op) {
+        return Err(PyValueError::new_err(format!("unknown rolling kernel {op:?}")));
+    }
+    if d < 1 {
+        return Err(PyValueError::new_err("window length must be >= 1"));
+    }
+    let (s, t, n) = rows(&x)?;
+    let out = py.allow_threads(|| ts::by_column(&[s], t, n, |c, o| ts::unary(op, c[0], d, o)));
+    Ok(PyArray1::from_vec_bound(py, out).reshape([t, n])?)
+}
+
+/// Two-series rolling kernel `op` (`cov`, `corr`).
+#[pyfunction]
+fn ts_rolling2<'py>(
+    py: Python<'py>,
+    op: &str,
+    x: PyReadonlyArray2<'py, f64>,
+    y: PyReadonlyArray2<'py, f64>,
+    d: usize,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    if !ts::BINARY.contains(&op) {
+        return Err(PyValueError::new_err(format!("unknown rolling kernel {op:?}")));
+    }
+    if d < 1 {
+        return Err(PyValueError::new_err("window length must be >= 1"));
+    }
+    same_shape(&x, &y)?;
+    let (xs, t, n) = rows(&x)?;
+    let (ys, _, _) = rows(&y)?;
+    let out = py.allow_threads(|| ts::by_column(&[xs, ys], t, n, |c, o| ts::binary(op, c[0], c[1], d, o)));
+    Ok(PyArray1::from_vec_bound(py, out).reshape([t, n])?)
+}
+
+/// Names of the rolling kernels: (one-series, two-series).
+#[pyfunction]
+fn ts_ops() -> (Vec<&'static str>, Vec<&'static str>) {
+    (ts::UNARY.to_vec(), ts::BINARY.to_vec())
+}
+
 /// Size of the rayon pool (set ``RAYON_NUM_THREADS`` before the first call to change it).
 #[pyfunction]
 fn threads() -> usize {
@@ -263,6 +314,9 @@ fn assay_kernels(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rank_ic_series, m)?)?;
     m.add_function(wrap_pyfunction!(ic_series, m)?)?;
     m.add_function(wrap_pyfunction!(group_sums, m)?)?;
+    m.add_function(wrap_pyfunction!(ts_rolling, m)?)?;
+    m.add_function(wrap_pyfunction!(ts_rolling2, m)?)?;
+    m.add_function(wrap_pyfunction!(ts_ops, m)?)?;
     m.add_function(wrap_pyfunction!(threads, m)?)?;
     Ok(())
 }

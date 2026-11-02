@@ -9,6 +9,8 @@ import warnings
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
+from assay import _native
+
 
 @contextlib.contextmanager
 def quiet_numeric():
@@ -41,12 +43,16 @@ def windows(x: np.ndarray, d: int) -> np.ndarray:
 WINDOW_BLOCK_MB = float(os.environ.get("ASSAY_WINDOW_BLOCK_MB") or 64)
 
 
-def rolling(fn, d: int, *xs: np.ndarray) -> np.ndarray:
+def rolling(fn, d: int, *xs: np.ndarray, native: str | None = None) -> np.ndarray:
     """``fn(*windows)`` over trailing windows of ``xs``, computed in blocks of rows.
 
     Same values as ``fn(*(windows(x, d) for x in xs))`` (each output element reduces
     the same window), but the ``(T, N, d)`` temporaries ``fn`` creates are limited to
     about :data:`WINDOW_BLOCK_MB` per block instead of growing with ``d``.
+
+    ``native`` names the equivalent kernel of the Rust extension (``ts_rolling`` /
+    ``ts_rolling2``), used instead when it is loaded: O(1) per step for the sum
+    family, so the cost no longer grows with ``d`` (values agree to ~1e-12).
     """
     d = int(d)
     if d < 1:
@@ -55,6 +61,10 @@ def rolling(fn, d: int, *xs: np.ndarray) -> np.ndarray:
     for a in arrs:
         if a.ndim != 2:
             raise ValueError(f"time-series operator expects a (T, N) matrix, got shape {a.shape}")
+    k = _native.kernels
+    if native is not None and k is not None and all(a.shape == arrs[0].shape for a in arrs):
+        arrs = [np.ascontiguousarray(a) for a in arrs]
+        return k.ts_rolling(native, arrs[0], d) if len(arrs) == 1 else k.ts_rolling2(native, *arrs, d)
     T, N = arrs[0].shape
     pads = [np.concatenate((np.full((d - 1, N), np.nan), a), axis=0) for a in arrs]
     step = max(1, int(WINDOW_BLOCK_MB * 2**20 // (max(N, 1) * d * 8 * 4 * len(arrs))))
