@@ -4,6 +4,8 @@ On assay.qfinverse.com, US universes read the daily panel store that QFinVerse b
 from MASSIVE: end-of-day bars from September 2003, splits and dividends, and the
 MASSIVE ticker reference. Assay does not ingest US data itself in this setup.
 
+![US data flow](../../assets/figures/en/qfv-data-flow.svg)
+
 ## Setup
 
 ```bash

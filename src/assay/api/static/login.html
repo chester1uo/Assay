@@ -21,10 +21,7 @@
       padding: 0 max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px)); }
     .auth-brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); }
     .auth-brand:hover { text-decoration: none; }
-    .auth-brand svg { width: 40px; height: 29px; }
-    .auth-brand .q { fill: #00B8A0; } .auth-brand .v { fill: #FC5200; }
-    html.dark .auth-brand .q { fill: #00DBB6; }
-    .auth-brand span { font-family: var(--font-display); font-size: 19px; font-weight: 600; letter-spacing: -0.015em; }
+    .auth-brand .lockup { height: 30px; }
     .auth-lang { border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 13px; cursor: pointer;
       height: 32px; padding: 0 10px; border-radius: var(--radius-btn); }
     .auth-lang:hover { background: var(--accent-bg); color: var(--text); }
@@ -49,11 +46,7 @@
 <body class="auth">
   <header class="auth-top">
     <a class="auth-brand" href="/">
-      <svg viewBox="0 0 88 64" aria-hidden="true">
-        <g class="q"><rect x="7.5" y="25.5" width="13" height="13" transform="rotate(45 14 32)"/><rect x="19.5" y="13.5" width="13" height="13" transform="rotate(45 26 20)"/><rect x="19.5" y="37.5" width="13" height="13" transform="rotate(45 26 44)"/><rect x="31.5" y="25.5" width="13" height="13" transform="rotate(45 38 32)"/></g>
-        <g class="v"><rect x="43.5" y="13.5" width="13" height="13" transform="rotate(45 50 20)"/><rect x="55.5" y="25.5" width="13" height="13" transform="rotate(45 62 32)"/><rect x="67.5" y="13.5" width="13" height="13" transform="rotate(45 74 20)"/><rect x="43.5" y="37.5" width="13" height="13" transform="rotate(45 50 44)"/></g>
-      </svg>
-      <span>Assay</span>
+      <img class="lockup lockup-light" src="/brand/assay-lockup-light.svg" alt="ASSAY" /><img class="lockup lockup-dark" src="/brand/assay-lockup-dark.svg" alt="ASSAY" />
     </a>
     <button type="button" class="auth-lang" id="lang">中文</button>
   </header>

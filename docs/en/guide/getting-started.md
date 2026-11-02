@@ -1,57 +1,82 @@
 # Getting Started
 
-Assay is a point-in-time-correct, agent-native factor backtesting engine. This guide takes
-you from a clean checkout to your first scored factor and a portfolio backtest.
+Assay scores factor expressions on point-in-time data: IC, RankIC, decay, turnover,
+redundancy, and a portfolio backtest with costs. There are two ways in: the hosted site,
+or your own install.
 
-## 1. Install
+## Use the hosted site
 
-Src-layout package; install from source (no PyPI release yet):
+[assay.qfinverse.com](https://assay.qfinverse.com) runs Assay on QFinVerse's US daily data
+(2003 onward, universes TOP500 / TOP1000 / TOP3000, SP500, NASDAQ100). See
+[US data from QFinVerse](qfv-data.md) for what that data holds.
+
+1. **Get an invitation.** Sign-up is by invitation only. Ask an admin for a link, open it,
+   and choose a username and password (at least 10 characters).
+2. **Sign in** at `/login`. The session lasts 7 days.
+3. **Score a factor.** Open *Single Factor Test*, pick a universe and period in the bar at
+   the top, write an expression such as `-ts_delta(close, 5) / ts_delay(close, 5)` and press
+   *Evaluate*. Save good ones to the library. See the [WebUI guide](webui.md).
+4. **Create an API key** for scripts and agents: *Account* → *API keys* → *Create key*.
+   The key (`asy_...`) is shown once. It acts as you; revoke it when you no longer need it.
+5. **Call the REST API** with the key in the `X-API-Key` header:
 
 ```bash
-git clone <repo> && cd Assay
-pip install -e .            # core deps
-# optional extras (all already vendored in this environment):
-pip install -e ".[perf,api,mcp]"
+export ASSAY_KEY=asy_...
+curl -s -X POST https://assay.qfinverse.com/v1/factor/evaluate \
+  -H "X-API-Key: $ASSAY_KEY" -H 'Content-Type: application/json' \
+  -d '{"expr": "-ts_delta(close, 5) / ts_delay(close, 5)", "universe": "SP500",
+       "period": ["2019-01-01", "2026-10-30"], "horizons": [1, 5, 10, 20]}'
 ```
 
-Everything runs with `PYTHONPATH=src` if you haven't `pip install -e .`'d.
+All endpoints are listed in the [REST guide](rest-api.md); the interactive schema is at
+`/docs` on the site.
 
-## 2. Configure the data source & output dir
+## Run it yourself
 
-Configuration is environment-variable based, loaded by `AssayConfig.from_env()`. A project
-`.env` is read at import (shell env always wins). The pipeline reads a **local** MASSIVE
-mirror — no credentials needed. See [.env.example](../../../.env.example):
+### 1. Install
+
+From source (there is no PyPI release):
 
 ```bash
-MASSIVE_DATA_DIR=/data/massive_data    # root of the local MASSIVE mirror (source)
-ASSAY_DATA_DIR=data                    # parquet store root (point at any folder)
+git clone https://github.com/QFinVerse/Assay.git && cd Assay
+pip install -e ".[perf,api,mcp]"      # perf = numba + scipy (much faster evaluation)
 ```
 
-> US equities (MASSIVE — NASDAQ-100 / S&P 500) and China A-shares (Tushare — CSI300/500/1000)
-> are both wired up. The bundled US data is **OHLCV + transaction count — no `vwap`**.
+Without installing, everything also runs with `PYTHONPATH=src`.
 
-## 3. Transfer data
+### 2. Point it at data
 
-Transform the local mirror into a point-in-time NASDAQ-100 dataset (universe + corporate
-actions + prices) under the folder `ASSAY_DATA_DIR` points at. See the
-[data pipeline guide](data-pipeline.md) for detail.
+Settings are environment variables, read by `AssayConfig.from_env()`. A `.env` file in the
+project is loaded at import; the shell always wins. See
+[.env.example](../../../.env.example).
+
+- **US, from a QFinVerse daily panel** (recommended): set `ASSAY_QFV_PANEL_DIR` to the panel
+  root. Nothing else to ingest; see [US data from QFinVerse](qfv-data.md).
+- **US, from a local MASSIVE mirror**: set `MASSIVE_DATA_DIR` and build the Parquet stores:
 
 ```bash
+export MASSIVE_DATA_DIR=/data/massive_data   # local mirror, no credentials needed
+export ASSAY_DATA_DIR=data                   # where the stores are written
 python -m assay.cli prepare-nasdaq100 --start 2025-01-01 --end 2026-06-09
-python -m assay.cli status                      # what's ingested
+python -m assay.cli status
 ```
 
-## 4. Evaluate a factor
+- **China A-shares and Hong Kong** come from Tushare; see [Multi-market](../multi_market.md)
+  and [Tushare](../tushare.md).
 
-**CLI** — a quick AST + over-the-panel check, then a full scored report:
+The MASSIVE day bars are OHLCV plus trade count; there is no `vwap` field.
+
+### 3. Evaluate a factor
+
+From the CLI:
 
 ```bash
-python -m assay.cli parse 'cs_rank(ts_corr(close, volume, 20))'      # no data needed
+python -m assay.cli parse 'cs_rank(ts_corr(close, volume, 20))'      # syntax only, no data
 python -m assay.cli run   'cs_rank(ts_corr(close, volume, 20))' \
     --start 2025-01-02 --end 2026-06-09
 ```
 
-**Python SDK** — see the [SDK guide](python-sdk.md):
+From Python ([SDK guide](python-sdk.md)):
 
 ```python
 import assay
@@ -62,11 +87,11 @@ report = assay.backtest(
 print(report.rank_ic, report.rank_icir, report.decay_halflife_days, report.failure_mode)
 ```
 
-A `FactorReport` carries `ic`/`rank_ic`/`icir`/`rank_icir`, `ic_by_horizon`, decay, turnover,
-redundancy, look-ahead detection, a natural-language `suggestion`, and structured
-`diagnostics`. `.to_dict()` is JSON-safe for agent consumption.
+A `FactorReport` holds `ic` / `rank_ic` / `icir` / `rank_icir`, `ic_by_horizon`, decay,
+turnover, redundancy, look-ahead checks, a `suggestion` and structured `diagnostics`.
+`.to_dict()` is JSON-safe.
 
-## 5. Run a portfolio backtest
+### 4. Backtest a portfolio
 
 ```python
 from assay.portfolio import PortfolioBacktestConfig
@@ -79,26 +104,27 @@ print(pf.sharpe, pf.max_drawdown, pf.annual_turnover, pf.cost_drag)
 
 See the [portfolio backtest guide](portfolio-backtest.md).
 
-## 6. Start the surfaces
+### 5. Start the server
 
 ```bash
-python -m assay.cli serve-api --port 8000     # REST API + WebUI at http://localhost:8000
-python -m assay.cli serve-mcp                 # MCP server (stdio) for LLM agents
+python -m assay.cli serve-api --port 8000     # REST API, WebUI and Doc Hub on :8000
+python -m assay.cli serve-mcp                 # MCP server over stdio, for agents
 ```
 
-- **WebUI** — open `http://localhost:8000` (see the [WebUI guide](webui.md)).
-- **REST API** — interactive docs at `/docs`; see the [REST guide](rest-api.md).
-- **MCP** — 11 agent tools; see the [MCP guide](mcp-server.md).
+The server is open by default. To require sign-in, set `ASSAY_ACCOUNTS=1` and create the
+first admin with the token in the state directory; see [REST API → Auth](rest-api.md).
 
 ## Where to go next
 
 | Guide | What it covers |
 |---|---|
-| [Data pipeline](data-pipeline.md) | MASSIVE loaders, `prepare-nasdaq100`, data folders, caveats |
-| [Python SDK](python-sdk.md) | `backtest`, `Session`, `batch_backtest`, `library`, `stream`, `backtest_portfolio` |
+| [WebUI](webui.md) | the console: pages, controls, accounts |
+| [US data from QFinVerse](qfv-data.md) | universes, security ids, splits and dividends |
+| [Data & Adjustment](data-and-adjustment.md) | how prices are adjusted and read point-in-time |
+| [Data pipeline](data-pipeline.md) | MASSIVE loaders, `prepare-nasdaq100`, data folders |
+| [Python SDK](python-sdk.md) | `backtest`, `Session`, `batch_backtest`, `library`, `backtest_portfolio` |
 | [CLI](cli.md) | every `python -m assay.cli` subcommand |
-| [REST API](rest-api.md) | `/v1/*` endpoints, SSE streaming, auth |
+| [REST API](rest-api.md) | `/v1/*` and `/auth/*` endpoints, SSE streaming, auth modes |
 | [MCP server](mcp-server.md) | agent tools and client setup |
-| [WebUI](webui.md) | the zero-install web app |
 | [Portfolio backtest](portfolio-backtest.md) | config, running, metrics, A-share notes |
-| [Performance](performance.md) | the Alpha-101 cache vs no-cache benchmark |
+| [Performance](performance.md) | the Alpha-101 cache benchmark |

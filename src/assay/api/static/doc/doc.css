@@ -18,11 +18,7 @@ body.dochub { background: var(--surface); height: auto; min-height: 100%; }
 }
 .dh-brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); }
 .dh-brand:hover { text-decoration: none; }
-.dh-mark { width: 40px; height: 29px; flex: 0 0 auto; }
-.dh-mark .q { fill: #00B8A0; }
-.dh-mark .v { fill: #FC5200; }
-html.dark .dh-mark .q { fill: #00DBB6; }
-.dh-wordmark { font-family: var(--font-display); font-size: 19px; font-weight: 600; letter-spacing: -0.015em; }
+.dh-brand .lockup { height: 30px; }
 .dh-product {
   padding-left: 10px;
   margin-left: 2px;
@@ -254,6 +250,21 @@ kbd {
 .doc-copy .ico { width: 14px; height: 14px; }
 .doc-body pre:hover .doc-copy, .doc-copy:focus-visible { opacity: 1; }
 .doc-copy:hover { color: var(--text); }
+/* figures (inline SVG from scripts/doc_figures.py) and screenshots */
+.doc-fig, .doc-shot { margin: var(--sp-6) 0; }
+.doc-fig svg { display: block; width: 100%; height: auto; }
+.doc-shot img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: var(--radius-card); }
+.doc-fig figcaption, .doc-shot figcaption { margin-top: var(--sp-2); font-size: 12.5px; color: var(--text-muted); text-align: center; }
+html .doc-body svg.fig {
+  --fig-box: #FFFFFF; --fig-line: #CBD0DC; --fig-group: #F4F6FA; --fig-text: #1A1D2E; --fig-muted: #5A6477;
+  --fig-arrow: #8A93A6; --fig-accent: #00A38B; --fig-accent-bg: #E3F6F2; --fig-warm: #E8590C; --fig-warm-bg: #FFF0E6;
+  --fig-gold: #B7791F; --fig-gold-bg: #FDF4DF;
+}
+html.dark .doc-body svg.fig {
+  --fig-box: #1F232E; --fig-line: #3A3F4C; --fig-group: #171B25; --fig-text: #D7DAE1; --fig-muted: #8A8F9C;
+  --fig-arrow: #6E7484; --fig-accent: #00D6B3; --fig-accent-bg: #11302C; --fig-warm: #FF7A3D; --fig-warm-bg: #3A2418;
+  --fig-gold: #E3B341; --fig-gold-bg: #352B14;
+}
 .table-wrap { overflow-x: auto; margin: var(--sp-4) 0; border: 1px solid var(--border); border-radius: var(--radius-card); }
 .doc-table { width: 100%; border-collapse: collapse; font-size: 13.5px; line-height: 1.5; }
 .doc-table th, .doc-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }

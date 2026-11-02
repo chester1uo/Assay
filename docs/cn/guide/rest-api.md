@@ -12,8 +12,33 @@ python -m assay.cli serve-api --port 8000      # or: uvicorn assay.api.app:app -
 
 ## 鉴权
 
-可选的 API-key 鉴权。设置 `ASSAY_API_KEYS`（逗号分隔）即要求提供 `X-API-Key` 请求头；
-**未设置 = 开放**（开箱即用）。同源的 WebUI 无需密钥。
+服务器有三种模式：
+
+| 模式 | 配置 | 调用方如何表明身份 |
+|---|---|---|
+| 开放 | 不设置 | 不需要，所有请求都放行（本机使用） |
+| 服务密钥 | `ASSAY_API_KEYS`（逗号分隔），可选 `ASSAY_ADMIN_KEYS` | `X-API-Key` 请求头 |
+| 账户 | `ASSAY_ACCOUNTS=1` | 浏览器登录状态，或放在 `X-API-Key` 里的个人密钥 |
+
+开启账户后（assay.qfinverse.com 就是这样），用户凭邀请注册，在 `/login` 登录，在「账户」页创建个人密钥（`asy_...`）。密钥代表本人，只显示一次，放在 `X-API-Key`（或 `Authorization: Bearer`）里发送。服务密钥在账户模式下照常可用。管理接口（`/v1/admin/*`、`/auth/users`、`/auth/invites`）需要管理员账户或管理员服务密钥。
+
+```bash
+export ASSAY_KEY=asy_...        # 在「账户」页创建
+curl -s -H "X-API-Key: $ASSAY_KEY" https://assay.qfinverse.com/v1/system/universes
+```
+
+### 账户接口
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/auth/status` · `/auth/me` | 服务器模式；当前登录的用户 |
+| `POST` | `/auth/login` · `/auth/logout` | 登录 / 退出浏览器会话 |
+| `POST` | `/auth/register` · `/auth/reset-password` | 凭邀请注册；用重置链接设置密码 |
+| `POST` | `/auth/password` · `PATCH /auth/profile` | 修改自己的密码 / 显示名 |
+| `GET/POST/DELETE` | `/auth/keys` | 自己的 API 密钥（只能在已登录的浏览器里创建） |
+| `GET/PATCH/DELETE` | `/auth/users` | 管理员：用户、角色、停用 |
+| `POST` | `/auth/users/{id}/reset` | 管理员：一次性密码重置链接 |
+| `GET/POST/DELETE` | `/auth/invites` | 管理员：邀请（角色、次数、有效期） |
 
 ## 端点
 

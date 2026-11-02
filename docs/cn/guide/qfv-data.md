@@ -2,6 +2,8 @@
 
 在 assay.qfinverse.com 上，美股股票池读取 QFinVerse 用 MASSIVE 数据构建的日频面板：2003 年 9 月起的日线、拆股和分红，以及 MASSIVE 的 ticker 参考数据。这种部署下 Assay 自己不再导入美股数据。
 
+![美股数据流](../../assets/figures/cn/qfv-data-flow.svg)
+
 ## 配置
 
 ```bash

@@ -28,11 +28,15 @@ import hmac
 import json
 import os
 import secrets
-import sqlite3
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import sqlite3
+except ImportError:  # a Python built without a usable sqlite3 still serves the API, without accounts
+    sqlite3 = None
 
 __all__ = [
     "ROLES", "KEY_PREFIX", "AccountError", "User", "AccountStore", "default_db_path",
@@ -178,6 +182,8 @@ class AccountStore:
     """Thread-safe access to the account database (one short connection per call)."""
 
     def __init__(self, path: str | Path | None = None):
+        if sqlite3 is None:
+            raise AccountError("accounts need Python's sqlite3 module, which is not available here")
         self.path = Path(path) if path else default_db_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()

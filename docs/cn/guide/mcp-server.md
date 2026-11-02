@@ -51,12 +51,7 @@ python -m assay.cli serve-mcp --transport sse --port 8001   # SSE/HTTP (remote a
 
 ## 典型的 agent 循环
 
-```
-assay_library_list(limit=10)         → what high-quality factors already exist?
-assay_batch([...candidate exprs...]) → sorted results; top factor's rank_icir / redundancy
-assay_library_correlation([...])     → is the new factor redundant with existing ones?
-assay_library_save(best_report)      → keep the unique, high-ICIR factor
-assay_library_prune(dry_run=true)    → propose removing dominated factors
-```
+![agent 循环](../../assets/figures/cn/agent-loop.svg)
+
 
 设计契约：[architecture.md](../design/architecture.md) §6。

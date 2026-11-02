@@ -149,7 +149,12 @@ h1, h2, .page-title, .section-title { font-family: var(--font-display); letter-s
 .sidenav-mark .q { fill: #00B8A0; }
 .sidenav-mark .v { fill: #FC5200; }
 html.dark .sidenav-mark .q { fill: #00DBB6; }
-.sidenav-wordmark { font-family: var(--font-display); font-size: 19px; font-weight: 600; letter-spacing: -0.015em; white-space: nowrap; }
+.sidenav-logo .lockup { height: 31px; width: auto; flex: 0 0 auto; }
+.sidenav-mark { display: none; }
+/* the ASSAY lockup (QFinVerse mark + outlined wordmark), one file per theme */
+.lockup-dark { display: none; }
+html.dark .lockup-light { display: none; }
+html.dark .lockup-dark { display: inline-block; }
 
 .sidenav-links {
   flex: 1 1 auto;
@@ -272,6 +277,7 @@ html.nav-folded .sidenav-link .ico-out { display: none; }
 
 /* signed-in user, admin-only links */
 html:not(.is-admin) .admin-only { display: none; }
+.sidenav-user[hidden] { display: none; }
 .sidenav-user { display: flex; align-items: center; gap: 4px; margin-top: 4px; padding: 4px 2px; }
 .sidenav-user-link { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 2px 4px; border-radius: var(--radius-btn); color: var(--text); }
 .sidenav-user-link:hover { background: var(--accent-bg); text-decoration: none; }
@@ -291,8 +297,8 @@ html.nav-folded .sidenav-user-text { display: none; }
 /* folded: icons only */
 html.nav-folded .sidenav { width: 60px; }
 html.nav-folded .sidenav-brand { justify-content: center; padding: 0; }
-html.nav-folded .sidenav-mark { width: 32px; height: 32px; }
-html.nav-folded .sidenav-wordmark,
+html.nav-folded .sidenav-mark { display: block; width: 32px; height: 32px; }
+html.nav-folded .sidenav-logo .lockup { display: none; }
 html.nav-folded .sidenav-link > span,
 html.nav-folded .sidenav-label,
 html.nav-folded .sidenav-fold > span { display: none; }

@@ -1,7 +1,9 @@
 """Render ``docs/{en,cn}`` into the Doc Hub served at ``/doc/``.
 
 Writes ``src/assay/api/static/doc/content/``: one HTML fragment per page and language,
-``manifest.json`` (navigation, titles, headings, dates) and ``search-<lang>.json``.
+``manifest.json`` (navigation, titles, headings, dates), ``search-<lang>.json`` and the
+images under ``docs/assets/`` (figures from ``scripts/doc_figures.py`` are inlined so they
+follow the hub's light/dark theme; screenshots are linked).
 The page shell (``index.html``, ``doc.js``, ``doc.css``) lives next to it and is
 hand-written. Run after editing docs; needs ``markdown-it-py`` (dev only)::
 
@@ -99,6 +101,29 @@ def _href(href: str, src: str) -> str:
     return f"{REPO_URL}/{kind}/main/{repo_path}" + (f"#{anchor}" if anchor else "")
 
 
+def _asset(path: str, src: str) -> str | None:
+    """``docs/assets/...`` path of an image linked from ``docs/<lang>/<src>``, else None."""
+    if path.startswith(("http://", "https://", "/")):
+        return None
+    target = posixpath.normpath(posixpath.join("docs/x", posixpath.dirname(src), path))
+    return target if target.startswith("docs/assets/") and (ROOT / target).is_file() else None
+
+
+_IMG = re.compile(r'<p><img src="([^"]+)" alt="([^"]*)"(?: title="([^"]*)")? ?/?></p>')
+
+
+def _figures(body: str) -> str:
+    """Inline SVG figures; wrap screenshots. Both get an optional caption (the image title)."""
+    def swap(m: re.Match) -> str:
+        src, alt, caption = m.group(1), m.group(2), m.group(3)
+        cap = f"<figcaption>{caption}</figcaption>" if caption else ""
+        if src.startswith("inline:"):
+            svg = (ROOT / src[len("inline:"):]).read_text(encoding="utf-8").strip()
+            return f'<figure class="doc-fig">{svg}{cap}</figure>'
+        return f'<figure class="doc-shot"><img src="{src}" alt="{alt}" loading="lazy" />{cap}</figure>'
+    return _IMG.sub(swap, body)
+
+
 def _render(md: MarkdownIt, text: str, src: str) -> tuple[str, str, list[dict], str]:
     lines = text.splitlines()
     lines = [ln for i, ln in enumerate(lines) if not (i < 6 and _LANG_LINE.match(ln))]
@@ -119,6 +144,11 @@ def _render(md: MarkdownIt, text: str, src: str) -> tuple[str, str, list[dict], 
                 headings.append({"id": hid, "text": label, "level": level})
         elif tok.type == "inline":
             for child in tok.children or []:
+                if child.type == "image":
+                    asset = _asset(child.attrGet("src") or "", src)
+                    if asset:
+                        child.attrSet("src", ("inline:" + asset) if asset.endswith(".svg")
+                                      else "/doc/content/" + asset[len("docs/"):])
                 if child.type == "link_open":
                     child.attrSet("href", _href(child.attrGet("href") or "", src))
                     if str(child.attrGet("href")).startswith("http"):
@@ -132,7 +162,7 @@ def _render(md: MarkdownIt, text: str, src: str) -> tuple[str, str, list[dict], 
     body = body.replace("</table>", "</table></div>")
     plain = re.sub(r"<[^>]+>", " ", body)
     plain = re.sub(r"\s+", " ", html.unescape(plain)).strip()
-    return title, body, headings, plain
+    return title, _figures(body), headings, plain
 
 
 def _updated(path: Path) -> str:
@@ -173,6 +203,8 @@ def main() -> None:
                 raise SystemExit(f"missing doc for {slug}: docs/*/{src}")
             manifest["pages"][slug] = entry
     OUT.mkdir(parents=True, exist_ok=True)
+    if (DOCS / "assets").is_dir():
+        shutil.copytree(DOCS / "assets", OUT / "assets", ignore=shutil.ignore_patterns("*.svg", ".*"))
     (OUT / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
     for lang, rows in search.items():
         (OUT / f"search-{lang}.json").write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
