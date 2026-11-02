@@ -109,6 +109,14 @@ class Registry:
             c.execute("INSERT OR IGNORE INTO specs VALUES (?, ?, ?, ?, ?, ?)",
                       (spec, universe, str(start), str(end), json.dumps(list(horizons)), execution))
 
+    def spec(self, spec: str) -> dict | None:
+        """``{key, universe, start, end, horizons, execution}`` of a spec key."""
+        with self._conn() as c:
+            r = c.execute("SELECT * FROM specs WHERE spec = ?", (spec,)).fetchone()
+        return None if r is None else {"key": r["spec"], "universe": r["universe"], "start": r["start"],
+                                       "end": r["end_"], "horizons": json.loads(r["horizons"]),
+                                       "execution": r["execution"]}
+
     def score(self, fid: str, spec: str, version: str) -> dict | None:
         with self._conn() as c:
             r = c.execute("SELECT * FROM scores WHERE factor_id = ? AND spec = ? AND version = ?",

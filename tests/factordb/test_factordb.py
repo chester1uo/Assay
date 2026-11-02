@@ -51,6 +51,7 @@ def test_frontier_lookback_and_degree():
     assert cn.degree(parse("ts_mean(close, 5)")) == (1, 0)
     assert cn.degree(parse("close * volume")) == (1, 1)
     assert cn.degree(parse("log(close)")) is None
+    assert cn.degree(parse("close + add(1, 2)")) == (1, 0) or cn.degree(parse("close + add(1, 2)")) is None
 
 
 # ── values ───────────────────────────────────────────────────────────────────
@@ -123,3 +124,13 @@ def test_agent_submit_dedup_and_query(tmp_path, db):
     rows = svc.query(spec=out["spec"])["factors"]
     assert {r["expr"] for r in rows} >= {"ts_delta(close, 2)"}
     assert svc.budget("ann")["seconds"] > 0
+
+
+def test_column_chunk_fits_the_worker_memory():
+    from assay.factordb.compute import column_chunk, peak_live
+
+    chain = [cn.canonicalize(parse("ts_mean(ts_mean(ts_mean(ts_mean(close, 2), 3), 4), 5)"))]
+    assert peak_live(chain) == 3                   # a chain never holds more than parent + child
+    nodes = [cn.canonicalize(parse(f"ts_corr(close, volume, {w})")) for w in range(5, 65)]
+    assert 8 <= column_chunk(nodes, 4233, mem_mb=1024) <= 512
+    assert column_chunk(nodes, 10**6, mem_mb=300) == 8

@@ -95,7 +95,7 @@ class FactorDB:
             sids = set()
             for u in self.domain:
                 labels = self.qfv.universe_span(u, self.start, end)
-                s = self.panel.sids(labels, on=end)
+                s = self.panel.label_sids(labels, on=end)
                 sids.update(int(x) for x in s[s >= 0])
             sids = np.array(sorted(sids), dtype=np.int32)
             if self._grid is not None and np.isin(sids, self._grid.sids).all():
@@ -204,7 +204,7 @@ class FactorDB:
         vals = _FE.from_matrices(m.dates, sids, m.data).evaluate_many([node])[0].values.astype(np.float32)
         for y, (y0, y1) in grid.year_slices().items():
             mm = np.load(self.nodes.node_dir(grid.grid_id, h) / f"{y}.npy", mmap_mode="r+")
-            mm[:, cols] = vals[y0:y1]
+            mm[cols, :] = vals[y0:y1].T
             mm.flush()
             del mm
 
@@ -219,7 +219,17 @@ class FactorDB:
                  with_stats: bool = False):
         """Factor values for ``exprs`` on ``universe`` over [start, end].
 
-        Returns ``(dates, labels, [Evaluated])`` (plus a stats dict with ``with_stats``)."""
+        Returns ``(dates, labels, [Evaluated])`` (plus a stats dict with ``with_stats``).
+        Holds every result at once; :meth:`evaluate_iter` yields them one by one."""
+        dates, labels, it, stats = self.evaluate_iter(exprs, universe, start, end)
+        out = list(it)
+        return (dates, labels, out, stats) if with_stats else (dates, labels, out)
+
+    def evaluate_iter(self, exprs, universe: str, start: str, end: str | None = None):
+        """``(dates, labels, results, stats)`` where ``results`` yields one :class:`Evaluated`
+        per expression, in order. Frontier nodes are made current first; the cross-
+        sectional part then runs per expression and frees what no later expression
+        needs, so a caller that scores and drops each result keeps memory flat."""
         exprs = list(exprs)
         t0 = time.perf_counter()
         plan = self.plan(exprs)
@@ -231,7 +241,7 @@ class FactorDB:
             raise ValueError(f"no trading days in [{start}, {end}]")
         dates = grid.dates[r0:r1]
         labels = sorted(self.qfv.universe_span(universe, str(dates[0]), str(dates[-1])))
-        sids = self.panel.sids(labels, on=str(dates[-1]))
+        sids = self.panel.label_sids(labels, on=str(dates[-1]))
         keep = sids >= 0
         labels = [l for l, k in zip(labels, keep) if k]
         sids = sids[keep]
@@ -240,25 +250,29 @@ class FactorDB:
         member = self.qfv.get_membership(universe, dates, labels)
         cols = grid.cols(sids)
         scale = self._rescale(sids, dates[-1], grid) if dates[-1] < grid.end else None
-        ctx = _Finish(self, grid, r0, r1, dates, sids, cols, member, scale)
-        out = []
-        for i, (e, c) in enumerate(zip(exprs, plan.canon)):
-            text = e if isinstance(e, str) else str(e)
-            if c is None:
-                out.append(Evaluated(text, None, error=plan.errors[i]))
-                continue
-            fid = hash_tree(c)[id(c)]
-            try:
-                vals = ctx.run(c)
-                out.append(Evaluated(text, fid, np.where(member, vals, np.nan), from_store=True))
-            except EvaluationError as exc:
-                out.append(Evaluated(text, fid, error={"code": "RUNTIME_ERROR", "operator": exc.op,
-                                                       "message": exc.message}))
-            except Exception as exc:  # noqa: BLE001
-                out.append(Evaluated(text, fid, error={"code": "RUNTIME_ERROR", "message": str(exc)}))
-        stats.update(seconds=round(time.perf_counter() - t0, 3), rows=int(r1 - r0), columns=int(len(sids)),
-                     frontier=len(plan.frontier))
-        return (dates, labels, out, stats) if with_stats else (dates, labels, out)
+        ctx = _Finish(self, grid, r0, r1, dates, sids, cols, member, scale, [c for c in plan.canon if c is not None])
+        stats.update(rows=int(r1 - r0), columns=int(len(sids)), frontier=len(plan.frontier))
+
+        def results():
+            for i, (e, c) in enumerate(zip(exprs, plan.canon)):
+                text = e if isinstance(e, str) else str(e)
+                if c is None:
+                    yield Evaluated(text, None, error=plan.errors[i])
+                    continue
+                fid = ctx.hashes[id(c)]
+                try:
+                    vals = ctx.run(c)
+                    yield Evaluated(text, fid, np.where(member, vals, np.nan), from_store=True)
+                except EvaluationError as exc:
+                    yield Evaluated(text, fid, error={"code": "RUNTIME_ERROR", "operator": exc.op,
+                                                      "message": exc.message})
+                except Exception as exc:  # noqa: BLE001
+                    yield Evaluated(text, fid, error={"code": "RUNTIME_ERROR", "message": str(exc)})
+                finally:
+                    ctx.done(c)
+            stats["seconds"] = round(time.perf_counter() - t0, 3)
+
+        return dates, labels, results(), stats
 
     def _rescale(self, sids: np.ndarray, end, grid: Grid) -> tuple[np.ndarray, np.ndarray]:
         """(P, V): per-security price / volume factors of the corporate actions in (end, grid end]."""
@@ -270,9 +284,14 @@ class FactorDB:
 class _Finish:
     """Runs the cross-sectional part of an expression on one request's slice."""
 
-    def __init__(self, db: FactorDB, grid: Grid, r0, r1, dates, sids, cols, member, scale):
+    def __init__(self, db: FactorDB, grid: Grid, r0, r1, dates, sids, cols, member, scale, roots):
         self.db, self.grid, self.r0, self.r1 = db, grid, r0, r1
         self.dates, self.sids, self.cols, self.member, self.scale = dates, sids, cols, member, scale
+        self.hashes: dict[int, str] = {}
+        for r in roots:
+            hash_tree(r, self.hashes)
+        # remaining uses of each subtree over the batch; a cached matrix is dropped at zero
+        self.refs = FactorEngine._use_counts(roots, self.hashes)
         self.cache: dict[str, np.ndarray] = {}
         self.fields: dict[str, np.ndarray] = {}
         self.ctx = EvalContext(dates.tolist(), sids.tolist(), {}, {})
@@ -299,8 +318,16 @@ class _Finish:
         self.cache[h] = vals
         return vals
 
+    def _release(self, n) -> None:
+        if isinstance(n, OpNode):
+            FactorEngine._release(self.hashes[id(n)], self.cache, self.refs)
+
+    def done(self, root) -> None:
+        """The caller has taken ``root``'s values."""
+        self._release(root)
+
     def run(self, root) -> np.ndarray:
-        hashes = hash_tree(root)
+        hashes = self.hashes
         front = {hashes[id(f)] for f in cn.frontier(root)}
 
         def ev(n):
@@ -323,6 +350,9 @@ class _Finish:
                 raise EvaluationError(str(exc), op=n.op, cause=type(exc).__name__) from exc
             val = np.full(self.member.shape, float(val)) if np.ndim(val) == 0 else np.asarray(val, dtype=np.float64)
             self.cache[h] = val
+            del args
+            for c in n.children:
+                self._release(c)
             return val
 
         out = ev(root)

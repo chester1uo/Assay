@@ -56,7 +56,11 @@ The structural hash of the canonical tree is the **factor id**. Two agents that 
 Each stored node is a float32 matrix on the grid, split into **year blocks**
 (`nodes/<hash>/<year>.npy`, memory-mapped). Year blocks make appends cheap (only the
 current year is rewritten) and reads fast (a 2016–2026 slice touches 11 files, each read
-by mmap). A manifest row per node records the canonical expression, the grid, the dates it
+by mmap). Each year block is **security-major** (`n_sids × days`): a worker that computes
+a slice of securities writes contiguous ranges, and a universe read takes one contiguous
+run per security. (A day-major block made every 25-column write touch every page of the
+file, which on the 15 GB production box meant gigabytes of read-modify-write per task.)
+A manifest row per node records the canonical expression, the grid, the dates it
 covers, bytes, compute cost and hit counts (used for eviction and for agents' "is this
 already known" queries).
 

@@ -5,13 +5,16 @@ These reduce along axis 0 (time) within each symbol. A rolling window of length
 ``d-1`` leading warm-up days) the result for that day is NaN. ``ts_ema`` /
 ``ts_dema`` are the exception — they are recurrences seeded at the first
 observation, so they are finite from the first non-NaN day.
+
+Window kernels go through :func:`._base.rolling`, which evaluates them in blocks of
+rows so their ``(T, N, d)`` temporaries stay bounded for long windows.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from ._base import as2d, windows
+from ._base import as2d, rolling
 from .registry import register
 
 
@@ -45,40 +48,41 @@ def ts_log_returns(x, d):
 
 
 def ts_mean(x, d):
-    return windows(x, d).mean(axis=-1)
+    return rolling(lambda w: w.mean(axis=-1), d, x)
 
 
 def ts_sum(x, d):
-    return windows(x, d).sum(axis=-1)
+    return rolling(lambda w: w.sum(axis=-1), d, x)
 
 
 def ts_product(x, d):
-    return windows(x, d).prod(axis=-1)
+    return rolling(lambda w: w.prod(axis=-1), d, x)
 
 
 def ts_std(x, d):
     if int(d) < 2:
         raise ValueError("ts_std(x, d) needs d >= 2")
-    return windows(x, d).std(axis=-1, ddof=1)
+    return rolling(lambda w: w.std(axis=-1, ddof=1), d, x)
 
 
 def ts_min(x, d):
-    return windows(x, d).min(axis=-1)
+    return rolling(lambda w: w.min(axis=-1), d, x)
 
 
 def ts_max(x, d):
-    return windows(x, d).max(axis=-1)
+    return rolling(lambda w: w.max(axis=-1), d, x)
 
 
 def _arg_extreme(x, d, want_max: bool):
-    w = windows(x, d)
-    valid = ~np.isnan(w).any(axis=-1)
-    filled = np.where(np.isnan(w), -np.inf if want_max else np.inf, w)
-    idx = filled.argmax(axis=-1) if want_max else filled.argmin(axis=-1)
-    days_ago = (int(d) - 1) - idx  # 0 == today, d-1 == oldest in window
-    out = days_ago.astype(np.float64)
-    out[~valid] = np.nan
-    return out
+    def k(w):
+        valid = ~np.isnan(w).any(axis=-1)
+        filled = np.where(np.isnan(w), -np.inf if want_max else np.inf, w)
+        idx = filled.argmax(axis=-1) if want_max else filled.argmin(axis=-1)
+        out = ((int(d) - 1) - idx).astype(np.float64)  # 0 == today, d-1 == oldest in window
+        out[~valid] = np.nan
+        return out
+
+    return rolling(k, d, x)
 
 
 def ts_argmax(x, d):
@@ -93,21 +97,22 @@ def ts_rank(x, d):
     d = int(d)
     if d < 2:
         raise ValueError("ts_rank(x, d) needs d >= 2")
-    w = windows(x, d)
-    cur = w[..., -1:]
-    valid = ~np.isnan(w).any(axis=-1)
-    le = (w <= cur).sum(axis=-1)  # count of window values <= today (incl. today)
-    out = ((le - 1) / (d - 1)).astype(np.float64)
-    out[~valid] = np.nan
-    return out
+
+    def k(w):
+        valid = ~np.isnan(w).any(axis=-1)
+        le = (w <= w[..., -1:]).sum(axis=-1)  # count of window values <= today (incl. today)
+        out = ((le - 1) / (d - 1)).astype(np.float64)
+        out[~valid] = np.nan
+        return out
+
+    return rolling(k, d, x)
 
 
 def ts_decay_linear(x, d):
     d = int(d)
-    w = windows(x, d)
     weights = np.arange(1, d + 1, dtype=np.float64)  # newest gets the largest weight
     weights /= weights.sum()
-    return (w * weights).sum(axis=-1)
+    return rolling(lambda w: (w * weights).sum(axis=-1), d, x)
 
 
 def ts_ema(x, d):
@@ -131,9 +136,12 @@ def ts_dema(x, d):
 
 
 def _central_moment(x, d, power):
-    w = windows(x, d)
-    dev = w - w.mean(axis=-1, keepdims=True)
-    return (dev**power).mean(axis=-1), (dev**2).mean(axis=-1)
+    def k(w):
+        dev = w - w.mean(axis=-1, keepdims=True)
+        return np.stack(((dev**power).mean(axis=-1), (dev**2).mean(axis=-1)), axis=-1)
+
+    m = rolling(k, d, x)
+    return m[..., 0], m[..., 1]
 
 
 def ts_skew(x, d):
@@ -150,92 +158,104 @@ def ts_kurt(x, d):
     return np.where(m2 == 0, np.nan, g2)
 
 
-def _rolling_pair(x, y, d):
-    wx, wy = windows(x, d), windows(y, d)
-    mx = wx.mean(axis=-1, keepdims=True)
-    my = wy.mean(axis=-1, keepdims=True)
-    return wx - mx, wy - my
+def _demeaned(wx, wy):
+    return wx - wx.mean(axis=-1, keepdims=True), wy - wy.mean(axis=-1, keepdims=True)
 
 
 def ts_cov(x, y, d):
     if int(d) < 2:
         raise ValueError("ts_cov(x, y, d) needs d >= 2")
-    ax, ay = _rolling_pair(x, y, d)
-    return (ax * ay).sum(axis=-1) / (int(d) - 1)
+
+    def k(wx, wy):
+        ax, ay = _demeaned(wx, wy)
+        return (ax * ay).sum(axis=-1) / (int(d) - 1)
+
+    return rolling(k, d, x, y)
 
 
 # -- rolling order-statistics & dispersion (qlib Var/Med/Mad/Count/Quantile) --
 def ts_var(x, d):
     if int(d) < 2:
         raise ValueError("ts_var(x, d) needs d >= 2")
-    return windows(x, int(d)).var(axis=-1, ddof=1)
+    return rolling(lambda w: w.var(axis=-1, ddof=1), d, x)
 
 
 def ts_med(x, d):
-    return np.median(windows(x, int(d)), axis=-1)  # NaN in a window -> NaN (full-window)
+    return rolling(lambda w: np.median(w, axis=-1), d, x)  # NaN in a window -> NaN (full-window)
 
 
 def ts_mad(x, d):
-    w = windows(x, int(d))
-    return np.abs(w - w.mean(axis=-1, keepdims=True)).mean(axis=-1)
+    return rolling(lambda w: np.abs(w - w.mean(axis=-1, keepdims=True)).mean(axis=-1), d, x)
 
 
 def ts_count(x, d):
     """Rolling count of nonzero (truthy) values over the window (qlib ``Count``)."""
-    w = windows(x, int(d))
-    valid = ~np.isnan(w).any(axis=-1)
-    cnt = (w != 0).sum(axis=-1).astype(np.float64)
-    cnt[~valid] = np.nan
-    return cnt
+    def k(w):
+        valid = ~np.isnan(w).any(axis=-1)
+        cnt = (w != 0).sum(axis=-1).astype(np.float64)
+        cnt[~valid] = np.nan
+        return cnt
+
+    return rolling(k, d, x)
 
 
 def ts_quantile(x, d, q):
     """Rolling ``q``-quantile (qlib ``Quantile(x, d, qscore)``); ``q`` in [0, 1]."""
-    return np.quantile(windows(x, int(d)), float(q), axis=-1)
+    return rolling(lambda w: np.quantile(w, float(q), axis=-1), d, x)
 
 
 # -- rolling least-squares vs time (qlib Slope/Rsquare/Resi) ------------------
-def _rolling_ls(x, d):
-    """Per-window OLS of x against time t=0..d-1. Returns the shared pieces."""
+def _ls(d):
+    """Shared pieces of a per-window OLS of x against time t=0..d-1."""
     d = int(d)
     if d < 2:
         raise ValueError("slope/rsquare/resi need d >= 2")
-    w = windows(x, d)                       # (T, N, d), NaN-filled until full
     t = np.arange(d, dtype=np.float64)
     tc = t - t.mean()
-    stt = float((tc * tc).sum())            # scalar: sum (t - tbar)^2
-    xbar = w.mean(axis=-1)
-    sxt = (w * tc).sum(axis=-1)             # == sum((w-xbar) * tc) since sum(tc)=0
-    slope = sxt / stt
-    intercept = xbar - slope * t.mean()
-    return w, t, stt, xbar, sxt, slope, intercept
+    return t, tc, float((tc * tc).sum())    # stt: sum (t - tbar)^2
 
 
 def ts_slope(x, d):
-    return _rolling_ls(x, d)[5]
+    _, tc, stt = _ls(d)
+    return rolling(lambda w: (w * tc).sum(axis=-1) / stt, d, x)   # sum((w-xbar)*tc) == sum(w*tc)
 
 
 def ts_resi(x, d):
     """Regression residual at the most recent bar: x_t - (intercept + slope*(d-1))."""
-    w, t, _, _, _, slope, intercept = _rolling_ls(x, d)
-    return w[..., -1] - (intercept + slope * t[-1])
+    t, tc, stt = _ls(d)
+
+    def k(w):
+        slope = (w * tc).sum(axis=-1) / stt
+        intercept = w.mean(axis=-1) - slope * t.mean()
+        return w[..., -1] - (intercept + slope * t[-1])
+
+    return rolling(k, d, x)
 
 
 def ts_rsquare(x, d):
-    w, t, stt, xbar, sxt, slope, intercept = _rolling_ls(x, d)
-    sxx = ((w - xbar[..., None]) ** 2).sum(axis=-1)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        r2 = (sxt ** 2) / (stt * sxx)
-    return np.where(sxx == 0, np.nan, r2)
+    _, tc, stt = _ls(d)
+
+    def k(w):
+        xbar = w.mean(axis=-1)
+        sxt = (w * tc).sum(axis=-1)
+        sxx = ((w - xbar[..., None]) ** 2).sum(axis=-1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            r2 = (sxt ** 2) / (stt * sxx)
+        return np.where(sxx == 0, np.nan, r2)
+
+    return rolling(k, d, x)
 
 
 def ts_corr(x, y, d):
-    ax, ay = _rolling_pair(x, y, d)
-    cov = (ax * ay).sum(axis=-1)
-    denom = np.sqrt((ax * ax).sum(axis=-1)) * np.sqrt((ay * ay).sum(axis=-1))
-    with np.errstate(invalid="ignore", divide="ignore"):
-        r = cov / denom
-    return np.where(denom == 0, np.nan, r)  # zero variance (e.g. d too small) -> NaN
+    def k(wx, wy):
+        ax, ay = _demeaned(wx, wy)
+        cov = (ax * ay).sum(axis=-1)
+        denom = np.sqrt((ax * ax).sum(axis=-1)) * np.sqrt((ay * ay).sum(axis=-1))
+        with np.errstate(invalid="ignore", divide="ignore"):
+            r = cov / denom
+        return np.where(denom == 0, np.nan, r)  # zero variance (e.g. d too small) -> NaN
+
+    return rolling(k, d, x, y)
 
 
 # `incremental` mirrors the appendix table (whether an O(1) daily update exists);

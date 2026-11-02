@@ -132,6 +132,8 @@ def degree(node) -> tuple[int, int] | None:
     degs = [degree(c) for c in arrays]
     if any(d is None for d in degs):
         return None
+    if not degs:                      # literals only, e.g. a constant folded into an op
+        return (0, 0)
     if op in _ZERO:
         return (0, 0)
     if op in _KEEP:

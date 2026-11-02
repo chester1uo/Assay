@@ -229,7 +229,7 @@ def create_app() -> FastAPI:
     # Routers import `get_service` from this module, so import them here (after the
     # accessor + handlers are defined) to keep a clean one-way dependency.
     from assay.api.routes import (
-        account, admin, combination, data_admin, factor, fdb, legacy, library, market, portfolio,
+        account, admin, ades, combination, data_admin, factor, fdb, legacy, library, market, portfolio,
         session, system,
     )
 
@@ -243,6 +243,7 @@ def create_app() -> FastAPI:
     app.include_router(session.router, prefix="/v1/session", tags=["Session"])
     app.include_router(system.router, prefix="/v1/system", tags=["System"])
     app.include_router(fdb.router, prefix="/v1/fdb", tags=["FactorDB"])
+    app.include_router(ades.router, prefix="/v1/ades", tags=["ADES"])
     # Unlinked operations console at GET /admin (also installs the request-log
     # middleware + WARNING-level log capture it renders). Reached by URL only.
     from fastapi import Depends

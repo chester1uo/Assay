@@ -3,7 +3,10 @@
 A :class:`Grid` is every trading day of the store (``start`` to the panel's last day)
 × a fixed, sorted set of securities (QFinVerse sids). A node is the float32 value of a
 column-separable subtree on that grid, kept as one ``.npy`` file per calendar year so
-that appending a day rewrites one small file and a read maps only the years it needs::
+that appending a day rewrites one small file and a read maps only the years it needs.
+Year files are security-major, shape ``(n_sids, days_in_year)``: workers compute
+slices of securities, so each one writes contiguous ranges instead of touching every
+page of a day-major file, and a universe read pulls one contiguous run per security::
 
     <root>/grids/<grid_id>/sids.npy, grid.json
     <root>/grids/<grid_id>/nodes/<hash[:2]>/<hash>/meta.json, 2016.npy, 2017.npy, ...
@@ -26,7 +29,9 @@ from pathlib import Path
 
 import numpy as np
 
-__all__ = ["Grid", "NodeStore"]
+__all__ = ["Grid", "NodeStore", "FORMAT"]
+
+FORMAT = 2   # 2: security-major year files (part of the grid id, so older stores are not reused)
 
 
 def _years(dates: np.ndarray) -> np.ndarray:
@@ -70,7 +75,7 @@ class Grid:
     @staticmethod
     def make_id(sids: np.ndarray, start, adjust: str, scope: str = "global") -> str:
         h = hashlib.blake2b(digest_size=8)
-        h.update(f"{scope}|{np.datetime64(start, 'D')}|{adjust}|".encode())
+        h.update(f"{scope}|{np.datetime64(start, 'D')}|{adjust}|v{FORMAT}|".encode())
         h.update(np.asarray(sids, dtype=np.int32).tobytes())
         return h.hexdigest()
 
@@ -91,7 +96,7 @@ class NodeStore:
         d.mkdir(parents=True, exist_ok=True)
         np.save(d / "sids.npy", grid.sids)
         info = {"grid_id": grid.grid_id, "start": str(grid.dates[0]), "end": str(grid.end),
-                "n_sids": int(len(grid.sids)), "adjust": grid.adjust, **meta}
+                "n_sids": int(len(grid.sids)), "adjust": grid.adjust, "format": FORMAT, **meta}
         tmp = d / "grid.json.tmp"
         tmp.write_text(json.dumps(info, indent=1))
         os.replace(tmp, d / "grid.json")
@@ -122,7 +127,7 @@ class NodeStore:
         os.replace(tmp, d / "meta.json")
 
     def allocate(self, grid: Grid, h: str, years: list[int] | None = None) -> dict[int, Path]:
-        """Create float32 year files for a node; returns their paths.
+        """Create float32 ``(n_sids, days)`` year files for a node; returns their paths.
 
         Existing files of the node for other years are kept; ``years`` limits which
         years are (re)created (default: all)."""
@@ -137,12 +142,12 @@ class NodeStore:
             # a fresh node is invisible until its meta.json exists, so it is created in place
             tmp = d / f".{y}.{os.getpid()}.npy" if old is not None else p
             # a fresh node is written in full by the workers, so its file is left sparse
-            mm = np.lib.format.open_memmap(tmp, mode="w+", dtype=np.float32, shape=(r1 - r0, len(grid.sids)))
-            if old is not None:  # keep the rows already computed (an append grows the year)
+            mm = np.lib.format.open_memmap(tmp, mode="w+", dtype=np.float32, shape=(len(grid.sids), r1 - r0))
+            if old is not None:  # keep the days already computed (an append grows the year)
                 prev = np.load(old, mmap_mode="r")
-                n = min(prev.shape[0], mm.shape[0])
-                mm[:n, : prev.shape[1]] = prev[:n]
-                mm[n:] = np.nan
+                n = min(prev.shape[1], mm.shape[1])
+                mm[: prev.shape[0], :n] = prev[:, :n]
+                mm[:, n:] = np.nan
             mm.flush()
             del mm
             if tmp != p:
@@ -155,7 +160,7 @@ class NodeStore:
         return {y: np.load(d / f"{y}.npy", mmap_mode=mode) for y in grid.year_slices() if (d / f"{y}.npy").is_file()}
 
     def read(self, grid: Grid, h: str, r0: int, r1: int, cols: np.ndarray) -> np.ndarray:
-        """float64 ``(r1-r0, len(cols))`` slice of a node (NaN where a column is -1)."""
+        """float64 ``(r1-r0, len(cols))`` slice of a node, day-major (NaN where a column is -1)."""
         out = np.full((r1 - r0, len(cols)), np.nan)
         ok = cols >= 0
         cidx = cols[ok]
@@ -165,7 +170,7 @@ class NodeStore:
             if a >= b:
                 continue
             block = np.load(d / f"{y}.npy", mmap_mode="r")
-            out[a - r0:b - r0][:, ok] = block[a - y0:b - y0][:, cidx]
+            out[a - r0:b - r0, ok] = block[cidx, a - y0:b - y0].T
         return out
 
     def nodes(self, grid_id: str) -> list[dict]:

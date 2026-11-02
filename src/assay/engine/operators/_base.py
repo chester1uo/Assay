@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import warnings
 
 import numpy as np
@@ -33,6 +34,40 @@ def windows(x: np.ndarray, d: int) -> np.ndarray:
     pad = np.full((d - 1, x.shape[1]), np.nan, dtype=np.float64)
     padded = np.concatenate((pad, x), axis=0)
     return sliding_window_view(padded, d, axis=0)  # (T, N, d)
+
+
+# cap on one block of window temporaries (MB); a reduction over ``(rows, N, d)`` views
+# makes a few float64 copies of that size, so the cap bounds kernel memory at any ``d``
+WINDOW_BLOCK_MB = float(os.environ.get("ASSAY_WINDOW_BLOCK_MB") or 64)
+
+
+def rolling(fn, d: int, *xs: np.ndarray) -> np.ndarray:
+    """``fn(*windows)`` over trailing windows of ``xs``, computed in blocks of rows.
+
+    Same values as ``fn(*(windows(x, d) for x in xs))`` (each output element reduces
+    the same window), but the ``(T, N, d)`` temporaries ``fn`` creates are limited to
+    about :data:`WINDOW_BLOCK_MB` per block instead of growing with ``d``.
+    """
+    d = int(d)
+    if d < 1:
+        raise ValueError(f"window length must be >= 1, got {d}")
+    arrs = [np.asarray(x, dtype=np.float64) for x in xs]
+    for a in arrs:
+        if a.ndim != 2:
+            raise ValueError(f"time-series operator expects a (T, N) matrix, got shape {a.shape}")
+    T, N = arrs[0].shape
+    pads = [np.concatenate((np.full((d - 1, N), np.nan), a), axis=0) for a in arrs]
+    step = max(1, int(WINDOW_BLOCK_MB * 2**20 // (max(N, 1) * d * 8 * 4 * len(arrs))))
+    if T == 0 or step >= T:
+        return np.asarray(fn(*(sliding_window_view(p, d, axis=0) for p in pads)))
+    out = None
+    for a in range(0, T, step):
+        b = min(T, a + step)
+        r = np.asarray(fn(*(sliding_window_view(p[a:b + d - 1], d, axis=0) for p in pads)))
+        if out is None:
+            out = np.empty((T,) + r.shape[1:], dtype=r.dtype)
+        out[a:b] = r
+    return out
 
 
 def as2d(x: np.ndarray) -> np.ndarray:

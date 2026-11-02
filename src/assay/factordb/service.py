@@ -7,7 +7,13 @@ FactorDB is on when ``ASSAY_FACTORDB_DIR`` and ``ASSAY_QFV_PANEL_DIR`` are both 
                                stored node on a TOP3000 grid from 2010)
 ``ASSAY_FACTORDB_START``       first day of the grid (default 2010-01-01)
 ``ASSAY_FACTORDB_WORKERS``     compute processes (default: cores - 1)
+``ASSAY_FACTORDB_DOMAIN``      universes whose members make up the grid (default
+                               ``TOP3000,SP500,NASDAQ100``)
 ``ASSAY_FACTORDB_BUDGET_S``    compute seconds per owner per day (default 3600)
+``ASSAY_ADES``                 ``1``: this process is the ADES controller; slices go to the
+                               task queue (``<dir>/ades.sqlite3``) for remote workers
+``ASSAY_ADES_LEASE_S``         seconds a worker holds a task between heartbeats (default 120)
+``ASSAY_WORKER_KEYS``          comma-separated keys workers present on ``/v1/ades/*``
 =============================  =============================================================
 """
 
@@ -42,8 +48,16 @@ def get() -> FactorService:
 
             root = Path(os.environ["ASSAY_FACTORDB_DIR"]).expanduser()
             workers = int(os.environ.get("ASSAY_FACTORDB_WORKERS") or 0) or None
+            domain = tuple(u.strip() for u in os.environ.get("ASSAY_FACTORDB_DOMAIN", "").split(",") if u.strip())
             db = FactorDB(root, os.environ["ASSAY_QFV_PANEL_DIR"],
-                          start=os.environ.get("ASSAY_FACTORDB_START", "2010-01-01"), workers=workers)
+                          start=os.environ.get("ASSAY_FACTORDB_START", "2010-01-01"), workers=workers,
+                          **({"domain": domain} if domain else {}))
+            ades = None
+            if os.environ.get("ASSAY_ADES", "") in ("1", "true", "yes"):
+                from assay.ades.tasks import TaskQueue
+
+                ades = TaskQueue(root / "ades.sqlite3", lease_s=float(os.environ.get("ASSAY_ADES_LEASE_S", "120")))
             _service = FactorService(db, Registry(root / "registry.sqlite3"),
-                                     daily_budget_s=float(os.environ.get("ASSAY_FACTORDB_BUDGET_S", "3600")))
+                                     daily_budget_s=float(os.environ.get("ASSAY_FACTORDB_BUDGET_S", "3600")),
+                                     ades=ades)
         return _service

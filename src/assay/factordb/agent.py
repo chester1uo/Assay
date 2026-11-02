@@ -5,6 +5,11 @@ expressions) go through :meth:`FactorService.submit`, which answers at once with
 already knows (rejects with hints, duplicates, factors already scored on this spec) and
 queues the rest as a job. Jobs from different owners are interleaved chunk by chunk, so
 one agent's 10,000-factor sweep does not block another's 20 factors.
+
+With an ADES task queue (``ades=``) the service is only the controller: slices go to
+the queue, remote workers lease and score them (:mod:`assay.ades`), and
+:meth:`FactorService.apply_results` records what they send back. Without it, a thread
+in this process computes the slices on FactorDB.
 """
 
 from __future__ import annotations
@@ -56,6 +61,11 @@ def score(values: np.ndarray, fwd: dict[int, np.ndarray]) -> dict:
     }
 
 
+def _sample(values: np.ndarray) -> np.ndarray:
+    """The fingerprint days: ``FINGERPRINT_DAYS`` evenly spaced rows."""
+    return values[np.linspace(0, len(values) - 1, min(FINGERPRINT_DAYS, len(values))).astype(int)]
+
+
 def _ranks(x: np.ndarray) -> np.ndarray:
     """Per-row ranks scaled to [-1, 1], NaN kept (for novelty correlations)."""
     out = np.full(x.shape, np.nan)
@@ -70,15 +80,17 @@ def _ranks(x: np.ndarray) -> np.ndarray:
 
 
 class FactorService:
-    def __init__(self, db: FactorDB, registry: Registry, *, daily_budget_s: float = 3600.0):
-        self.db, self.reg = db, registry
+    def __init__(self, db: FactorDB, registry: Registry, *, daily_budget_s: float = 3600.0, ades=None):
+        self.db, self.reg, self.ades = db, registry, ades
         self.daily_budget_s = daily_budget_s
         self._queues: "OrderedDict[str, deque]" = OrderedDict()   # owner -> deque of (job_id, exprs)
         self._wake = threading.Event()
         self._lock = threading.Lock()
         self._fwd: dict = {}                                      # spec -> (dates, labels, fwd, close)
         self._prints: dict = {}                                   # spec -> {factor_id: ranks on sample days}
-        self._thread = threading.Thread(target=self._run, name="factordb-jobs", daemon=True)
+        self._spec_data = None                                    # ADES mode: one loaded spec for reads
+        self._thread = threading.Thread(target=self._reap if ades is not None else self._run,
+                                        name="factordb-jobs", daemon=True)
         self._thread.start()
 
     # ── submit ───────────────────────────────────────────────────────────────
@@ -117,11 +129,15 @@ class FactorService:
             job_id = "job_" + uuid.uuid4().hex[:12]
             self.reg.create_job(job_id, owner, spec, [e for _, e, _ in accepted], label)
             self.reg.update_job(job_id, factor_ids=[f for f, _, _ in accepted])
-            with self._lock:
-                q = self._queues.setdefault(owner or "anonymous", deque())
-                for i in range(0, len(accepted), CHUNK):
-                    q.append((job_id, spec, universe, start, end, horizons, execution, accepted[i:i + CHUNK]))
-            self._wake.set()
+            if self.ades is not None:
+                self.ades.enqueue(job_id, owner or "anonymous", spec, version,
+                                  [[fid, e] for fid, e, _ in accepted], CHUNK)
+            else:
+                with self._lock:
+                    q = self._queues.setdefault(owner or "anonymous", deque())
+                    for i in range(0, len(accepted), CHUNK):
+                        q.append((job_id, spec, universe, start, end, horizons, execution, accepted[i:i + CHUNK]))
+                self._wake.set()
         return {"job_id": job_id, "spec": spec, "queued": len(accepted), "already_scored": known[:50],
                 "n_already_scored": len(known), "duplicates": duplicates[:50], "rejected": rejected[:50],
                 "next": "poll fdb_job with job_id" if job_id else "nothing to compute"}
@@ -153,7 +169,8 @@ class FactorService:
             done = failed = 0
             try:
                 fwd = self._forward(spec, universe, start, end, horizons, execution)
-                _, _, res = self.db.evaluate([e for _, e, _ in items], universe, start, end)
+                _, labels, res, _ = self.db.evaluate_iter([e for _, e, _ in items], universe, start, end)
+                order = np.argsort(np.asarray(labels, dtype=object), kind="stable")  # prints on sorted labels
                 version = self.db.qfv.snapshot_id
                 for (fid, _, _), r in zip(items, res):
                     if r.values is None:
@@ -161,26 +178,69 @@ class FactorService:
                         self.reg.put_score(fid, spec, version, owner, {"error": r.error})
                         continue
                     self.reg.put_score(fid, spec, version, owner, score(r.values, fwd[2]))
-                    self._remember(spec, fid, r.values)
+                    self._remember(spec, fid, _ranks(_sample(r.values))[:, order].astype(np.float32))
                     done += 1
             except Exception as exc:  # noqa: BLE001 — a failing slice fails its job, not the worker
                 log.exception("factordb job %s failed", job_id)
                 self.reg.update_job(job_id, status="failed", error=str(exc)[:500], finished=time.time())
                 continue
-            self.reg.add_usage(owner, time.time() - t0, done)
-            job = self.reg.job(job_id)
-            nd, nf = job["done"] + done, job["failed"] + failed
-            fields = {"done": nd, "failed": nf}
-            if nd + nf >= job["total"]:
-                fields.update(status="done", finished=time.time())
-            self.reg.update_job(job_id, **fields)
+            self._progress(job_id, owner, done, failed, time.time() - t0)
+
+    def _progress(self, job_id: str, owner: str | None, done: int, failed: int, seconds: float) -> None:
+        self.reg.add_usage(owner, seconds, done)
+        job = self.reg.job(job_id)
+        if job is None:
+            return
+        fields = {"done": job["done"] + done, "failed": job["failed"] + failed}
+        if job["status"] == "queued":
+            fields.update(status="running", started=time.time())
+        if fields["done"] + fields["failed"] >= job["total"]:
+            fields.update(status="done", finished=time.time())
+        self.reg.update_job(job_id, **fields)
+
+    # ── ADES controller ──────────────────────────────────────────────────────
+    def apply_results(self, task: dict, results: list[dict], seconds: float) -> dict:
+        """Record a worker's scores for a completed task (see :mod:`assay.ades`)."""
+        from assay.ades.slice import decode_print
+
+        spec, version, owner = task["spec"], task["version"], task["owner"]
+        done = failed = 0
+        for r in results:
+            fid = r.get("factor_id")
+            if not fid:
+                continue
+            if r.get("metrics") is not None:
+                self.reg.put_score(fid, spec, version, owner, r["metrics"])
+                if r.get("print"):
+                    self._remember(spec, fid, decode_print(r["print"]))
+                done += 1
+            else:
+                self.reg.put_score(fid, spec, version, owner, {"error": r.get("error")})
+                failed += 1
+        self._progress(task["job_id"], owner, done, failed, seconds)
+        return {"done": done, "failed": failed}
+
+    def lease(self, worker: str, panel: str, info: dict | None = None) -> dict | None:
+        task = self.ades.lease(worker, panel, info)
+        if task is not None:
+            task["spec"] = self.reg.spec(task["spec"])
+        return task
+
+    def _reap(self) -> None:
+        while True:
+            time.sleep(10)
+            try:
+                for t in self.ades.reap():
+                    self._progress(t["job_id"], t["owner"], 0, t["n"], 0.0)
+            except Exception:  # noqa: BLE001
+                log.exception("ades reaper")
 
     def _forward(self, spec, universe, start, end, horizons, execution):
         hit = self._fwd.get(spec)
         if hit is not None:
             return hit
         dates, labels, _ = self.db.evaluate(["close"], universe, start, end)   # the request's axes
-        sids = self.db.panel.sids(labels, on=str(dates[-1]))
+        sids = self.db.panel.label_sids(labels, on=str(dates[-1]))
         m = self.db.panel.matrix(["close", "open"], sids, str(dates[0]), str(dates[-1]), adjust=self.db.adjust)
         # unmasked prices: a security's return after it leaves the universe still counts
         fwd = evaluator.forward_returns(np.asarray(m.data["close"], float), np.asarray(m.data["open"], float),
@@ -189,9 +249,9 @@ class FactorService:
         self._fwd[spec] = out
         return out
 
-    def _remember(self, spec: str, fid: str, values: np.ndarray) -> None:
-        idx = np.linspace(0, len(values) - 1, min(FINGERPRINT_DAYS, len(values))).astype(int)
-        self._prints.setdefault(spec, {})[fid] = _ranks(values[idx]).astype(np.float32)
+    def _remember(self, spec: str, fid: str, ranks: np.ndarray) -> None:
+        """Keep a factor's fingerprint: ranks on the sample days, columns in sorted-label order."""
+        self._prints.setdefault(spec, {})[fid] = ranks
 
     # ── read side ────────────────────────────────────────────────────────────
     def job(self, job_id: str, top: int = 10) -> dict:
@@ -231,12 +291,10 @@ class FactorService:
         f = self.reg.factor(expr_or_id) if not any(c in expr_or_id for c in "(,") else None
         if f:
             expr = f["expr"]
-        _, _, res = self.db.evaluate([expr], universe, start, end)
-        if res[0].values is None:
-            return {"error": res[0].error}
-        v = res[0].values
-        idx = np.linspace(0, len(v) - 1, min(FINGERPRINT_DAYS, len(v))).astype(int)
-        mine = _ranks(v[idx])
+        v, labels, err = self._values_one(expr, spec, universe, start, end)
+        if err is not None:
+            return {"error": err}
+        mine = _ranks(_sample(v))[:, np.argsort(np.asarray(labels, dtype=object), kind="stable")]
         own = cn.factor_id(parse(expr))
         out = []
         for fid, other in prints.items():
@@ -255,6 +313,26 @@ class FactorService:
                    for c, fid in out[:top]]
         return {"spec": spec, "library": len(prints), "max_abs_corr": round(abs(out[0][0]), 4) if out else None,
                 "nearest": nearest}
+
+    def _values_one(self, expr: str, spec: str, universe: str, start: str, end: str):
+        """(values, labels, error) of one expression on a spec. In ADES mode the controller
+        does not build FactorDB nodes; it evaluates on the classic engine, like a worker."""
+        if self.ades is None:
+            _, labels, res = self.db.evaluate([expr], universe, start, end)
+            return res[0].values, labels, res[0].error
+        from assay.ades import slice as sl
+
+        info = self.reg.spec(spec)
+        with self._lock:
+            if self._spec_data is None or self._spec_data.key != spec:
+                self._spec_data = None
+                self._spec_data = sl.load_spec(self.db.qfv, info)
+            data = self._spec_data
+        try:
+            v = data.engine.evaluate(expr).values
+        except Exception as exc:  # noqa: BLE001
+            return None, None, {"code": "RUNTIME_ERROR", "message": str(exc)[:300]}
+        return v, list(data.engine.symbols), None
 
     def values(self, expr_or_id: str, *, universe: str, date: str | None = None, top: int = 10) -> dict:
         f = self.reg.factor(expr_or_id) if not any(c in expr_or_id for c in "(,") else None
