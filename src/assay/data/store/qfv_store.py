@@ -136,7 +136,7 @@ class QFVPanelStore:
         symbols = list(symbols)
         if not len(dates) or not symbols:
             return np.zeros((len(dates), len(symbols)), dtype=bool)
-        sids = self.panel.sids(symbols, on=str(dates[-1]))
+        sids = self.panel.label_sids(symbols, on=str(dates[-1]))
         uid = index_id.upper()
         if uid in QFV_UNIVERSES:
             return self.panel.membership(QFV_UNIVERSES[uid], dates, sids)
@@ -165,7 +165,7 @@ class QFVPanelStore:
         end = min(_iso(end_date), _iso(as_of_date))
         p = self.panel
         symbols = sorted(set(symbols))
-        sids = p.sids(symbols, on=end)
+        sids = p.label_sids(symbols, on=end)
         keep = sids >= 0
         if not keep.all():
             log.info("qfv panel: %d unknown symbols dropped", int((~keep).sum()))

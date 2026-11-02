@@ -106,3 +106,25 @@ def test_a_new_version_is_picked_up(store, tmp_path):
     write_store(tmp_path, "v000002", last="2025-01-31")
     assert store.refresh(min_interval_s=0) and store.snapshot_id.endswith("v000002")
     assert store.price_span()["last_date"] == "2025-01-31"
+
+
+def test_a_repeated_sid_is_adjusted_in_every_column(store):
+    p = store.panel
+    dates = p.calendar[(p.calendar >= np.datetime64("2024-12-20")) & (p.calendar <= np.datetime64("2025-01-10"))]
+    price, volume = p._back_factors(dates, np.array([0, 1, 0], dtype=np.int32), ("split",))
+    np.testing.assert_array_equal(price[:, 0], price[:, 2])
+    assert price[0, 0] == 0.5 and volume[0, 2] == 2.0
+
+
+def test_labels_map_back_to_their_own_security(tmp_path):
+    # BBB's ticker was later used by sid 2 (now CCC): the label "BBB" still names sid 1,
+    # while the ticker "BBB" on the last day means its latest user, sid 2
+    write_store(tmp_path)
+    v = tmp_path / "v000001"
+    cal = days("2024-12-02", "2025-01-24")
+    pq.write_table(pa.table({"ticker": ["AAA", "BBB", "BBB", "CCC"], "sid": pa.array([0, 1, 2, 2], pa.int32()),
+                             "start": [cal[0], cal[0], "2024-12-23", "2025-01-06"],
+                             "end": [cal[-1], "2024-12-20", "2025-01-03", cal[-1]]}), v / "tickers.parquet")
+    p = QFVPanelStore(tmp_path).panel
+    assert list(p.sids(["BBB"])) == [2]
+    assert list(p.label_sids(["BBB", "CCC", "AAA", "ZZZ"])) == [1, 2, 0, -1]

@@ -172,6 +172,22 @@ class DailyPanel:
             out.append(sid)
         return np.array([-1 if s is None else s for s in out], dtype=np.int32)
 
+    def label_sids(self, labels: Iterable[str], on: Optional[str] = None) -> np.ndarray:
+        """Sids of display labels (as :meth:`labels` returns them); a name that is no
+        label falls back to the ticker meaning of :meth:`sids` on ``on``.
+
+        Use this, not :meth:`sids`, to map labels back: a plain label like ``BBBY``
+        names the security that keeps it (the last holder still trading, else the last
+        one), while the ticker ``BBBY`` on a date means its latest user by then, which
+        can be another security. Mixing the two maps one company to two columns."""
+        self.sids([])                                   # builds the label index
+        labels = [str(t) for t in labels]
+        out = np.array([self._by_label.get(t, -1) for t in labels], dtype=np.int32)
+        miss = out < 0
+        if miss.any():
+            out[miss] = self.sids([t for t, m in zip(labels, miss) if m], on=on)
+        return out
+
     def labels(self, sids: Sequence[int]) -> list[str]:
         """Unique display names: the ticker, or ``TICKER~YYYY-MM`` for an older holder of a reused ticker."""
         lab = self.securities()["label"]
@@ -241,18 +257,20 @@ class DailyPanel:
             return price[:T], volume[:T]
         ev = self.events()
         m = ev["applied"] & np.isin(ev["kind"], kinds) & (ev["ex_date"] > dates[0]) & (ev["ex_date"] <= dates[-1])
-        order = np.argsort(sids, kind="stable")
-        pos = np.searchsorted(sids[order], ev["sid"][m])
-        pos = np.minimum(pos, N - 1)
-        hit = sids[order][pos] == ev["sid"][m]
-        cols = order[pos[hit]]
+        # factors per distinct sid, then one column per requested sid (a sid may repeat)
+        uniq, inv = np.unique(np.asarray(sids), return_inverse=True)
+        price = price[:, : len(uniq)]
+        volume = volume[:, : len(uniq)]
+        pos = np.minimum(np.searchsorted(uniq, ev["sid"][m]), len(uniq) - 1)
+        hit = uniq[pos] == ev["sid"][m]
+        cols = pos[hit]
         rows = np.searchsorted(dates, ev["ex_date"][m][hit])     # first row on or after the ex-date
         np.multiply.at(price, (rows, cols), ev["factor"][m][hit])
         np.multiply.at(volume, (rows, cols), ev["volume_factor"][m][hit])
         # row t takes every event after it: product over rows t+1..T
         price = np.cumprod(price[::-1], axis=0)[::-1][1:]
         volume = np.cumprod(volume[::-1], axis=0)[::-1][1:]
-        return price, volume
+        return price[:, inv], volume[:, inv]
 
     # ── matrices ─────────────────────────────────────────────────────────
     def matrix(self, fields: Sequence[str], sids, start: str, end: str, adjust: str = "split",
