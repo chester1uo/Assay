@@ -138,6 +138,15 @@ class TaskQueue:
                           (task_id, worker)).fetchone()
             return self._retry(c, r, f"{worker}: {error}"[:500], now) if r is not None else []
 
+    def release(self, task_id: str, worker: str) -> bool:
+        """Hand a task back unfinished (the worker is stopping): queued again, attempt not counted."""
+        now = time.time()
+        with self._lock, self._conn() as c:
+            cur = c.execute("UPDATE tasks SET status='queued', worker=NULL, lease_until=NULL,"
+                            " attempts=MAX(attempts-1, 0), updated=? WHERE id=? AND worker=? AND status='leased'",
+                            (now, task_id, worker))
+            return cur.rowcount == 1
+
     def _seen(self, c, worker: str, version: str, info: dict | None, now: float) -> None:
         c.execute("INSERT INTO workers (name, seen, version, info) VALUES (?,?,?,?) ON CONFLICT(name) DO UPDATE"
                   " SET seen=excluded.seen, version=excluded.version, info=excluded.info",

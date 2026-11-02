@@ -224,6 +224,9 @@ class FactorService:
         task = self.ades.lease(worker, panel, info)
         if task is not None:
             task["spec"] = self.reg.spec(task["spec"])
+            job = self.reg.job(task["job_id"])
+            if job is not None and job["status"] == "queued":
+                self.reg.update_job(task["job_id"], status="running", started=time.time())
         return task
 
     def _reap(self) -> None:

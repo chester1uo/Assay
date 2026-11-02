@@ -9,6 +9,7 @@ last use) and returns only metrics and a compact novelty fingerprint per factor.
 from __future__ import annotations
 
 import base64
+import os
 import time
 import zlib
 from dataclasses import dataclass
@@ -23,6 +24,28 @@ __all__ = ["SpecData", "load_spec", "score_items", "encode_print", "decode_print
 
 FIELDS = ["open", "high", "low", "close", "volume"]
 FINGERPRINT_DAYS = 60
+# matrices one CSE sub-batch may keep alive (on top of the panel and forward returns)
+EVAL_MB = float(os.environ.get("ASSAY_ADES_EVAL_MB") or 600)
+
+
+def _sub_batches(nodes: list, matrix_mb: float) -> list[list[int]]:
+    """Consecutive groups of ``nodes`` whose live CSE frontier fits :data:`EVAL_MB`.
+
+    Sharing stays inside a group; a single node that alone exceeds the budget still
+    gets a group of its own."""
+    from assay.factordb.compute import peak_live
+
+    cap = max(1, int(EVAL_MB // max(matrix_mb, 1e-9)))
+    groups: list[list[int]] = []
+    cur: list[int] = []
+    for i in range(len(nodes)):
+        if cur and peak_live([nodes[j] for j in cur + [i]]) > cap:
+            groups.append(cur)
+            cur = []
+        cur.append(i)
+    if cur:
+        groups.append(cur)
+    return groups
 
 
 @dataclass
@@ -88,11 +111,15 @@ def score_items(data: SpecData, items: list) -> list[dict]:
             continue
         nodes.append(node)
         keep.append(fid)
-    for fid, res in zip(keep, eng.evaluate_iter(nodes, errors="yield")):
-        if isinstance(res, Exception):
-            out.append({"factor_id": fid, "error": {"code": "RUNTIME_ERROR", "operator": getattr(res, "op", None),
-                                                     "message": str(res)[:300]}})
-            continue
-        v = res.values
-        out.append({"factor_id": fid, "metrics": score(v, data.fwd), "print": encode_print(fingerprint(v))})
+    matrix_mb = eng.dates.size * len(eng.symbols) * 8 / 2**20
+    for group in _sub_batches(nodes, matrix_mb):
+        for i, res in zip(group, eng.evaluate_iter([nodes[i] for i in group], errors="yield")):
+            fid = keep[i]
+            if isinstance(res, Exception):
+                out.append({"factor_id": fid, "error": {"code": "RUNTIME_ERROR", "operator": getattr(res, "op", None),
+                                                         "message": str(res)[:300]}})
+                continue
+            v = res.values
+            out.append({"factor_id": fid, "metrics": score(v, data.fwd), "print": encode_print(fingerprint(v))})
+            del v, res
     return out

@@ -80,6 +80,11 @@ def fail(body: dict = Body(...)):
     return {"ok": True}
 
 
+@router.post("/release", dependencies=[Depends(require_worker)])
+def release(body: dict = Body(...)):
+    return {"ok": _svc().ades.release(str(body.get("task_id")), _name(body))}
+
+
 @router.get("/status", dependencies=[Depends(require_admin)])
 def status():
     return _svc().ades.status()

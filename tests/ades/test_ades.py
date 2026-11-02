@@ -48,6 +48,25 @@ def test_expired_leases_are_retried_then_failed(tmp_path):
     assert q.status()["tasks"] == {"failed": 1}
 
 
+def test_a_released_task_does_not_use_an_attempt(tmp_path):
+    q = TaskQueue(tmp_path / "q.sqlite3", max_attempts=1)
+    q.enqueue("j1", "ann", "s", "v1", _items(3), 64)
+    t = q.lease("w1", "v1")
+    assert q.release(t["task_id"], "w1") and not q.release(t["task_id"], "w1")
+    assert q.lease("w2", "v1")["attempt"] == 1                 # still a first attempt
+
+
+def test_sub_batches_bound_the_live_matrices(monkeypatch):
+    from assay.ades import slice as sl
+    from assay.engine import parse
+
+    nodes = [parse(f"cs_rank(ts_corr(ts_mean(close, {w}), ts_mean(volume, {w}), {w}))") for w in range(3, 13)]
+    monkeypatch.setattr(sl, "EVAL_MB", 3 * 10.0)               # three 10 MB matrices
+    groups = sl._sub_batches(nodes, 10.0)
+    assert sum(len(g) for g in groups) == len(nodes) and len(groups) > 1
+    assert [i for g in groups for i in g] == list(range(len(nodes)))
+
+
 def test_fingerprint_codec_round_trips():
     r = np.array([[-1.0, 0.0, np.nan, 1.0], [0.5, -0.5, 0.25, np.nan]])
     back = decode_print(encode_print(r))

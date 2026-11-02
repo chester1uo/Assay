@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import os
+import signal
 import socket
 import threading
 import time
@@ -65,6 +66,7 @@ class Worker:
         beat = threading.Thread(target=self._beat, args=(task, stop), daemon=True)
         beat.start()
         t0 = time.perf_counter()
+        finished = False
         try:
             spec = task["spec"]
             if self.data is None or self.data.key != spec["key"]:
@@ -74,11 +76,15 @@ class Worker:
             results = sl.score_items(self.data, task["items"])
             self.t.post("/v1/ades/complete", {"task_id": task["task_id"], "worker": self.name,
                                               "seconds": round(time.perf_counter() - t0, 3), "results": results})
+            finished = True
         except Exception as exc:  # noqa: BLE001 — report and keep serving
             log.exception("task %s failed", task.get("task_id"))
             self.t.post("/v1/ades/fail", {"task_id": task["task_id"], "worker": self.name, "error": str(exc)[:500]})
+            finished = True
         finally:
             stop.set()
+            if not finished:     # stopped mid-task (SIGTERM on a deploy): hand it back
+                self.t.post("/v1/ades/release", {"task_id": task["task_id"], "worker": self.name})
         return True
 
     def _beat(self, task: dict, stop: threading.Event) -> None:
@@ -111,6 +117,10 @@ def main(argv=None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     from assay.data.store import QFVPanelStore
 
+    def _stop(signum, frame):            # unwinds run_once, whose finally releases the lease
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _stop)
     key = open(a.key_file).read().strip()
     name = a.name or f"{socket.gethostname()}-{os.getpid()}"
     Worker(HttpTransport(a.controller, key), QFVPanelStore(a.panel), name).serve()
