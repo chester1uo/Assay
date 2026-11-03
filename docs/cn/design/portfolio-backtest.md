@@ -31,8 +31,10 @@
 ![组合回测流水线](../../assets/figures/cn/portfolio-pipeline.svg "圆点：绿色已实现，黄色部分实现")
 
 
-优化再平衡器使用 **scipy**（`scipy.optimize.minimize`，SLSQP）和一个 numpy
-Ledoit-Wolf 收缩——`cvxpy`/`scikit-learn` 被有意*排除*在依赖之外。
+优化再平衡器在装有 **OSQP**（`perf` 额外依赖）时用它求解二次规划，并把 Ledoit-Wolf
+协方差写成单位阵加秩 `W` 的形式，每次调仓约 0.3 秒（换手上限生效时约 2 秒）。没有 OSQP
+时回退到 **scipy**（`scipy.optimize.minimize`，SLSQP；约 490 只股票时每次调仓约 3 秒）。
+Ledoit-Wolf 收缩用 numpy 实现——`cvxpy`/`scikit-learn` 被有意*排除*在依赖之外。
 
 ---
 

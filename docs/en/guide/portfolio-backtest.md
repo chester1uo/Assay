@@ -53,7 +53,7 @@ pf = assay.backtest_portfolio("cs_rank(ts_corr(close, volume, 20))", cfg)
 | `equal` | equal weight across the eligible set |
 | `signal_prop` | proportional to the (normalized) signal |
 | `quintile` / `decile` | top/bottom buckets long/short |
-| `mv` | mean-variance via scipy SLSQP + numpy Ledoit-Wolf shrinkage (no cvxpy/sklearn) |
+| `mv` | mean-variance via OSQP (scipy SLSQP if OSQP is not installed) + numpy Ledoit-Wolf shrinkage (no cvxpy/sklearn) |
 | `risk_parity` | inverse-vol / equal-risk-contribution (long-only) |
 
 ## Key config groups
