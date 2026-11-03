@@ -1,6 +1,6 @@
 """Weight construction from a processed cross-sectional signal — design-doc §2.4 / §3.3.
 
-Pure numpy + scipy (+ OSQP when installed): no engine, data-layer, cvxpy or sklearn
+Pure numpy + scipy (+ OSQP/Clarabel when installed): no engine, data-layer, cvxpy or sklearn
 imports. The input is the *already cross-sectionally normalised* signal for one
 rebalance date — a 1-D ``(N,)`` vector aligned to the eligible symbols of that
 date — plus, for the risk-aware methods, a ``(W, N)`` trailing returns window
@@ -22,8 +22,9 @@ Method → engine:
 * :func:`signal_prop`      — pure numpy (weights ∝ signal, demeaned if long/short).
 * :func:`quantile_weight`  — pure numpy (top/bottom quantile groups, equal within).
 * :func:`ledoit_wolf_cov`  — pure numpy (closed-form LW shrinkage constant, §7.5).
-* :func:`mean_variance`    — OSQP QP when ``osqp`` is installed (``perf`` extra), else
-  scipy ``optimize.minimize(method='SLSQP')`` (§3.3); equal-weight fallback on failure.
+* :func:`mean_variance`    — OSQP (+ Clarabel for a binding turnover cap) when installed
+  (``perf`` extra), else scipy ``optimize.minimize(method='SLSQP')`` (§3.3);
+  equal-weight fallback on failure.
 * :func:`risk_parity`      — pure numpy (iterative equal-risk-contribution).
 * :func:`construct_weights`— dispatch on ``config.weight_method``.
 
@@ -40,6 +41,10 @@ try:  # optional (``perf`` extra): the mean-variance QP in ~0.3 s instead of SLS
     import osqp
 except ImportError:  # pragma: no cover - depends on the environment
     osqp = None
+try:  # optional (``perf`` extra): the turnover-capped QP, where OSQP's ADMM is slow
+    import clarabel
+except ImportError:  # pragma: no cover - depends on the environment
+    clarabel = None
 
 from assay.portfolio.config import PortfolioBacktestConfig
 
@@ -401,6 +406,50 @@ _OSQP_CAPPED = {"eps_abs": 1e-5, "eps_rel": 1e-5}
 _OSQP_CAPPED_TOL = 1e-3
 
 
+def _mv_capped_clarabel(a, f, d, cur, lam, lo, hi, net, cap):
+    """The turnover-capped program with Clarabel (interior point): ~15 iterations
+    and ~1 s at k≈500, W=252, exact to ~1e-8, where ADMM takes 10⁴ iterations on
+    this near-LP. Same variables as :func:`_mv_osqp`: ``[w; y; t]`` (``y = F w`` when
+    ``W < k``) with ``t ≥ |w − cur|`` and ``Σt ≤ 2·cap``.
+
+    Returns the weights, ``False`` when the program is infeasible, or ``None`` when
+    Clarabel did not solve it."""
+    k, m = a.shape[0], f.shape[0]
+    low_rank = 0 < m < k
+    i_k = sparse.identity(k, format="csc")
+    ones = sparse.csc_matrix(np.ones((1, k)))
+    if low_rank:
+        blocks = [sparse.diags(np.full(k, lam * d)), sparse.diags(np.full(m, lam))]
+        mid = [None]
+    else:
+        blocks = [sparse.csc_matrix(np.triu(lam * (d * np.eye(k) + f.T @ f)))]
+        mid = []
+    blocks.append(sparse.csc_matrix((k, k)))
+    # Zero cone: Σw = net (and F w − y = 0); nonnegative cone (rows ≤ b): the box,
+    # w − t ≤ cur, −w − t ≤ −cur and Σt ≤ 2·cap.
+    rows = [[ones, *mid, None]]
+    if low_rank:
+        rows.append([sparse.csc_matrix(f), -sparse.identity(m, format="csc"), None])
+    n_eq = 1 + (m if low_rank else 0)
+    rows += [[i_k, *mid, None], [-i_k, *mid, None], [i_k, *mid, -i_k], [-i_k, *mid, -i_k], [None, *mid, ones]]
+    b = np.concatenate([[net], np.zeros(n_eq - 1), np.full(k, hi), np.full(k, -lo), cur, -cur, [2.0 * cap]])
+    nx = sum(blk.shape[0] for blk in blocks)
+    settings = clarabel.DefaultSettings()
+    settings.verbose = False
+    sol = clarabel.DefaultSolver(
+        sparse.block_diag(blocks, format="csc"), np.concatenate([-a, np.zeros(nx - k)]),
+        sparse.bmat(rows, format="csc"), b,
+        [clarabel.ZeroConeT(n_eq), clarabel.NonnegativeConeT(4 * k + 1)], settings,
+    ).solve()
+    status = clarabel.SolverStatus
+    if sol.status in (status.PrimalInfeasible, status.AlmostPrimalInfeasible):
+        return False
+    if sol.status not in (status.Solved, status.AlmostSolved):
+        return None
+    x = np.asarray(sol.x)[:k]
+    return np.clip(x, lo, hi) if np.all(np.isfinite(x)) else None
+
+
 def _mv_osqp(a, f, d, cur, lam, lo, hi, net, cap):
     """The mean-variance QP with OSQP, for ``Σ = d·I + FᵀF`` (``F`` is ``(W, k)``).
 
@@ -408,9 +457,10 @@ def _mv_osqp(a, f, d, cur, lam, lo, hi, net, cap):
     diagonal objective and ``W`` extra rows instead of a dense ``k × k`` one, ~3×
     cheaper per iteration. The program is first solved without the turnover cap;
     only if that optimum breaks the cap is it solved again with ``t ≥ |w − cur|``,
-    ``Σt ≤ 2·cap`` (the L1 constraint made linear; ADMM needs far more iterations
+    ``Σt ≤ 2·cap`` (the L1 constraint made linear) — by Clarabel when it is installed
+    (:func:`_mv_capped_clarabel`), else by OSQP, whose ADMM needs far more iterations
     there: it runs at eps 1e-5, and a second ``rho`` is tried when the first does not
-    converge). If neither converges, an iterate within 1e-2 of the budget and the cap
+    converge. If neither converges, an iterate within 1e-2 of the budget and the cap
     is kept; failing that (or if the capped program is infeasible) the uncapped
     optimum is returned.
     Either way the constraint applicator then enforces the cap exactly by scaling
@@ -461,6 +511,15 @@ def _mv_osqp(a, f, d, cur, lam, lo, hi, net, cap):
         return None
     if cap >= 2.0 or within_cap(w, _OSQP_TOL):  # 2.0 is the no-op ceiling (turnover budget never binds)
         return w
+    if clarabel is not None:
+        try:
+            wc = _mv_capped_clarabel(a, f, d, cur, lam, lo, hi, net, cap)
+        except Exception:  # noqa: BLE001 - any Clarabel failure falls through to OSQP
+            wc = None
+        if wc is False:
+            return w
+        if wc is not None and abs(wc.sum() - net) <= _OSQP_TOL and within_cap(wc, _OSQP_TOL):
+            return wc
     # The cap binds: add t (one block column) with w − t ≤ cur ≤ w + t and Σt ≤ 2·cap.
     pad = [None] * (len(blocks) - 1)
     rows = [r + [None] for r in rows] + [[i_k, *pad, -i_k], [i_k, *pad, i_k], [None, *pad, ones]]
@@ -542,7 +601,8 @@ def mean_variance(
     the cvxpy-free replacement for the design-doc ``OptimizationRebalancer``.
     SLSQP's cost grows as k³ in the names (≈3 s per rebalance at k≈490, and with a
     binding turnover cap it ran for minutes and failed); OSQP on the low-rank form of
-    ``Σ`` (:func:`_covariance_factor`) takes ~0.3 s, ~2 s when the cap binds.
+    ``Σ`` (:func:`_covariance_factor`) takes ~0.3 s; when the cap binds, Clarabel
+    takes ~1 s more (OSQP alone ~2 s).
     SLSQP is the fallback when OSQP does not converge. Constraints, mirroring §3.3:
 
     * budget ``sum(w) == net_exposure`` (equality);

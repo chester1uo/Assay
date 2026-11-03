@@ -32,8 +32,9 @@
 
 
 优化再平衡器在装有 **OSQP**（`perf` 额外依赖）时用它求解二次规划，并把 Ledoit-Wolf
-协方差写成单位阵加秩 `W` 的形式，每次调仓约 0.3 秒（换手上限生效时约 2 秒）。没有 OSQP
-时回退到 **scipy**（`scipy.optimize.minimize`，SLSQP；约 490 只股票时每次调仓约 3 秒）。
+协方差写成单位阵加秩 `W` 的形式，每次调仓约 0.3 秒。换手上限生效时改用 **Clarabel**
+（内点法，约 1 秒；只用 OSQP 约 2 秒）求解。没有 OSQP 时回退到 **scipy**
+（`scipy.optimize.minimize`，SLSQP；约 490 只股票时每次调仓约 3 秒）。
 Ledoit-Wolf 收缩用 numpy 实现——`cvxpy`/`scikit-learn` 被有意*排除*在依赖之外。
 
 ---

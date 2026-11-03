@@ -73,8 +73,18 @@ def test_osqp_matches_slsqp(n, long_short, monkeypatch):
     assert abs(got.sum() - cfg.net_exposure) < 1e-4
 
 
+def _capped_solver(solver, monkeypatch):
+    """Solve the turnover-capped stage with Clarabel, or with OSQP alone."""
+    if solver == "clarabel":
+        pytest.importorskip("clarabel")
+    else:
+        monkeypatch.setattr(W, "clarabel", None)
+
+
+@pytest.mark.parametrize("solver", ["clarabel", "osqp"])
 @pytest.mark.parametrize("cap", [0.3, 0.15])
-def test_binding_turnover_cap_is_met(cap):
+def test_binding_turnover_cap_is_met(cap, solver, monkeypatch):
+    _capped_solver(solver, monkeypatch)
     alpha, rets, cur = _case()
     free = W.mean_variance(alpha, rets, cur, _cfg(max_single_weight=0.1))
     assert np.abs(free - cur).sum() > 2 * cap              # the cap binds
@@ -89,7 +99,23 @@ def test_binding_turnover_cap_is_met(cap):
     assert _obj(alpha[idx], cov, lam, w[idx]) < _obj(alpha[idx], cov, lam, shrunk[idx])
 
 
-def test_unreachable_turnover_cap_leaves_the_free_optimum():
+@pytest.mark.parametrize("cap", [0.3, 0.15])
+def test_clarabel_and_osqp_agree_on_the_capped_program(cap, monkeypatch):
+    pytest.importorskip("clarabel")
+    alpha, rets, cur = _case()
+    cfg = _cfg(max_single_weight=0.1, max_turnover_per_period=cap)
+    exact = W.mean_variance(alpha, rets, cur, cfg)
+    monkeypatch.setattr(W, "clarabel", None)
+    admm = W.mean_variance(alpha, rets, cur, cfg)
+    idx, cov = _program(alpha, rets, cfg)
+    f_exact, f_admm = (_obj(alpha[idx], cov, cfg.mv_risk_aversion, w[idx]) for w in (exact, admm))
+    assert abs(f_exact - f_admm) <= 1e-3 * abs(f_exact)
+    assert np.abs(exact - cur).sum() <= 2 * cap + 1e-6 and abs(exact.sum() - 1.0) <= 1e-6
+
+
+@pytest.mark.parametrize("solver", ["clarabel", "osqp"])
+def test_unreachable_turnover_cap_leaves_the_free_optimum(solver, monkeypatch):
+    _capped_solver(solver, monkeypatch)
     alpha, rets, _ = _case()
     cur = np.zeros_like(alpha)                             # from cash, a 0.1 cap cannot reach a full book
     free = W.mean_variance(alpha, rets, cur, _cfg(max_single_weight=0.1))

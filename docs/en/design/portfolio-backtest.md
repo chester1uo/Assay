@@ -36,7 +36,8 @@ structured `PortfolioReport`.
 
 The optimization rebalancer solves its QP with **OSQP** when it is installed (the `perf`
 extra), writing the Ledoit-Wolf covariance as identity plus rank-`W` so each rebalance
-takes ~0.3 s (~2 s with a binding turnover cap). Without OSQP it falls back to **scipy**
+takes ~0.3 s. When the turnover cap binds, that program is solved with **Clarabel**
+(interior point, ~1 s; OSQP alone takes ~2 s there). Without OSQP it falls back to **scipy**
 (`scipy.optimize.minimize`, SLSQP; ~3 s per rebalance at ~490 names). The Ledoit-Wolf
 shrinkage is numpy — `cvxpy`/`scikit-learn` are intentionally *not* dependencies.
 
