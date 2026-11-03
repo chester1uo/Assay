@@ -1,13 +1,13 @@
 """Weight construction from a processed cross-sectional signal — design-doc §2.4 / §3.3.
 
-Pure numpy + scipy: no engine, data-layer, cvxpy or sklearn imports. The input is
-the *already cross-sectionally normalised* signal for one rebalance date — a 1-D
-``(N,)`` vector aligned to the eligible symbols of that date — plus, for the
-risk-aware methods, a ``(W, N)`` trailing returns window (``W`` lookback dates on
-axis 0, ``N`` symbols on axis 1). Every function returns a 1-D ``(N,)`` target
-weight vector scaled to the config's gross/net exposure; the per-position box,
-turnover, count and sector constraints (design-doc §2.5) are applied *separately*
-by the caller (the constraint applicator), not here.
+Pure numpy + scipy (+ OSQP when installed): no engine, data-layer, cvxpy or sklearn
+imports. The input is the *already cross-sectionally normalised* signal for one
+rebalance date — a 1-D ``(N,)`` vector aligned to the eligible symbols of that
+date — plus, for the risk-aware methods, a ``(W, N)`` trailing returns window
+(``W`` lookback dates on axis 0, ``N`` symbols on axis 1). Every function returns
+a 1-D ``(N,)`` target weight vector scaled to the config's gross/net exposure; the
+per-position box, turnover, count and sector constraints (design-doc §2.5) are
+applied *separately* by the caller (the constraint applicator), not here.
 
 Everything is strictly **NaN-aware**: a symbol whose signal (or whose returns
 column) is non-finite is simply excluded from the cross-section for that date and
@@ -22,8 +22,8 @@ Method → engine:
 * :func:`signal_prop`      — pure numpy (weights ∝ signal, demeaned if long/short).
 * :func:`quantile_weight`  — pure numpy (top/bottom quantile groups, equal within).
 * :func:`ledoit_wolf_cov`  — pure numpy (closed-form LW shrinkage constant, §7.5).
-* :func:`mean_variance`    — scipy ``optimize.minimize(method='SLSQP')`` QP (§3.3);
-  equal-weight fallback on solver failure.
+* :func:`mean_variance`    — OSQP QP when ``osqp`` is installed (``perf`` extra), else
+  scipy ``optimize.minimize(method='SLSQP')`` (§3.3); equal-weight fallback on failure.
 * :func:`risk_parity`      — pure numpy (iterative equal-risk-contribution).
 * :func:`construct_weights`— dispatch on ``config.weight_method``.
 
@@ -34,7 +34,12 @@ ST/suspended/sector/index inputs, so the module runs identically on any market.
 from __future__ import annotations
 
 import numpy as np
-from scipy import optimize
+from scipy import optimize, sparse
+
+try:  # optional (``perf`` extra): the mean-variance QP in ~0.3 s instead of SLSQP's ~3 s
+    import osqp
+except ImportError:  # pragma: no cover - depends on the environment
+    osqp = None
 
 from assay.portfolio.config import PortfolioBacktestConfig
 
@@ -307,7 +312,7 @@ def ledoit_wolf_cov(returns_window: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# 5. mean-variance optimisation  (scipy SLSQP)
+# 5. mean-variance optimisation  (OSQP, scipy SLSQP without it)
 # ---------------------------------------------------------------------------
 
 
@@ -341,30 +346,219 @@ def _covariance(returns_window: np.ndarray, config: PortfolioBacktestConfig) -> 
     return ledoit_wolf_cov(window)
 
 
+def _covariance_factor(returns_window: np.ndarray, config: PortfolioBacktestConfig):
+    """:func:`_covariance` as ``(F, d)`` with ``Σ = d·I + FᵀF`` on its finite block.
+
+    Both estimators are a scaled identity plus a rank-``W`` term: Ledoit-Wolf is
+    ``δμ·I + (1−δ)·xᵀx/W``, the sample covariance ``xᵀx/(W−1)``, with ``x`` the
+    demeaned ``(W, K)`` window of live columns. ``F`` is ``(W, N)`` with NaN on the
+    dead columns (the NaN rows/columns of :func:`_covariance`); degenerate windows
+    give ``F`` with no rows and ``d = 1e-6`` (its tiny diagonal). Computing ``δ``
+    from the ``W × W`` Gram matrix agrees with the dense estimate to round-off."""
+    r = np.asarray(returns_window, dtype=np.float64)
+    n = r.shape[1] if r.ndim == 2 else 0
+    tiny = (np.zeros((0, n)), 1e-6)
+    if r.ndim != 2 or r.shape[0] == 0:
+        return tiny
+    window = r[-int(config.cov_window) :]
+    live = np.isfinite(window).all(axis=0)
+    if not live.any():
+        return tiny
+    sub = window[:, live]
+    sub = sub[np.isfinite(sub).all(axis=1)]
+    w_obs, k = sub.shape
+    if w_obs < 2:
+        return tiny
+    x = sub - sub.mean(axis=0, keepdims=True)
+    f = np.full((w_obs, n), np.nan, dtype=np.float64)
+    if config.cov_method == "sample":
+        f[:, live] = x / np.sqrt(w_obs - 1)
+        return f, 0.0
+    # Ledoit-Wolf intensity as in _ledoit_wolf_dense, with ‖S‖²_F = ‖x xᵀ‖²_F / W².
+    gram = x @ x.T if w_obs < k else x.T @ x
+    s2 = float(np.sum(gram * gram)) / w_obs**2
+    mu = float(np.sum(x * x)) / (w_obs * k)
+    d2 = s2 - k * mu * mu
+    if d2 <= 0.0:
+        f[:, live] = x / np.sqrt(w_obs)
+        return f, 0.0
+    b2_sum = float(np.sum(np.sum(x * x, axis=1) ** 2)) - w_obs * s2
+    delta = min(max(b2_sum, 0.0) / (w_obs**2), d2) / d2
+    f[:, live] = x * np.sqrt((1.0 - delta) / w_obs)
+    return f, delta * mu
+
+
+_OSQP_SETTINGS = {"verbose": False, "eps_abs": 1e-6, "eps_rel": 1e-6, "max_iter": 20000, "polishing": False}
+# eps 1e-6 bounds each constraint row; the budget and the turnover sum over the
+# names, so their error grows to ~k·1e-6. The constraint applicator rescales the
+# exposure and caps the turnover exactly afterwards.
+_OSQP_TOL = 1e-4
+# With the turnover cap binding the program is close to an LP (the risk term is
+# small next to αᵀw) and ADMM needs ~10⁴ iterations at eps 1e-6 (~5 s at k≈500,
+# W=252). eps 1e-5 with rho 0.01 halves that (1-3 s) and stays within ~5e-4 of
+# the optimum, against ~0.1 for scaling the uncapped optimum onto the cap.
+_OSQP_CAPPED = {"eps_abs": 1e-5, "eps_rel": 1e-5}
+_OSQP_CAPPED_TOL = 1e-3
+
+
+def _mv_osqp(a, f, d, cur, lam, lo, hi, net, cap):
+    """The mean-variance QP with OSQP, for ``Σ = d·I + FᵀF`` (``F`` is ``(W, k)``).
+
+    When ``W < k`` the risk term is written ``½λ(d‖w‖² + ‖y‖²)`` with ``y = F w``: a
+    diagonal objective and ``W`` extra rows instead of a dense ``k × k`` one, ~3×
+    cheaper per iteration. The program is first solved without the turnover cap;
+    only if that optimum breaks the cap is it solved again with ``t ≥ |w − cur|``,
+    ``Σt ≤ 2·cap`` (the L1 constraint made linear; ADMM needs far more iterations
+    there: it runs at eps 1e-5, and a second ``rho`` is tried when the first does not
+    converge). If neither converges, an iterate within 1e-2 of the budget and the cap
+    is kept; failing that (or if the capped program is infeasible) the uncapped
+    optimum is returned.
+    Either way the constraint applicator then enforces the cap exactly by scaling
+    the trade toward ``cur``.
+
+    Returns the weights, ``False`` when the budget and box alone are infeasible, or
+    ``None`` when OSQP did not converge on the uncapped program (the caller tries
+    SLSQP)."""
+    k, m = a.shape[0], f.shape[0]
+    low_rank = 0 < m < k
+    i_k = sparse.identity(k, format="csc")
+    if low_rank:
+        p_w = sparse.diags(np.full(k, lam * d), format="csc")
+    else:
+        p_w = sparse.csc_matrix(np.triu(lam * (d * np.eye(k) + f.T @ f)))
+    ones = sparse.csc_matrix(np.ones((1, k)))
+    rows = [[ones], [i_k]]
+    lower, upper = [[net], np.full(k, lo)], [[net], np.full(k, hi)]
+    blocks = [p_w]
+    x0 = [cur]
+    if low_rank:
+        blocks.append(sparse.diags(np.full(m, lam), format="csc"))
+        rows = [r + [None] for r in rows] + [[sparse.csc_matrix(f), -sparse.identity(m, format="csc")]]
+        lower.append(np.zeros(m))
+        upper.append(np.zeros(m))
+        x0.append(f @ cur)
+    statuses = osqp.SolverStatus
+
+    def solve(rows, blocks, lower, upper, x0, **settings):
+        nx = sum(b.shape[0] for b in blocks)
+        solver = osqp.OSQP()
+        solver.setup(sparse.block_diag(blocks, format="csc"), np.concatenate([-a, np.zeros(nx - k)]),
+                     sparse.bmat(rows, format="csc"), np.concatenate(lower), np.concatenate(upper),
+                     **{**_OSQP_SETTINGS, **settings})
+        solver.warm_start(x=np.concatenate(x0))
+        res = solver.solve(raise_error=False)
+        x = res.x[:k] if res.x is not None else None
+        w = np.clip(x, lo, hi) if x is not None and np.all(np.isfinite(x)) else None
+        return res.info.status_val, w
+
+    def within_cap(w, tol):
+        return np.abs(w - cur).sum() <= 2.0 * cap + tol
+
+    status, w = solve(rows, blocks, lower, upper, x0)
+    if status in (statuses.OSQP_PRIMAL_INFEASIBLE, statuses.OSQP_PRIMAL_INFEASIBLE_INACCURATE):
+        return False
+    if status != statuses.OSQP_SOLVED or w is None or abs(w.sum() - net) > _OSQP_TOL:
+        return None
+    if cap >= 2.0 or within_cap(w, _OSQP_TOL):  # 2.0 is the no-op ceiling (turnover budget never binds)
+        return w
+    # The cap binds: add t (one block column) with w − t ≤ cur ≤ w + t and Σt ≤ 2·cap.
+    pad = [None] * (len(blocks) - 1)
+    rows = [r + [None] for r in rows] + [[i_k, *pad, -i_k], [i_k, *pad, i_k], [None, *pad, ones]]
+    lower += [np.full(k, -np.inf), cur, [-np.inf]]
+    upper += [cur, np.full(k, np.inf), [2.0 * cap]]
+    blocks = blocks + [sparse.csc_matrix((k, k))]
+    x0 = x0 + [np.abs(w - cur)]
+    tol = _OSQP_CAPPED_TOL
+    near = None
+    for rho in (0.01, 0.1):
+        status, wc = solve(rows, blocks, lower, upper, x0, rho=rho, **_OSQP_CAPPED)
+        if status in (statuses.OSQP_PRIMAL_INFEASIBLE, statuses.OSQP_PRIMAL_INFEASIBLE_INACCURATE):
+            break
+        if wc is None:
+            continue
+        if status == statuses.OSQP_SOLVED and abs(wc.sum() - net) <= tol and within_cap(wc, tol):
+            return wc
+        if near is None and abs(wc.sum() - net) <= 10 * tol and within_cap(wc, 10 * tol):
+            near = wc
+    return near if near is not None else w
+
+
+def _mv_slsqp(a, cov, cur, lam, lo, hi, net, cap):
+    """The same program with ``scipy.optimize.minimize(method='SLSQP')``; ``None`` on failure."""
+    k = a.shape[0]
+    bounds = [(lo, hi)] * k
+
+    def neg_obj(w: np.ndarray) -> float:
+        return -(a @ w) + 0.5 * lam * float(w @ cov @ w)
+
+    def neg_grad(w: np.ndarray) -> np.ndarray:
+        return -a + lam * (cov @ w)
+
+    # Constraint Jacobians are given: without them SLSQP differences each constraint
+    # numerically, k evaluations per iteration.
+    constraints: list[dict] = [
+        {"type": "eq", "fun": lambda w: float(np.sum(w) - net), "jac": lambda w: np.ones_like(w)}
+    ]
+    # Turnover cap as an L1 constraint: ‖w − cur‖₁ ≤ 2·cap (subgradient −sign(w − cur)).
+    # SLSQP handles the piecewise-linear L1 acceptably for these small N.
+    if cap < 2.0:  # 2.0 is the no-op ceiling (turnover budget never binds)
+        constraints.append(
+            {"type": "ineq", "fun": lambda w: 2.0 * cap - float(np.sum(np.abs(w - cur))),
+             "jac": lambda w: -np.sign(w - cur)}
+        )
+
+    # Warm-start from the current weights projected onto the eligible set.
+    x0 = cur.copy()
+    s = x0.sum()
+    if not np.isfinite(s) or s == 0.0:
+        x0 = np.full(k, net / k)
+    try:
+        res = optimize.minimize(
+            neg_obj,
+            x0,
+            jac=neg_grad,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=constraints,
+            options={"maxiter": 200, "ftol": 1e-9},
+        )
+    except Exception:
+        return None
+    if not res.success or not np.all(np.isfinite(res.x)):
+        return None
+    return res.x
+
+
 def mean_variance(
     signal_alpha: np.ndarray,
     returns_window: np.ndarray,
     current_w: np.ndarray,
     config: PortfolioBacktestConfig,
 ) -> np.ndarray:
-    """Maximise ``αᵀw − (λ/2)·wᵀΣw`` over the box / budget / turnover set via SLSQP (§3.3).
+    """Maximise ``αᵀw − (λ/2)·wᵀΣw`` over the box / budget / turnover set (§3.3).
 
-    Solves the mean-variance QP with ``scipy.optimize.minimize(method='SLSQP')``
-    (minimising the negated objective), the cvxpy-free replacement for the
-    design-doc ``OptimizationRebalancer``. Constraints, mirroring §3.3:
+    Solved with OSQP when it is installed (the ``perf`` extra), else with
+    ``scipy.optimize.minimize(method='SLSQP')`` (minimising the negated objective),
+    the cvxpy-free replacement for the design-doc ``OptimizationRebalancer``.
+    SLSQP's cost grows as k³ in the names (≈3 s per rebalance at k≈490, and with a
+    binding turnover cap it ran for minutes and failed); OSQP on the low-rank form of
+    ``Σ`` (:func:`_covariance_factor`) takes ~0.3 s, ~2 s when the cap binds.
+    SLSQP is the fallback when OSQP does not converge. Constraints, mirroring §3.3:
 
     * budget ``sum(w) == net_exposure`` (equality);
     * box bounds — long-only ``[min_single_weight, max_single_weight]``, long/short
       ``[-max_single_weight, max_single_weight]``;
     * optional L1 turnover ``‖w − current_w‖₁ ≤ 2·max_turnover_per_period`` when the
-      cap is binding (< the no-op value of 2.0), via an auxiliary-variable
-      reformulation so SLSQP sees only smooth constraints.
+      cap is binding (< the no-op value of 2.0) — linear with auxiliary variables
+      for OSQP, a subgradient constraint for SLSQP.
 
     ``Σ`` comes from :func:`_covariance` (Ledoit-Wolf by default), ``λ`` from
     ``mv_risk_aversion``. NaN-aware: non-finite-alpha symbols are pinned to weight
-    ``0`` and dropped from the program. On any solver failure / non-finite result
-    the function returns the :func:`equal_weight` fallback (design-doc §3.3,
-    "Fallback: equal weight within eligible universe").
+    ``0`` and dropped from the program. When the budget and box are infeasible, or
+    on any solver failure / non-finite result, the function returns the
+    :func:`equal_weight` fallback (design-doc §3.3, "Fallback: equal weight within
+    eligible universe"). With OSQP, a turnover cap that cannot be met is left to the
+    constraint applicator instead (see :func:`_mv_osqp`).
     """
     alpha = np.asarray(signal_alpha, dtype=np.float64).ravel()
     n = alpha.shape[0]
@@ -381,6 +575,36 @@ def mean_variance(
         alpha, config.long_short, config.gross_exposure, config.net_exposure
     )
 
+    if config.long_short:
+        lo, hi = -config.max_single_weight, config.max_single_weight
+    else:
+        lo, hi = config.min_single_weight, config.max_single_weight
+    lo, hi = float(lo), float(hi)
+    lam = float(config.mv_risk_aversion)
+    net, cap = float(config.net_exposure), float(config.max_turnover_per_period)
+    # A feasible box must straddle the per-name share of the net budget; if the
+    # caller's box is too tight to sum to net, the program is infeasible → fallback.
+
+    w = None
+    if osqp is not None:
+        f_full, d = _covariance_factor(returns_window, config)
+        if f_full.shape[1] != n:  # returns window misaligned with the signal
+            return fallback()
+        # Tradable = finite alpha AND a live returns column (see below).
+        idx = np.where(mask & np.isfinite(f_full).all(axis=0))[0]
+        if idx.size == 0:
+            return fallback()
+        try:
+            # 1e-8: the same diagonal ridge as the dense path below.
+            w = _mv_osqp(alpha[idx], f_full[:, idx], d + 1e-8, current_w[idx], lam, lo, hi, net, cap)
+        except Exception:  # noqa: BLE001 - any OSQP failure falls through to SLSQP
+            w = None
+        if w is False:
+            return fallback()
+        if w is not None:
+            out[idx] = w
+            return out
+
     cov_full = _covariance(returns_window, config)
     if cov_full.shape != (n, n):  # returns window misaligned with the signal
         return fallback()
@@ -393,62 +617,13 @@ def mean_variance(
     if k == 0:
         return fallback()
     idx = np.where(mask)[0]
-    a = alpha[idx]
-    cur = current_w[idx]
     cov = cov_full[np.ix_(idx, idx)]
     # Ridge the diagonal so the QP is strictly convex even on a rank-deficient cov.
     cov = cov + np.eye(k) * 1e-8
-    lam = float(config.mv_risk_aversion)
-
-    if config.long_short:
-        lo, hi = -config.max_single_weight, config.max_single_weight
-    else:
-        lo, hi = config.min_single_weight, config.max_single_weight
-    # A feasible box must straddle the per-name share of the net budget; if the
-    # caller's box is too tight to sum to net, SLSQP will report failure → fallback.
-    bounds = [(lo, hi)] * k
-
-    def neg_obj(w: np.ndarray) -> float:
-        return -(a @ w) + 0.5 * lam * float(w @ cov @ w)
-
-    def neg_grad(w: np.ndarray) -> np.ndarray:
-        return -a + lam * (cov @ w)
-
-    # Constraint Jacobians are given: without them SLSQP differences each constraint
-    # numerically, k evaluations per iteration.
-    constraints: list[dict] = [
-        {"type": "eq", "fun": lambda w: float(np.sum(w) - config.net_exposure),
-         "jac": lambda w: np.ones_like(w)}
-    ]
-    # Turnover cap as an L1 constraint: ‖w − cur‖₁ ≤ 2·cap (subgradient −sign(w − cur)).
-    # SLSQP handles the piecewise-linear L1 acceptably for these small N.
-    cap = float(config.max_turnover_per_period)
-    if cap < 2.0:  # 2.0 is the no-op ceiling (turnover budget never binds)
-        constraints.append(
-            {"type": "ineq", "fun": lambda w: 2.0 * cap - float(np.sum(np.abs(w - cur))),
-             "jac": lambda w: -np.sign(w - cur)}
-        )
-
-    # Warm-start from the current weights projected onto the eligible set.
-    x0 = cur.copy()
-    s = x0.sum()
-    if not np.isfinite(s) or s == 0.0:
-        x0 = np.full(k, config.net_exposure / k)
-    try:
-        res = optimize.minimize(
-            neg_obj,
-            x0,
-            jac=neg_grad,
-            method="SLSQP",
-            bounds=bounds,
-            constraints=constraints,
-            options={"maxiter": 200, "ftol": 1e-9},
-        )
-    except Exception:
+    w = _mv_slsqp(alpha[idx], cov, current_w[idx], lam, lo, hi, net, cap)
+    if w is None:
         return fallback()
-    if not res.success or not np.all(np.isfinite(res.x)):
-        return fallback()
-    out[idx] = res.x
+    out[idx] = w
     return out
 
 
@@ -549,7 +724,7 @@ def construct_weights(
     * ``signal_prop``  → :func:`signal_prop`
     * ``quintile``     → :func:`quantile_weight` (5 groups)
     * ``decile``       → :func:`quantile_weight` (10 groups)
-    * ``mv``           → :func:`mean_variance` (SLSQP; equal-weight fallback)
+    * ``mv``           → :func:`mean_variance` (OSQP or SLSQP; equal-weight fallback)
     * ``risk_parity``  → :func:`risk_parity` (long-only; ignores ``long_short``)
     * ``bl``           → Black-Litterman has no posterior data here, so it routes to
       ``mv`` using the raw signal as the alpha view (documented note; same result

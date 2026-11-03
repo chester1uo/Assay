@@ -34,8 +34,11 @@ structured `PortfolioReport`.
 ![Portfolio backtest pipeline](../../assets/figures/en/portfolio-pipeline.svg "Dots: green implemented, amber partial")
 
 
-The optimization rebalancer uses **scipy** (`scipy.optimize.minimize`, SLSQP) and a numpy
-Ledoit-Wolf shrinkage — `cvxpy`/`scikit-learn` are intentionally *not* dependencies.
+The optimization rebalancer solves its QP with **OSQP** when it is installed (the `perf`
+extra), writing the Ledoit-Wolf covariance as identity plus rank-`W` so each rebalance
+takes ~0.3 s (~2 s with a binding turnover cap). Without OSQP it falls back to **scipy**
+(`scipy.optimize.minimize`, SLSQP; ~3 s per rebalance at ~490 names). The Ledoit-Wolf
+shrinkage is numpy — `cvxpy`/`scikit-learn` are intentionally *not* dependencies.
 
 ---
 
