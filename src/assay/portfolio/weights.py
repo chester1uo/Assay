@@ -250,12 +250,11 @@ def _ledoit_wolf_dense(x: np.ndarray) -> np.ndarray:
     d2 = float(np.sum((sample - target) ** 2))
     if d2 <= 0.0:  # sample already == target (e.g. one asset) → nothing to shrink
         return sample
-    # b² : variance of the sample-covariance entries (Ledoit-Wolf "pi-hat").
-    b2_sum = 0.0
-    for t in range(w_obs):
-        xt = x[t][:, None]
-        b2_sum += float(np.sum((xt @ xt.T - sample) ** 2))
-    b2 = min(b2_sum / (w_obs**2), d2)  # clip → δ ∈ [0, 1]
+    # b² : variance of the sample-covariance entries (Ledoit-Wolf "pi-hat"),
+    # Σ_t ‖x_t x_tᵀ − S‖²_F = Σ_t ‖x_t‖⁴ − W·‖S‖²_F (as Σ_t x_tᵀ S x_t = W·‖S‖²_F):
+    # O(W·K) instead of W outer products of K × K.
+    b2_sum = float(np.sum(np.sum(x * x, axis=1) ** 2)) - w_obs * float(np.sum(sample * sample))
+    b2 = min(max(b2_sum, 0.0) / (w_obs**2), d2)  # clip → δ ∈ [0, 1]
     delta = b2 / d2
     shrunk = delta * target + (1.0 - delta) * sample
     return 0.5 * (shrunk + shrunk.T)  # symmetrise against round-off
@@ -415,15 +414,19 @@ def mean_variance(
     def neg_grad(w: np.ndarray) -> np.ndarray:
         return -a + lam * (cov @ w)
 
+    # Constraint Jacobians are given: without them SLSQP differences each constraint
+    # numerically, k evaluations per iteration.
     constraints: list[dict] = [
-        {"type": "eq", "fun": lambda w: float(np.sum(w) - config.net_exposure)}
+        {"type": "eq", "fun": lambda w: float(np.sum(w) - config.net_exposure),
+         "jac": lambda w: np.ones_like(w)}
     ]
-    # Turnover cap as a smooth L1 constraint: ‖w − cur‖₁ ≤ 2·cap. SLSQP handles the
-    # piecewise-linear L1 acceptably for these small N; we express it directly.
+    # Turnover cap as an L1 constraint: ‖w − cur‖₁ ≤ 2·cap (subgradient −sign(w − cur)).
+    # SLSQP handles the piecewise-linear L1 acceptably for these small N.
     cap = float(config.max_turnover_per_period)
     if cap < 2.0:  # 2.0 is the no-op ceiling (turnover budget never binds)
         constraints.append(
-            {"type": "ineq", "fun": lambda w: 2.0 * cap - float(np.sum(np.abs(w - cur)))}
+            {"type": "ineq", "fun": lambda w: 2.0 * cap - float(np.sum(np.abs(w - cur))),
+             "jac": lambda w: -np.sign(w - cur)}
         )
 
     # Warm-start from the current weights projected onto the eligible set.
