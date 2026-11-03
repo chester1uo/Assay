@@ -95,6 +95,7 @@ class ExecutionSimulator:
         step: int = 0,
         symbols: list[str] | None = None,
         date: str = "",
+        record_trades: bool = True,
     ) -> ExecutionResult:
         """Execute a move from ``current_weights`` toward ``target_weights``.
 
@@ -134,6 +135,10 @@ class ExecutionSimulator:
             ``acquired_step[i] == step`` was bought *this* step and is T+1-locked.
         symbols, date:
             labels for the emitted :class:`Trade` records (cosmetic).
+        record_trades:
+            ``False`` skips building the :class:`Trade` records (``trades`` comes
+            back empty; weights, costs and diagnostics are unchanged) — for runs
+            that do not keep a trade log.
 
         Returns
         -------
@@ -191,115 +196,107 @@ class ExecutionSimulator:
                 lim_down = prev * (1.0 - lim)
         cap_on = adv_fraction is not None
 
-        for i in range(n):
-            delta = desired_delta[i]
-            if not np.isfinite(delta) or abs(delta) < _TRADE_EPS:
-                continue  # nothing to do
+        # Every name is decided at once, in the order the constraints bind: a name
+        # with a wanted trade (``active``) ends in exactly one of untradable / limit
+        # up / limit down / T+1 hold / capacity-cancelled / traded. The arithmetic
+        # is the per-name arithmetic, element by element, and the cost total is
+        # summed in symbol order, so results match a name-by-name walk bit for bit.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            active = np.isfinite(desired_delta) & (np.abs(desired_delta) >= _TRADE_EPS)
+            buy = desired_delta > 0
+            untradable = active & ~np.isfinite(price)
+            if tradable_mask is not None:
+                untradable |= active & ~np.asarray(tradable_mask, dtype=bool)
+            live = active & ~untradable
 
-            px = price[i]
-            sym = symbols[i] if symbols is not None else str(i)
-
-            # (1) Tradability mask (ST/suspended) — also NaN price is untradable.
-            untradable = (not np.isfinite(px)) or (
-                tradable_mask is not None and not bool(tradable_mask[i])
-            )
-            if untradable:
-                diag["blocked_suspended"] += 1.0
-                trades.append(
-                    self._blocked_trade(date, sym, cur[i], tgt[i], px, "suspended")
-                )
-                residual[i] = tgt[i]  # still want it; defer
-                continue
-
-            side = "buy" if delta > 0 else "sell"
-
-            # (2) Price limits: block buys at limit-up, sells at limit-down.
+            up_hit = np.zeros(n, dtype=bool)
+            down_hit = np.zeros(n, dtype=bool)
             if limits_on:
-                if side == "buy" and np.isfinite(lim_up[i]) and px >= lim_up[i] * _LIMIT_UP_TOL:
-                    diag["limit_hit_count"] += 1.0
-                    trades.append(self._blocked_trade(date, sym, cur[i], tgt[i], px, "limit_up"))
-                    residual[i] = tgt[i]
-                    continue
-                if (
-                    side == "sell"
-                    and np.isfinite(lim_down[i])
-                    and px <= lim_down[i] * _LIMIT_DOWN_TOL
-                ):
-                    diag["limit_hit_count"] += 1.0
-                    trades.append(self._blocked_trade(date, sym, cur[i], tgt[i], px, "limit_down"))
-                    residual[i] = tgt[i]
-                    continue
+                up_hit = live & buy & np.isfinite(lim_up) & (price >= lim_up * _LIMIT_UP_TOL)
+                down_hit = live & ~buy & np.isfinite(lim_down) & (price <= lim_down * _LIMIT_DOWN_TOL)
+                live &= ~(up_hit | down_hit)
 
-            # (3) T+1: a name acquired *this* step cannot be reduced now.
-            if t_plus_1_on and side == "sell" and acquired_step.get(i) == step:
-                diag["forced_hold_count"] += 1.0
-                trades.append(self._blocked_trade(date, sym, cur[i], tgt[i], px, "t_plus_1"))
-                residual[i] = tgt[i]
-                continue
+            held = np.zeros(n, dtype=bool)
+            if t_plus_1_on and acquired_step:
+                today = np.zeros(n, dtype=bool)
+                today[[i for i, st in acquired_step.items() if st == step and 0 <= i < n]] = True
+                held = live & ~buy & today
+                live &= ~held
 
-            # (4) ADV capacity cap on |Δweight|.
-            fill = delta
-            capped = False
-            if cap_on:
-                advf = adv_fraction[i]
-                max_adv = cfg.max_adv_fraction
-                if cfg.partial_fill_handling != "force" and np.isfinite(advf) and advf > 0.0:
-                    # participation scales linearly with traded fraction; cap the
-                    # trade so participation <= max_adv_fraction.
-                    max_frac_of_desired = max_adv / advf
-                    if max_frac_of_desired < 1.0:
-                        fill = delta * max_frac_of_desired
-                        capped = True
+            fill = desired_delta.copy()
+            capped = np.zeros(n, dtype=bool)
+            advf = np.asarray(adv_fraction, dtype=np.float64) if cap_on else None
+            if cap_on and cfg.partial_fill_handling != "force":
+                # participation scales linearly with the traded fraction; cap the
+                # trade so participation <= max_adv_fraction.
+                ratio = cfg.max_adv_fraction / advf
+                capped = live & np.isfinite(advf) & (advf > 0.0) & (ratio < 1.0)
+                fill = np.where(capped, desired_delta * ratio, desired_delta)
 
-            if abs(fill) < _TRADE_EPS:
-                # capacity cancelled the whole trade
-                diag["blocked_adv"] += 1.0
-                trades.append(self._blocked_trade(date, sym, cur[i], tgt[i], px, "adv_cap"))
-                if cfg.partial_fill_handling == "defer":
-                    residual[i] = tgt[i]
-                continue
+            cancelled = live & (np.abs(fill) < _TRADE_EPS)   # capacity cancelled the whole trade
+            traded = live & ~cancelled
 
-            # realised participation for the *filled* notional, for slippage.
+            # realised participation for the *filled* notional, for slippage (NaN = none)
             advf_filled = None
             if cap_on:
-                advf = adv_fraction[i]
-                if np.isfinite(advf) and abs(delta) > 0.0:
-                    advf_filled = advf * (abs(fill) / abs(delta))
+                advf_filled = np.where(np.isfinite(advf) & (np.abs(desired_delta) > 0.0),
+                                       advf * (np.abs(fill) / np.abs(desired_delta)), np.nan)
 
-            new_w = cur[i] + fill
-            # trade_cost returns a *rate* (fraction of the traded notional); the
-            # NAV hit is that rate times the traded notional |fill| (a fraction of
-            # NAV). Without the |fill| factor a 0.05% rate would cost 0.05% of NAV
-            # per *name* traded — ~N times too much (design-doc 2.6.3 / costs.py).
-            cost_rate = self.cost_model.trade_cost(side, abs(fill), advf_filled)
-            cost = cost_rate * abs(fill)
-            total_cost += cost
-            executed[i] = new_w
-            diag["n_trades"] += 1.0
+            new_w = cur + fill
+            # trade_costs returns *rates* (fractions of the traded notional); the NAV
+            # hit is the rate times the traded notional |fill| (a fraction of NAV).
+            # Without the |fill| factor a 0.05% rate would cost 0.05% of NAV per
+            # *name* traded — ~N times too much (design-doc 2.6.3 / costs.py).
+            cost = self.cost_model.trade_costs(~buy, np.abs(fill), advf_filled) * np.abs(fill)
+        paid = cost[traded]
+        total_cost = float(np.cumsum(paid)[-1]) if paid.size else 0.0
+        executed[traded] = new_w[traded]
 
-            # T+1 inventory: a buy (or any increase) marks this name acquired now.
-            if t_plus_1_on and fill > 0.0:
+        # T+1 inventory: a buy (or any increase) marks the name acquired now.
+        if t_plus_1_on:
+            for i in np.flatnonzero(traded & (fill > 0.0)).tolist():
                 acquired_step[i] = step
 
-            # residual: if we capped+defer, we still want the rest next step. A
-            # partial fill is already counted in ``n_trades``; it is *not* also a
-            # ``blocked_adv`` event (that counts only fully-blocked orders), so the
-            # §4.4 attempt denominator never double-counts a single partial fill.
-            if capped and cfg.partial_fill_handling == "defer":
-                residual[i] = tgt[i]
-            else:
-                residual[i] = new_w
+        # residual: blocked names (and capacity cuts with 'defer') still want their
+        # target next step. A partial fill counts in ``n_trades`` only, never also as
+        # ``blocked_adv`` (fully blocked orders), so the §4.4 attempt denominator
+        # never double-counts it.
+        defer = cfg.partial_fill_handling == "defer"
+        want = untradable | up_hit | down_hit | held | (cancelled & defer) | (traded & capped & defer)
+        residual[want] = tgt[want]
+        filled = traded & ~(capped & defer)
+        residual[filled] = new_w[filled]
 
+        diag["blocked_suspended"] = float(untradable.sum())
+        diag["limit_hit_count"] = float(up_hit.sum() + down_hit.sum())
+        diag["forced_hold_count"] = float(held.sum())
+        diag["blocked_adv"] = float(cancelled.sum())
+        diag["n_trades"] = float(traded.sum())
+
+        if not record_trades:
+            return ExecutionResult(executed_weights=executed, trades=trades, total_cost=float(total_cost),
+                                   residual_targets=residual, diag=diag)
+        kind = np.zeros(n, dtype=np.int8)
+        for code, mask in enumerate((untradable, up_hit, down_hit, held, cancelled), start=1):
+            kind[mask] = code
+        reasons = (None, "suspended", "limit_up", "limit_down", "t_plus_1", "adv_cap")
+        cur_l, tgt_l, px_l, new_l, fill_l, cost_l = (v.tolist() for v in (cur, tgt, price, new_w, fill, cost))
+        kind_l, buy_l = kind.tolist(), buy.tolist()
+        for i in np.flatnonzero(active).tolist():
+            sym = symbols[i] if symbols is not None else str(i)
+            if kind_l[i]:
+                trades.append(self._blocked_trade(date, sym, cur_l[i], tgt_l[i], px_l[i], reasons[kind_l[i]]))
+                continue
             trades.append(
                 Trade(
                     date=date,
                     symbol=sym,
-                    side=side,
-                    target_w=float(tgt[i]),
-                    exec_w=float(new_w),
-                    price=float(px),
-                    qty_frac=float(fill),
-                    cost=float(cost),
+                    side="buy" if buy_l[i] else "sell",
+                    target_w=float(tgt_l[i]),
+                    exec_w=float(new_l[i]),
+                    price=float(px_l[i]),
+                    qty_frac=float(fill_l[i]),
+                    cost=float(cost_l[i]),
                     blocked_reason=None,
                 )
             )

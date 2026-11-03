@@ -65,7 +65,7 @@ _HASH_FIELDS_V1: frozenset[str] = frozenset({
 # validator and any UI/CLI can introspect them.
 _UNIVERSES = {
     "CSI300", "CSI500", "CSI1000", "CSI800",
-    "SP500", "NASDAQ100",
+    "SP500", "NASDAQ100", "TOP500", "TOP1000", "TOP3000",   # TOP*: QFinVerse liquidity universes
     "HK100", "HSHARE100", "HSI", "HSTECH",
     "CUSTOM",
 }

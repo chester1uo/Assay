@@ -32,6 +32,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import numpy as np
+
 from assay.portfolio.config import PortfolioBacktestConfig
 
 
@@ -124,6 +126,31 @@ class TransactionCostModel:
 
         impact = self.slippage(adv_fraction)
         return commission + stamp + transfer + impact
+
+    def trade_costs(self, sell: np.ndarray, notional_fraction: np.ndarray,
+                    adv_fraction: np.ndarray | None = None) -> np.ndarray:
+        """:meth:`trade_cost` for many trades at once: ``sell`` (bool), the notional
+        fractions and the ADV participations (NaN or ``None`` = no ADV data), as
+        arrays over the names. The same arithmetic element by element, so each entry
+        equals the scalar call bit for bit."""
+        cfg = self.config
+        nf = np.abs(np.asarray(notional_fraction, dtype=np.float64))
+        with np.errstate(invalid="ignore", divide="ignore"):
+            commission = np.full(nf.shape, float(cfg.commission_rate))
+            if cfg.commission_min > 0.0 and self.nav_capital is not None and self.nav_capital > 0.0:
+                ccy = nf * self.nav_capital
+                floor = np.where(ccy > 0.0, cfg.commission_min / ccy, -np.inf)
+                commission = np.where(floor > commission, floor, commission)
+            stamp = np.where(np.asarray(sell, dtype=bool) | (cfg.market == "HK"), float(cfg.stamp_duty_rate), 0.0)
+            impact = np.zeros(nf.shape)
+            if cfg.slippage_model != "zero" and adv_fraction is not None:
+                adv = np.asarray(adv_fraction, dtype=np.float64)
+                ok = np.isfinite(adv) & (adv > 0.0)
+                k = cfg.slippage_k
+                impact = np.where(ok, k * adv if cfg.slippage_model == "linear" else k * np.sqrt(adv), 0.0)
+            out = commission + stamp + cfg.transfer_fee_rate + impact
+        out[(nf == 0.0) | ~np.isfinite(nf)] = 0.0
+        return out
 
     # -- diagnostics -------------------------------------------------------
     def round_trip_estimate(self, adv_fraction: float | None = None) -> float:
