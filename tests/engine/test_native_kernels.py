@@ -21,7 +21,13 @@ def _panel(seed, t=80, n=60):
     x[4, 1:] = np.nan
     x[5] = 1.5
     x[6, 0] = np.inf
+    x[7, ::3] = -0.0                                    # -0.0 ties with 0.0
+    x[8, :2] = -np.inf
     return x
+
+
+# 600 columns sort by radix, 60 by comparison
+WIDE = pytest.mark.parametrize("n", [60, 600])
 
 
 @pytest.fixture
@@ -40,8 +46,9 @@ def python_side(monkeypatch):
         importlib.reload(m)
 
 
-def test_cs_rank(python_side):
-    x = _panel(1)
+@WIDE
+def test_cs_rank(python_side, n):
+    x = _panel(1, n=n)
     np.testing.assert_array_equal(native.cs_rank(x), python_side["cs"].cs_rank(x))
 
 
@@ -68,17 +75,60 @@ def test_group_sums(python_side):
     assert q == [ref_sums["quantile_returns"][f"Q{g + 1}"] for g in range(5)]
 
 
-def test_rank_ic_from_orders(python_side):
-    x, y = _panel(6), _panel(7)
+@WIDE
+def test_row_orders_stable(n):
+    x = _panel(10, n=n)
+    order, count = native.row_orders(x)
+    for r, row in enumerate(x):
+        ok = np.flatnonzero(np.isfinite(row))
+        want = ok[np.argsort(row[ok], kind="stable")]
+        assert count[r] == ok.size and order[r, :ok.size].tolist() == want.tolist()
+
+
+@WIDE
+def test_group_sums_from_orders(n):
+    x, y = _panel(11, n=n), _panel(12, n=n)
+    a = native.group_sums(x, y, 5)
+    b = native.group_sums_ordered(x, *native.row_orders(x), y, 5)
+    np.testing.assert_array_equal(a[0], b[0])
+    np.testing.assert_array_equal(a[1], b[1])
+
+
+@WIDE
+def test_rank_ic_from_orders(python_side, n):
+    x, y = _panel(6, n=n), _panel(7, n=n)
     xo, yo = native.row_orders(x), native.row_orders(y)
     assert xo[1].tolist() == np.isfinite(x).sum(axis=1).tolist()
-    # same ranks, same Pearson sums: bit for bit the sort-per-pair kernel
+    # exact rank sums: bit for bit the sort-per-pair kernel
     np.testing.assert_array_equal(native.rank_ic_ordered(x, *xo, y, *yo), native.rank_ic_series(x, y))
     np.testing.assert_array_equal(native.rank_ic_ordered(x, *xo, x, *xo, 2), native.rank_ic_series(x, x, 2))
     m = python_side["metrics"]
     np.testing.assert_allclose(native.rank_ic_ordered(x, *xo, y, *yo), m.rank_ic_series(x, y), rtol=0, atol=1e-12)
     with pytest.raises(ValueError):
         native.rank_ic_ordered(x, *xo, y, xo[0][:5], yo[1])
+
+
+@WIDE
+def test_rank_cache(n):
+    x, y, z = _panel(13, n=n), _panel(14, n=n), _panel(15, n=n)
+    z[:, :5] = np.nan                                   # other names on every date
+    xo, yo, zo = native.row_orders(x), native.row_orders(y), native.row_orders(z)
+    yc, xc = native.RankCache(*y.shape), native.RankCache(*x.shape)
+    want = native.rank_ic_series(x, y)
+    first = native.rank_ic_ordered(x, *xo, y, *yo, xcache=xc, ycache=yc)
+    again = native.rank_ic_ordered(x, *xo, y, *yo, xcache=xc, ycache=yc)
+    np.testing.assert_array_equal(first, want)
+    np.testing.assert_array_equal(again, want)
+    hits, misses = yc.stats()
+    assert hits > 0 and hits + misses == 2 * len(x)
+    # the same y ranked against other names misses and still matches
+    np.testing.assert_array_equal(native.rank_ic_ordered(z, *zo, y, *yo, ycache=yc), native.rank_ic_series(z, y))
+    np.testing.assert_array_equal(native.rank_ic_ordered(x, *xo, y, *yo, ycache=yc), want)
+    with pytest.raises(ValueError):
+        native.rank_ic_ordered(x, *xo, y, *yo, ycache=native.RankCache(3, n))
+    # one cache on both sides: the second borrow is skipped, not an error
+    np.testing.assert_array_equal(native.rank_ic_ordered(y, *yo, y, *yo, xcache=yc, ycache=yc),
+                                  native.rank_ic_series(y, y))
 
 
 def test_evaluate_ic_reuses_orders():

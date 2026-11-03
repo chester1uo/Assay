@@ -275,23 +275,25 @@ def row_orders(factor: np.ndarray):
     return _native.row_orders(np.ascontiguousarray(factor, dtype=np.float64))
 
 
-# forward-return orders by array identity, dropped when the array is collected; a
-# spec's forward returns are scored against every factor (they are never mutated)
+# forward-return orders and rank caches by array identity, dropped when the array is
+# collected; a spec's forward returns are scored against every factor (never mutated),
+# and on most dates against the same names, so their ranks are reused across factors
 _FWD_ORDERS: dict[int, tuple] = {}
 
 
 def _fwd_orders(fwd: np.ndarray):
+    """``(row_orders(fwd), RankCache)`` for ``fwd``, computed once per array."""
     key = id(fwd)
     hit = _FWD_ORDERS.get(key)
     if hit is not None and hit[0]() is fwd:
         return hit[1]
-    orders = _native.row_orders(fwd)
+    ranked = (_native.row_orders(fwd), _native.RankCache(*fwd.shape))
     try:
         ref = weakref.ref(fwd, lambda _r, k=key: _FWD_ORDERS.pop(k, None))
     except TypeError:
-        return orders
-    _FWD_ORDERS[key] = (ref, orders)
-    return orders
+        return ranked
+    _FWD_ORDERS[key] = (ref, ranked)
+    return ranked
 
 
 def ic_summary(series: np.ndarray) -> tuple[float, float]:
@@ -333,6 +335,9 @@ def evaluate_ic(
     if _native is not None and order is None:
         order = row_orders(factor)
 
+    # the factor's ranks among each date's names, reused by the horizons that share them
+    xcache = _native.RankCache(*factor.shape) if _native is not None and len(horizons) > 1 else None
+
     rank_ic_by_h: dict[int, float] = {}
     head_ic_series = None
     head_rank_series = None
@@ -341,7 +346,8 @@ def evaluate_ic(
         if fwd.shape != factor.shape:
             raise ValueError(f"fwd[{h}] shape {fwd.shape} != factor {factor.shape}")
         if _native is not None:
-            rseries = _native.rank_ic_ordered(factor, *order, fwd, *_fwd_orders(fwd))
+            forder, fcache = _fwd_orders(fwd)
+            rseries = _native.rank_ic_ordered(factor, *order, fwd, *forder, xcache=xcache, ycache=fcache)
         else:
             rseries = np.asarray(_rank_ic_series_impl(factor_rank, fwd, factor), dtype=np.float64)
         rank_ic_by_h[h] = ic_summary(rseries)[0]

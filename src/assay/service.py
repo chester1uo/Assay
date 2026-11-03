@@ -466,7 +466,7 @@ class AssayService:
         order = row_orders(factor_values)
         metrics = evaluator.evaluate_ic(factor_values, fwd_by_h, order=order)
         decay = evaluator.decay_halflife(metrics["ic_by_horizon"])
-        groups = evaluator.group_returns(factor_values, fwd_by_h[min(horizons)])
+        groups = evaluator.group_returns(factor_values, fwd_by_h[min(horizons)], order=order)
         turn = evaluator.turnover(factor_values, order=order)
 
         # --- redundancy: cheap best-effort, never re-scores the whole library ---

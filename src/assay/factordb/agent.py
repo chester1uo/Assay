@@ -49,7 +49,7 @@ def score(values: np.ndarray, fwd: dict[int, np.ndarray]) -> dict:
     order = row_orders(values)                 # sorted once: every horizon and the lag
     m = evaluator.evaluate_ic(values, fwd, order=order)
     h0 = min(fwd)
-    groups = evaluator.group_returns(values, fwd[h0])
+    groups = evaluator.group_returns(values, fwd[h0], order=order)
     q = groups.get("quintile_returns") if isinstance(groups, dict) else None
     long_short = (q[-1] - q[0]) if q and len(q) >= 2 and q[-1] is not None and q[0] is not None else None
     coverage = float(np.isfinite(values).mean()) if values.size else 0.0
