@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from assay import _native as _native_mod
 from assay._native import kernels as _native
 
 from ._base import as2d, quiet_numeric
@@ -68,7 +69,9 @@ def _rank01_block(x: np.ndarray) -> np.ndarray:
 def cs_rank(x):
     x = as2d(x)
     if _native is not None and x.size:
-        return _native.cs_rank(np.ascontiguousarray(x))
+        ranks, order, count = _native.cs_rank_ordered(np.ascontiguousarray(x))
+        _native_mod.remember_orders(ranks, (order, count))
+        return ranks
     out = np.empty(x.shape)
     step = max(1, (8 << 20) // max(1, x.shape[1]))     # ~64 MB of int64 temporaries per block
     for a in range(0, x.shape[0], step):

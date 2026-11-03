@@ -27,6 +27,7 @@ import weakref
 
 import numpy as np
 
+from assay import _native as _native_mod
 from assay._native import kernels as _native
 
 # --- optional numba acceleration -------------------------------------------
@@ -272,7 +273,17 @@ def row_orders(factor: np.ndarray):
     """
     if _native is None:
         return None
+    known = _native_mod.known_orders(factor)        # e.g. sorted by the factor's outer cs_rank
+    if known is not None:
+        return known
     return _native.row_orders(np.ascontiguousarray(factor, dtype=np.float64))
+
+
+def rank_cache(factor: np.ndarray):
+    """A :class:`RankCache` for ``factor`` (``None`` without the native kernels): pass it
+    to :func:`evaluate_ic` (``xcache=``) and :func:`~assay.evaluator.turnover`
+    (``cache=``) so the factor's ranks on a date's names are computed once for all."""
+    return None if _native is None else _native.RankCache(*np.shape(factor))
 
 
 # forward-return orders and rank caches by array identity, dropped when the array is
@@ -311,7 +322,7 @@ def ic_summary(series: np.ndarray) -> tuple[float, float]:
 
 
 def evaluate_ic(
-    factor: np.ndarray, fwd_by_h: dict[int, np.ndarray], *, order=None
+    factor: np.ndarray, fwd_by_h: dict[int, np.ndarray], *, order=None, xcache=None
 ) -> dict[str, object]:
     """Headline IC bundle across horizons; factor ranked once and reused.
 
@@ -321,7 +332,7 @@ def evaluate_ic(
 
     Returns keys: ``ic, icir, rank_ic, rank_icir, ic_by_horizon, ic_series,
     rank_ic_series``. ``order`` is :func:`row_orders` of ``factor`` when the caller
-    already has it.
+    already has it, ``xcache`` its :func:`rank_cache`.
     """
     if not fwd_by_h:
         raise ValueError("fwd_by_h must contain at least one horizon")
@@ -336,7 +347,8 @@ def evaluate_ic(
         order = row_orders(factor)
 
     # the factor's ranks among each date's names, reused by the horizons that share them
-    xcache = _native.RankCache(*factor.shape) if _native is not None and len(horizons) > 1 else None
+    if xcache is None and len(horizons) > 1:
+        xcache = rank_cache(factor)
 
     rank_ic_by_h: dict[int, float] = {}
     head_ic_series = None

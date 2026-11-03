@@ -147,3 +147,56 @@ def test_evaluate_ic_reuses_orders():
     key = id(fwd[5])
     del fwd, a, b, y
     assert key not in metrics._FWD_ORDERS              # dropped with its array
+
+
+@WIDE
+def test_cs_rank_comes_with_its_orders(n):
+    x = _panel(16, n=n)
+    ranks, order, count = native.cs_rank_ordered(x)
+    np.testing.assert_array_equal(ranks, native.cs_rank(x))
+    want = native.row_orders(ranks)
+    np.testing.assert_array_equal(count, want[1])
+    for r in range(len(x)):
+        assert order[r, :count[r]].tolist() == want[0][r, :want[1][r]].tolist()
+    keep = np.random.default_rng(1).random(x.shape) < 0.7
+    got, want = native.orders_where(order, count, keep), native.row_orders(np.where(keep, ranks, np.nan))
+    np.testing.assert_array_equal(got[1], want[1])
+    for r in range(len(x)):
+        assert got[0][r, :got[1][r]].tolist() == want[0][r, :want[1][r]].tolist()
+
+
+@WIDE
+def test_lag_reads_the_factor_cache(n):
+    rng = np.random.default_rng(17)
+    x, y = np.round(rng.normal(size=(80, n)), 1), _panel(18, n=n)
+    x[:, n // 2:] = np.nan                              # names y has and x lacks
+    x[40:, 3] = np.nan                                  # one name leaves: that date misses
+    y[:, : n // 2] = np.nan_to_num(y[:, : n // 2])      # y has every name x has
+    xo, yo = native.row_orders(x), native.row_orders(y)
+    c = native.RankCache(*x.shape)
+    native.rank_ic_ordered(x, *xo, y, *yo, xcache=c)    # scoring fills the factor's ranks
+    before = c.stats()
+    got = native.rank_ic_ordered(x, *xo, x, *xo, 1, xcache=c, ycache=c)
+    np.testing.assert_array_equal(got, native.rank_ic_series(x, x, 1))
+    assert c.stats()[0] > before[0]                    # rows reused, none written
+
+
+def test_factor_ending_in_cs_rank_is_not_sorted_again():
+    from assay import _native
+    from assay.engine.engine import FactorEngine
+    from assay.engine import parse
+    from assay.evaluator import metrics
+
+    if _native.kernels is None:
+        pytest.skip("native kernels switched off (ASSAY_KERNELS)")
+    x = _panel(19, n=300)
+    eng = FactorEngine.from_matrices(np.arange(len(x)).astype("datetime64[D]"), np.array([f"S{i:03d}" for i in range(300)]),
+                                     {"close": np.nan_to_num(x, nan=1.0), "volume": x})
+    eng.membership = np.random.default_rng(2).random(x.shape) < 0.8
+    v = eng.evaluate(parse("cs_rank(ts_delta(volume, 2))")).values
+    known = _native.known_orders(v)
+    assert known is not None and metrics.row_orders(v) is known
+    fresh = native.row_orders(np.ascontiguousarray(v))
+    np.testing.assert_array_equal(known[1], fresh[1])
+    for r in range(len(v)):
+        assert known[0][r, :known[1][r]].tolist() == fresh[0][r, :fresh[1][r]].tolist()

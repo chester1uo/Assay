@@ -121,39 +121,112 @@ fn pearson(x: &[f64], y: &[f64]) -> f64 {
     cov / (vx * vy).sqrt()
 }
 
+/// Ranks of `s` (row-major, `n` columns) as [`cs_rank`] does, and with `order` / `count`
+/// also each row's sorted columns (written into `order`, as [`row_orders`] lays out).
+fn rank_rows(s: &[f64], n: usize, out: &mut [f64], order: Option<(&mut [u32], &mut [u32])>) {
+    let rank = |so: &mut Sorter, row: usize, o: &mut [f64]| {
+        so.load(&s[row * n..row * n + n], |v| !v.is_nan());
+        so.sort();
+        rank_sorted(so, o);
+    };
+    match order {
+        None => out.par_chunks_mut(n.max(1)).enumerate().for_each_init(Sorter::default, |so, (row, o)| rank(so, row, o)),
+        Some((ord, cnt)) => out
+            .par_chunks_mut(n.max(1))
+            .zip(ord.par_chunks_mut(n.max(1)))
+            .zip(cnt.par_iter_mut())
+            .enumerate()
+            .for_each_init(Sorter::default, |so, (row, ((o, od), c))| {
+                rank(so, row, o);
+                od[..so.idx.len()].copy_from_slice(&so.idx);
+                *c = so.idx.len() as u32;
+            }),
+    }
+}
+
+/// Writes the average ranks / (m - 1) of a sorted row into `o` (0.5 for a lone value).
+fn rank_sorted(so: &Sorter, o: &mut [f64]) {
+    let m = so.keys.len();
+    if m == 1 {
+        o[so.idx[0] as usize] = 0.5;
+    }
+    if m < 2 {
+        return;
+    }
+    let d = (m - 1) as f64;
+    let mut i = 0;
+    while i < m {
+        let mut j = i + 1;
+        while j < m && so.keys[j] == so.keys[i] {
+            j += 1;
+        }
+        let r = ((i + j - 1) as f64) / 2.0 / d;
+        for &c in &so.idx[i..j] {
+            o[c as usize] = r;
+        }
+        i = j;
+    }
+}
+
 /// `cs_rank`: per row, average rank / (n - 1) over the non-NaN entries; 0.5 for a
 /// lone value, NaN where the input is NaN.
 #[pyfunction]
 fn cs_rank<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let (s, t, n) = rows(&x)?;
     let mut out = vec![f64::NAN; t * n];
+    py.allow_threads(|| rank_rows(s, n, &mut out, None));
+    Ok(PyArray1::from_vec_bound(py, out).reshape([t, n])?)
+}
+
+/// [`cs_rank`] and the [`row_orders`] of its result, `(ranks, order, count)`, from the one
+/// sort: the ranks follow the values, so the result sorts in the input's order (ties by
+/// column), and a factor that ends in `cs_rank` needs no second sort to be scored.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+fn cs_rank_ordered<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<'py, f64>,
+) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<u32>>, Bound<'py, PyArray1<u32>>)> {
+    let (s, t, n) = rows(&x)?;
+    let mut out = vec![f64::NAN; t * n];
+    let mut order = vec![0u32; t * n];
+    let mut count = vec![0u32; t];
+    py.allow_threads(|| rank_rows(s, n, &mut out, Some((&mut order, &mut count))));
+    Ok((
+        PyArray1::from_vec_bound(py, out).reshape([t, n])?,
+        PyArray1::from_vec_bound(py, order).reshape([t, n])?,
+        PyArray1::from_vec_bound(py, count),
+    ))
+}
+
+/// The [`row_orders`] `(order, count)` of a matrix restricted to the entries where `keep`
+/// is true (as `np.where(keep, x, nan)` would sort): each row's order filtered in place.
+#[pyfunction]
+fn orders_where<'py>(
+    py: Python<'py>,
+    order: PyReadonlyArray2<'py, u32>,
+    count: PyReadonlyArray1<'py, u32>,
+    keep: PyReadonlyArray2<'py, bool>,
+) -> PyResult<(Bound<'py, PyArray2<u32>>, Bound<'py, PyArray1<u32>>)> {
+    let (t, n) = (keep.shape()[0], keep.shape()[1]);
+    let (o, c) = orders(&order, &count, t, n)?;
+    let k = keep.as_slice().map_err(|_| PyValueError::new_err("keep must be a C-contiguous bool matrix"))?;
+    let mut out = vec![0u32; t * n];
+    let mut cnt = vec![0u32; t];
     py.allow_threads(|| {
-        out.par_chunks_mut(n.max(1)).enumerate().for_each_init(Sorter::default, |so, (row, o)| {
-            so.load(&s[row * n..row * n + n], |v| !v.is_nan());
-            so.sort();
-            let m = so.keys.len();
-            if m == 1 {
-                o[so.idx[0] as usize] = 0.5;
-            }
-            if m < 2 {
-                return;
-            }
-            let d = (m - 1) as f64;
-            let mut i = 0;
-            while i < m {
-                let mut j = i + 1;
-                while j < m && so.keys[j] == so.keys[i] {
-                    j += 1;
+        out.par_chunks_mut(n.max(1)).zip(cnt.par_iter_mut()).enumerate().for_each(|(row, (od, m))| {
+            let kr = &k[row * n..row * n + n];
+            let mut p = 0;
+            for &j in &o[row * n..row * n + c[row] as usize] {
+                if kr[j as usize] {
+                    od[p] = j;
+                    p += 1;
                 }
-                let r = ((i + j - 1) as f64) / 2.0 / d;
-                for &c in &so.idx[i..j] {
-                    o[c as usize] = r;
-                }
-                i = j;
             }
+            *m = p as u32;
         });
     });
-    Ok(PyArray1::from_vec_bound(py, out).reshape([t, n])?)
+    Ok((PyArray1::from_vec_bound(py, out).reshape([t, n])?, PyArray1::from_vec_bound(py, cnt)))
 }
 
 /// Per-row Spearman RankIC between `x` and `y` over the entries finite in both.
@@ -309,6 +382,14 @@ impl RankCache {
     }
 }
 
+impl RankCache {
+    /// Row `r`'s ranks and Σ rank², when it was ranked on exactly the set `keep`.
+    fn lookup(&self, r: usize, keep: &[u64]) -> Option<(&[f32], f64)> {
+        let w = self.words;
+        (self.valid[r] && self.mask[r * w..(r + 1) * w] == *keep).then(|| (&self.ranks[r * self.n..(r + 1) * self.n], self.ss[r]))
+    }
+}
+
 /// Raw row access to a [`RankCache`] for tasks that each own distinct rows.
 #[derive(Clone, Copy)]
 struct Slots {
@@ -378,7 +459,9 @@ fn orders<'a>(
 /// sorting, and with `xcache` / `ycache` ([`RankCache`] of `x` / `y`) the ranks of rows
 /// already seen on the same names are reused. Ranks are multiples of 1/2, so Σ rx·ry,
 /// Σ rx² and Σ ry² are exact in f64 (for rows of up to ~100k names), as are the centred
-/// sums Pearson's two passes would form: the values match bit for bit.
+/// sums Pearson's two passes would form: the values match bit for bit. One cache passed
+/// as both (a factor against its own lag) is only read: a row is then the x side of
+/// one task and the y side of another, so rows it does not hold are ranked aside.
 #[pyfunction]
 #[pyo3(signature = (x, xo, xc, y, yo, yc, lag=0, xcache=None, ycache=None))]
 #[allow(clippy::too_many_arguments)]
@@ -400,13 +483,16 @@ fn rank_ic_ordered<'py>(
     let (xo, xc) = orders(&xo, &xc, t, n)?;
     let (yo, yc) = orders(&yo, &yc, t, n)?;
     // a cache another thread is using right now is skipped (same values, ranked afresh)
-    let mut xg = xcache.as_ref().and_then(|c| c.try_borrow_mut().ok());
-    let mut yg = ycache.as_ref().and_then(|c| c.try_borrow_mut().ok());
-    for g in xg.iter().chain(yg.iter()) {
-        if (g.t, g.n) != (t, n) {
+    let shared = matches!((&xcache, &ycache), (Some(a), Some(b)) if a.is(b));
+    let sg = if shared { xcache.as_ref().and_then(|c| c.try_borrow().ok()) } else { None };
+    let mut xg = if shared { None } else { xcache.as_ref().and_then(|c| c.try_borrow_mut().ok()) };
+    let mut yg = if shared { None } else { ycache.as_ref().and_then(|c| c.try_borrow_mut().ok()) };
+    for (gt, gn) in xg.iter().chain(yg.iter()).map(|g| (g.t, g.n)).chain(sg.iter().map(|g| (g.t, g.n))) {
+        if (gt, gn) != (t, n) {
             return Err(PyValueError::new_err("RankCache shape differs from the matrices"));
         }
     }
+    let ro: Option<&RankCache> = sg.as_deref();
     let (xslots, yslots) = (xg.as_deref_mut().map(Slots::of), yg.as_deref_mut().map(Slots::of));
     let words = n.div_ceil(64);
     let mut out = vec![f64::NAN; t];
@@ -432,18 +518,26 @@ fn rank_ic_ordered<'py>(
                 }
                 let (xord, yord) = (&xo[xrow * n..xrow * n + xc[xrow] as usize], &yo[row * n..row * n + yc[row] as usize]);
                 // SAFETY: row `row` (x: `row - lag`) is handled by this task only
-                let (ry, _, syy, hy) = match yslots {
-                    Some(sl) => unsafe { sl.ranks(row, yr, yord, keep) },
-                    None => {
-                        let (k, s) = joint_ranks(yr, yord, keep, ry0);
-                        (&ry0[..], k, s, false)
+                let (ry, syy, hy) = match (yslots, ro.and_then(|c| c.lookup(row, keep))) {
+                    (Some(sl), _) => {
+                        let (r, _, s, h) = unsafe { sl.ranks(row, yr, yord, keep) };
+                        (r, s, h)
+                    }
+                    (None, Some((r, s))) => (r, s, true),
+                    (None, None) => {
+                        let s = joint_ranks(yr, yord, keep, ry0).1;
+                        (&ry0[..], s, false)
                     }
                 };
-                let (rx, _, sxx, hx) = match xslots {
-                    Some(sl) => unsafe { sl.ranks(xrow, xr, xord, keep) },
-                    None => {
-                        let (k, s) = joint_ranks(xr, xord, keep, rx0);
-                        (&rx0[..], k, s, false)
+                let (rx, sxx, hx) = match (xslots, ro.and_then(|c| c.lookup(xrow, keep))) {
+                    (Some(sl), _) => {
+                        let (r, _, s, h) = unsafe { sl.ranks(xrow, xr, xord, keep) };
+                        (r, s, h)
+                    }
+                    (None, Some((r, s))) => (r, s, true),
+                    (None, None) => {
+                        let s = joint_ranks(xr, xord, keep, rx0).1;
+                        (&rx0[..], s, false)
                     }
                 };
                 *h = [hx as u8, hy as u8];
@@ -466,11 +560,18 @@ fn rank_ic_ordered<'py>(
         );
     });
     let ranked = t.saturating_sub(lag);
+    let reused = |side: usize| hit.iter().map(|h| h[side] as usize).sum::<usize>();
     for (g, side) in [(&mut xg, 0), (&mut yg, 1)] {
         if let Some(g) = g.as_deref_mut() {
-            let reused: usize = hit.iter().map(|h| h[side] as usize).sum();
-            g.hits += reused;
-            g.misses += ranked - reused;
+            g.hits += reused(side);
+            g.misses += ranked - reused(side);
+        }
+    }
+    if sg.is_some() {
+        drop(sg);
+        if let Some(mut g) = xcache.as_ref().and_then(|c| c.try_borrow_mut().ok()) {
+            g.hits += reused(0) + reused(1);
+            g.misses += 2 * ranked - reused(0) - reused(1);
         }
     }
     Ok(PyArray1::from_vec_bound(py, out))
@@ -669,6 +770,8 @@ fn threads() -> usize {
 fn assay_kernels(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(cs_rank, m)?)?;
+    m.add_function(wrap_pyfunction!(cs_rank_ordered, m)?)?;
+    m.add_function(wrap_pyfunction!(orders_where, m)?)?;
     m.add_function(wrap_pyfunction!(rank_ic_series, m)?)?;
     m.add_function(wrap_pyfunction!(ic_series, m)?)?;
     m.add_function(wrap_pyfunction!(row_orders, m)?)?;
