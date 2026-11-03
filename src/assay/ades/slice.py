@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from assay import evaluator
+from assay.data import specpack
 from assay.engine import iter_fields, parse
 from assay.engine.engine import FactorEngine
 
@@ -57,9 +58,17 @@ class SpecData:
 
 
 def load_spec(store, spec: dict) -> SpecData:
-    """Engine (members-masked OHLCV) and unmasked forward returns for one spec."""
+    """Engine (members-masked OHLCV) and unmasked forward returns for one spec.
+
+    With a pack directory (``ASSAY_PACK_DIR``) and a store that has snapshots, the
+    inputs come from the spec's :mod:`~assay.data.specpack` (memory-mapped, built on
+    first use); otherwise they are gathered from the store."""
     t0 = time.perf_counter()
     end = spec["end"]
+    if specpack.pack_root() is not None and getattr(store, "snapshot_id", None):
+        pack = specpack.open_or_build(store, spec["universe"], spec["start"], end, fields=FIELDS)
+        return SpecData(spec["key"], pack.engine(), pack.fwd(spec["horizons"], spec["execution"]),
+                        time.perf_counter() - t0)
     eng = FactorEngine.from_store(store, spec["universe"], (spec["start"], end), end, fields=FIELDS, adj="total")
     _, _, px = store.get_matrices(["close", "open"], list(eng.symbols), spec["start"], end, end, "total")
     fwd = evaluator.forward_returns(np.asarray(px["close"], float), np.asarray(px["open"], float),
