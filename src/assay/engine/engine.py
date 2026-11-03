@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 import polars as pl
 
+from assay import _native
 from assay.engine import operators
 from assay.engine.ast import FieldNode, LitNode, OpNode, iter_fields, iter_ops
 from assay.engine.parsing import ParseError, parse
@@ -166,10 +167,16 @@ class FactorEngine:
         return self._panel
 
     def _members_only(self, values: np.ndarray) -> np.ndarray:
-        """NaN where the security was not in the universe on that date."""
+        """NaN where the security was not in the universe on that date (row orders
+        remembered for ``values`` carry over, filtered to the members)."""
         if self.membership is None:
             return values
-        return np.where(self.membership, values, np.nan)
+        out = np.where(self.membership, values, np.nan)
+        orders = _native.known_orders(values)
+        if orders is not None and _native.kernels is not None:
+            keep = np.ascontiguousarray(self.membership, dtype=bool)
+            _native.remember_orders(out, _native.kernels.orders_where(*orders, keep))
+        return out
 
     # -- field pivot ----------------------------------------------------------
     def _matrix(self, field: str) -> np.ndarray:
