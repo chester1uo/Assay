@@ -31,6 +31,49 @@ fn same_shape(a: &PyReadonlyArray2<'_, f64>, b: &PyReadonlyArray2<'_, f64>) -> P
     Ok(())
 }
 
+/// Sort key in the order of the values (-0.0 counts as 0.0); NaN must be left out.
+fn key(v: f64) -> u64 {
+    let b = (v + 0.0).to_bits();
+    if b >> 63 == 1 {
+        !b
+    } else {
+        b | 1 << 63
+    }
+}
+
+/// Keys with their column indices, and the scratch to sort them.
+#[derive(Default)]
+struct Sorter {
+    keys: Vec<u64>,
+    idx: Vec<u32>,
+    packed: Vec<u128>,
+}
+
+impl Sorter {
+    /// The entries of `row` that pass `keep`, in column order.
+    fn load(&mut self, row: &[f64], keep: impl Fn(f64) -> bool) {
+        self.keys.clear();
+        self.idx.clear();
+        for (j, &v) in row.iter().enumerate() {
+            if keep(v) {
+                self.keys.push(key(v));
+                self.idx.push(j as u32);
+            }
+        }
+    }
+
+    /// Sorts by key; equal keys keep their column order (a stable sort): key and
+    /// column packed into one u128, so the comparison sort reads no other memory.
+    fn sort(&mut self) {
+        self.packed.clear();
+        self.packed.extend(self.keys.iter().zip(&self.idx).map(|(&k, &j)| (k as u128) << 32 | j as u128));
+        self.packed.sort_unstable();
+        for (i, &x) in self.packed.iter().enumerate() {
+            (self.keys[i], self.idx[i]) = ((x >> 32) as u64, x as u32);
+        }
+    }
+}
+
 /// Average ranks (0-based, ties averaged) of `vals`, written to `out[k]` for the
 /// k-th value. `order` is scratch space.
 fn avg_ranks(vals: &[f64], order: &mut Vec<usize>, out: &mut [f64]) {
@@ -85,34 +128,30 @@ fn cs_rank<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f64>) -> PyResult<Boun
     let (s, t, n) = rows(&x)?;
     let mut out = vec![f64::NAN; t * n];
     py.allow_threads(|| {
-        out.par_chunks_mut(n.max(1)).enumerate().for_each_init(
-            || (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
-            |(vals, idx, order, r), (row, o)| {
-                let src = &s[row * n..row * n + n];
-                vals.clear();
-                idx.clear();
-                for (j, &v) in src.iter().enumerate() {
-                    if !v.is_nan() {
-                        vals.push(v);
-                        idx.push(j);
-                    }
+        out.par_chunks_mut(n.max(1)).enumerate().for_each_init(Sorter::default, |so, (row, o)| {
+            so.load(&s[row * n..row * n + n], |v| !v.is_nan());
+            so.sort();
+            let m = so.keys.len();
+            if m == 1 {
+                o[so.idx[0] as usize] = 0.5;
+            }
+            if m < 2 {
+                return;
+            }
+            let d = (m - 1) as f64;
+            let mut i = 0;
+            while i < m {
+                let mut j = i + 1;
+                while j < m && so.keys[j] == so.keys[i] {
+                    j += 1;
                 }
-                let m = vals.len();
-                if m == 0 {
-                    return;
+                let r = ((i + j - 1) as f64) / 2.0 / d;
+                for &c in &so.idx[i..j] {
+                    o[c as usize] = r;
                 }
-                if m == 1 {
-                    o[idx[0]] = 0.5;
-                    return;
-                }
-                r.resize(m, 0.0);
-                avg_ranks(vals, order, r);
-                let d = (m - 1) as f64;
-                for k in 0..m {
-                    o[idx[k]] = r[k] / d;
-                }
-            },
-        );
+                i = j;
+            }
+        });
     });
     Ok(PyArray1::from_vec_bound(py, out).reshape([t, n])?)
 }
@@ -180,51 +219,168 @@ fn row_orders<'py>(
     let mut order = vec![0u32; t * n];
     let mut count = vec![0u32; t];
     py.allow_threads(|| {
-        order.par_chunks_mut(n.max(1)).zip(count.par_iter_mut()).enumerate().for_each(|(row, (o, c))| {
-            let src = &s[row * n..row * n + n];
-            let mut m = 0;
-            for (j, v) in src.iter().enumerate() {
-                if v.is_finite() {
-                    o[m] = j as u32;
-                    m += 1;
-                }
-            }
-            o[..m].sort_by(|&a, &b| src[a as usize].partial_cmp(&src[b as usize]).unwrap());
-            *c = m as u32;
-        });
+        order.par_chunks_mut(n.max(1)).zip(count.par_iter_mut()).enumerate().for_each_init(
+            Sorter::default,
+            |so, (row, (o, c))| {
+                so.load(&s[row * n..row * n + n], f64::is_finite);
+                so.sort();
+                o[..so.idx.len()].copy_from_slice(&so.idx);
+                *c = so.idx.len() as u32;
+            },
+        );
     });
     Ok((PyArray1::from_vec_bound(py, order).reshape([t, n])?, PyArray1::from_vec_bound(py, count)))
 }
 
-/// Average ranks (as [`avg_ranks`]) of the entries of `vals` with `keep[j]`, read off
-/// the precomputed value `order`; written to `out[j]`.
-fn ranks_from_order(vals: &[f64], order: &[u32], keep: &[bool], out: &mut [f64]) {
+/// Bitset row: is column `j` in it.
+fn has(bits: &[u64], j: u32) -> bool {
+    (bits[(j >> 6) as usize] >> (j & 63)) & 1 == 1
+}
+
+/// Average ranks (as [`avg_ranks`]) of the entries of `vals` in the column set `keep`,
+/// read off the precomputed value `order`, written to `out[j]`; returns how many there
+/// are and Σ rank².
+fn joint_ranks(vals: &[f64], order: &[u32], keep: &[u64], out: &mut [f32]) -> (usize, f64) {
     let m = order.len();
-    let (mut pos, mut i) = (0usize, 0usize);
+    let (mut pos, mut i, mut ss) = (0usize, 0usize, 0.0f64);
     while i < m {
         let v = vals[order[i] as usize];
         let (mut end, mut cnt) = (i, 0usize);
         while end < m && vals[order[end] as usize] == v {
-            cnt += keep[order[end] as usize] as usize;
+            cnt += has(keep, order[end]) as usize;
             end += 1;
         }
         if cnt > 0 {
             let avg = ((pos + pos + cnt - 1) as f64) / 2.0;
             for &j in &order[i..end] {
-                if keep[j as usize] {
-                    out[j as usize] = avg;
+                if has(keep, j) {
+                    out[j as usize] = avg as f32; // a multiple of 1/2 below 2^23: exact
                 }
             }
+            ss += cnt as f64 * avg * avg;
             pos += cnt;
         }
         i = end;
     }
+    (pos, ss)
 }
 
-/// [`rank_ic_series`] with the per-row orders of `x` and `y` from [`row_orders`]:
-/// the same ranks and the same Pearson sums, so the same values bit for bit.
+/// Per-row ranks of one matrix among a column set, kept for the next call. A forward
+/// return is ranked against every factor among the same names (the universe members
+/// that day), and a factor against each horizon, so most rows find their ranks here
+/// and RankIC reduces to one dot product. A row is reused only when its column set is
+/// the same, bit for bit.
+#[pyclass(module = "assay_kernels")]
+struct RankCache {
+    t: usize,
+    n: usize,
+    words: usize,
+    mask: Vec<u64>,
+    ranks: Vec<f32>,
+    count: Vec<u32>,
+    ss: Vec<f64>,
+    valid: Vec<bool>,
+    hits: usize,
+    misses: usize,
+}
+
+#[pymethods]
+impl RankCache {
+    #[new]
+    fn new(t: usize, n: usize) -> Self {
+        let words = n.div_ceil(64);
+        RankCache {
+            t,
+            n,
+            words,
+            mask: vec![0; t * words],
+            ranks: vec![0.0; t * n],
+            count: vec![0; t],
+            ss: vec![0.0; t],
+            valid: vec![false; t],
+            hits: 0,
+            misses: 0,
+        }
+    }
+
+    /// `(rows reused, rows ranked)` over the cache's life.
+    fn stats(&self) -> (usize, usize) {
+        (self.hits, self.misses)
+    }
+}
+
+/// Raw row access to a [`RankCache`] for tasks that each own distinct rows.
+#[derive(Clone, Copy)]
+struct Slots {
+    mask: *mut u64,
+    ranks: *mut f32,
+    count: *mut u32,
+    ss: *mut f64,
+    valid: *mut bool,
+    n: usize,
+    words: usize,
+}
+unsafe impl Send for Slots {}
+unsafe impl Sync for Slots {}
+
+impl Slots {
+    fn of(c: &mut RankCache) -> Self {
+        Slots {
+            mask: c.mask.as_mut_ptr(),
+            ranks: c.ranks.as_mut_ptr(),
+            count: c.count.as_mut_ptr(),
+            ss: c.ss.as_mut_ptr(),
+            valid: c.valid.as_mut_ptr(),
+            n: c.n,
+            words: c.words,
+        }
+    }
+
+    /// Ranks of `vals` among `keep` on row `r`: from the cache when the row was ranked
+    /// on the same set, else computed and stored. Returns (ranks, count, Σ rank², hit).
+    ///
+    /// SAFETY: `r` is in range and no other task uses row `r` meanwhile.
+    unsafe fn ranks<'a>(&self, r: usize, vals: &[f64], order: &[u32], keep: &[u64]) -> (&'a [f32], usize, f64, bool) {
+        let mask = std::slice::from_raw_parts_mut(self.mask.add(r * self.words), self.words);
+        let ranks = std::slice::from_raw_parts_mut(self.ranks.add(r * self.n), self.n);
+        let (count, ss, valid) = (&mut *self.count.add(r), &mut *self.ss.add(r), &mut *self.valid.add(r));
+        if *valid && mask == keep {
+            return (ranks, *count as usize, *ss, true);
+        }
+        let (m, s) = joint_ranks(vals, order, keep, ranks);
+        mask.copy_from_slice(keep);
+        (*count, *ss, *valid) = (m as u32, s, true);
+        (ranks, m, s, false)
+    }
+}
+
+/// Checks the shapes of `(order, count)` from [`row_orders`] against a `(t, n)` matrix.
+/// The entries are not scanned (that would cost as much as using them): an index out of
+/// range stops the kernel at its bounds check and raises in Python.
+fn orders<'a>(
+    o: &'a PyReadonlyArray2<'_, u32>,
+    c: &'a PyReadonlyArray1<'_, u32>,
+    t: usize,
+    n: usize,
+) -> PyResult<(&'a [u32], &'a [u32])> {
+    let bad = || PyValueError::new_err("orders must come from row_orders of the same matrices");
+    if o.shape() != [t, n] || c.len() != t {
+        return Err(bad());
+    }
+    let (o, c) = (o.as_slice().map_err(|_| bad())?, c.as_slice().map_err(|_| bad())?);
+    if c.iter().any(|&k| k as usize > n) {
+        return Err(bad());
+    }
+    Ok((o, c))
+}
+
+/// [`rank_ic_series`] with the per-row orders of `x` and `y` from [`row_orders`]: no
+/// sorting, and with `xcache` / `ycache` ([`RankCache`] of `x` / `y`) the ranks of rows
+/// already seen on the same names are reused. Ranks are multiples of 1/2, so Σ rx·ry,
+/// Σ rx² and Σ ry² are exact in f64 (for rows of up to ~100k names), as are the centred
+/// sums Pearson's two passes would form: the values match bit for bit.
 #[pyfunction]
-#[pyo3(signature = (x, xo, xc, y, yo, yc, lag=0))]
+#[pyo3(signature = (x, xo, xc, y, yo, yc, lag=0, xcache=None, ycache=None))]
 #[allow(clippy::too_many_arguments)]
 fn rank_ic_ordered<'py>(
     py: Python<'py>,
@@ -235,51 +391,88 @@ fn rank_ic_ordered<'py>(
     yo: PyReadonlyArray2<'py, u32>,
     yc: PyReadonlyArray1<'py, u32>,
     lag: usize,
+    xcache: Option<Bound<'py, RankCache>>,
+    ycache: Option<Bound<'py, RankCache>>,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     same_shape(&x, &y)?;
     let (xs, t, n) = rows(&x)?;
     let (ys, _, _) = rows(&y)?;
-    let bad = || PyValueError::new_err("orders must come from row_orders of the same matrices");
-    if xo.shape() != [t, n] || yo.shape() != [t, n] || xc.len() != t || yc.len() != t {
-        return Err(bad());
+    let (xo, xc) = orders(&xo, &xc, t, n)?;
+    let (yo, yc) = orders(&yo, &yc, t, n)?;
+    // a cache another thread is using right now is skipped (same values, ranked afresh)
+    let mut xg = xcache.as_ref().and_then(|c| c.try_borrow_mut().ok());
+    let mut yg = ycache.as_ref().and_then(|c| c.try_borrow_mut().ok());
+    for g in xg.iter().chain(yg.iter()) {
+        if (g.t, g.n) != (t, n) {
+            return Err(PyValueError::new_err("RankCache shape differs from the matrices"));
+        }
     }
-    let (xo, yo) = (xo.as_slice().map_err(|_| bad())?, yo.as_slice().map_err(|_| bad())?);
-    let (xc, yc) = (xc.as_slice().map_err(|_| bad())?, yc.as_slice().map_err(|_| bad())?);
-    if xc.iter().chain(yc).any(|&c| c as usize > n) {
-        return Err(bad());
-    }
+    let (xslots, yslots) = (xg.as_deref_mut().map(Slots::of), yg.as_deref_mut().map(Slots::of));
+    let words = n.div_ceil(64);
     let mut out = vec![f64::NAN; t];
+    let mut hit = vec![[0u8; 2]; t];
     py.allow_threads(|| {
-        out.par_iter_mut().enumerate().for_each_init(
-            || (vec![false; n], vec![0.0f64; n], vec![0.0f64; n], Vec::new(), Vec::new()),
-            |(keep, rx, ry, a, b), (row, o)| {
+        out.par_iter_mut().zip(hit.par_iter_mut()).enumerate().for_each_init(
+            || (vec![0u64; words], vec![0.0f32; n], vec![0.0f32; n]),
+            |(keep, rx0, ry0), (row, (o, h))| {
                 if row < lag {
                     return;
                 }
-                let xr0 = (row - lag) * n;
-                let (xr, yr) = (&xs[xr0..xr0 + n], &ys[row * n..row * n + n]);
+                let xrow = row - lag;
+                let (xr, yr) = (&xs[xrow * n..xrow * n + n], &ys[row * n..row * n + n]);
+                keep.fill(0);
                 let mut m = 0;
                 for j in 0..n {
-                    keep[j] = xr[j].is_finite() && yr[j].is_finite();
-                    m += keep[j] as usize;
+                    let k = (xr[j].is_finite() && yr[j].is_finite()) as u64;
+                    keep[j >> 6] |= k << (j & 63);
+                    m += k as usize;
                 }
                 if m < 2 {
                     return;
                 }
-                ranks_from_order(xr, &xo[xr0..xr0 + xc[row - lag] as usize], keep, rx);
-                ranks_from_order(yr, &yo[row * n..row * n + yc[row] as usize], keep, ry);
-                a.clear();
-                b.clear();
-                for j in 0..n {
-                    if keep[j] {
-                        a.push(rx[j]);
-                        b.push(ry[j]);
+                let (xord, yord) = (&xo[xrow * n..xrow * n + xc[xrow] as usize], &yo[row * n..row * n + yc[row] as usize]);
+                // SAFETY: row `row` (x: `row - lag`) is handled by this task only
+                let (ry, _, syy, hy) = match yslots {
+                    Some(sl) => unsafe { sl.ranks(row, yr, yord, keep) },
+                    None => {
+                        let (k, s) = joint_ranks(yr, yord, keep, ry0);
+                        (&ry0[..], k, s, false)
+                    }
+                };
+                let (rx, _, sxx, hx) = match xslots {
+                    Some(sl) => unsafe { sl.ranks(xrow, xr, xord, keep) },
+                    None => {
+                        let (k, s) = joint_ranks(xr, xord, keep, rx0);
+                        (&rx0[..], k, s, false)
+                    }
+                };
+                *h = [hx as u8, hy as u8];
+                let mut sxy = 0.0f64;
+                for (w, &bits) in keep.iter().enumerate() {
+                    let mut b = bits;
+                    while b != 0 {
+                        let j = w * 64 + b.trailing_zeros() as usize;
+                        sxy += rx[j] as f64 * ry[j] as f64;
+                        b &= b - 1;
                     }
                 }
-                *o = pearson(a, b);
+                let mean = (m - 1) as f64 / 2.0;
+                let mm = m as f64 * mean * mean;
+                let (cov, vx, vy) = (sxy - mm, sxx - mm, syy - mm);
+                if vx > 0.0 && vy > 0.0 {
+                    *o = cov / (vx * vy).sqrt();
+                }
             },
         );
     });
+    let ranked = t.saturating_sub(lag);
+    for (g, side) in [(&mut xg, 0), (&mut yg, 1)] {
+        if let Some(g) = g.as_deref_mut() {
+            let reused: usize = hit.iter().map(|h| h[side] as usize).sum();
+            g.hits += reused;
+            g.misses += ranked - reused;
+        }
+    }
     Ok(PyArray1::from_vec_bound(py, out))
 }
 
@@ -372,8 +565,54 @@ fn group_sums<'py>(
     ))
 }
 
+/// [`group_sums`] with the factor's [`row_orders`]: the order is already stable, so
+/// each row is one scan (the same buckets and the same sums).
+#[pyfunction]
+fn group_sums_ordered<'py>(
+    py: Python<'py>,
+    factor: PyReadonlyArray2<'py, f64>,
+    fo: PyReadonlyArray2<'py, u32>,
+    fc: PyReadonlyArray1<'py, u32>,
+    fwd: PyReadonlyArray2<'py, f64>,
+    g: usize,
+) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>)> {
+    same_shape(&factor, &fwd)?;
+    if g < 2 {
+        return Err(PyValueError::new_err("n_groups must be >= 2"));
+    }
+    let (_, t, n) = rows(&factor)?;
+    let (rs, _, _) = rows(&fwd)?;
+    let (fo, fc) = orders(&fo, &fc, t, n)?;
+    let mut sums = vec![0.0f64; t * g];
+    let mut counts = vec![0.0f64; t * g];
+    py.allow_threads(|| {
+        sums.par_chunks_mut(g).zip(counts.par_chunks_mut(g)).enumerate().for_each(|(row, (s, c))| {
+            let rr = &rs[row * n..row * n + n];
+            let o = &fo[row * n..row * n + fc[row] as usize];
+            let m = o.iter().filter(|&&j| rr[j as usize].is_finite()).count();
+            if m < g {
+                return;
+            }
+            let mut pos = 0;
+            for &j in o {
+                let r = rr[j as usize];
+                if r.is_finite() {
+                    let b = pos * g / m;
+                    s[b] += r;
+                    c[b] += 1.0;
+                    pos += 1;
+                }
+            }
+        });
+    });
+    Ok((
+        PyArray1::from_vec_bound(py, sums).reshape([t, g])?,
+        PyArray1::from_vec_bound(py, counts).reshape([t, g])?,
+    ))
+}
+
 /// Rolling time-series kernel `op` (one of `ts.rs`'s `UNARY`) over windows of `d` rows,
-/// column by column.
+/// swept row by row over blocks of columns.
 #[pyfunction]
 fn ts_rolling<'py>(
     py: Python<'py>,
@@ -388,7 +627,7 @@ fn ts_rolling<'py>(
         return Err(PyValueError::new_err("window length must be >= 1"));
     }
     let (s, t, n) = rows(&x)?;
-    let out = py.allow_threads(|| ts::by_column(&[s], t, n, |c, o| ts::unary(op, c[0], d, o)));
+    let out = py.allow_threads(|| ts::sweep(&[s], t, n, |c| ts::unary(op, c, d)));
     Ok(PyArray1::from_vec_bound(py, out).reshape([t, n])?)
 }
 
@@ -410,7 +649,7 @@ fn ts_rolling2<'py>(
     same_shape(&x, &y)?;
     let (xs, t, n) = rows(&x)?;
     let (ys, _, _) = rows(&y)?;
-    let out = py.allow_threads(|| ts::by_column(&[xs, ys], t, n, |c, o| ts::binary(op, c[0], c[1], d, o)));
+    let out = py.allow_threads(|| ts::sweep(&[xs, ys], t, n, |c| ts::binary(op, c, d)));
     Ok(PyArray1::from_vec_bound(py, out).reshape([t, n])?)
 }
 
@@ -435,9 +674,11 @@ fn assay_kernels(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(row_orders, m)?)?;
     m.add_function(wrap_pyfunction!(rank_ic_ordered, m)?)?;
     m.add_function(wrap_pyfunction!(group_sums, m)?)?;
+    m.add_function(wrap_pyfunction!(group_sums_ordered, m)?)?;
     m.add_function(wrap_pyfunction!(ts_rolling, m)?)?;
     m.add_function(wrap_pyfunction!(ts_rolling2, m)?)?;
     m.add_function(wrap_pyfunction!(ts_ops, m)?)?;
     m.add_function(wrap_pyfunction!(threads, m)?)?;
+    m.add_class::<RankCache>()?;
     Ok(())
 }
