@@ -119,6 +119,26 @@ per date in the parent, vectorised.
 Precision: inputs are float32; kernels compute in float64 within a worker; stored nodes are
 float32. Scores agree with the direct engine to well under 1e-4 in IC.
 
+### 3.1 Spec packs (worker inputs)
+
+ADES workers score whole factors on one spec (universe, period). Every factor of a spec
+reads the same inputs: the OHLCV of every security that was a member during the period,
+aligned and adjusted onto the period's last day, the membership mask, and the forward
+returns per horizon. With `ASSAY_PACK_DIR` set (`/var/cache/assay-worker/packs` on the
+workers), `assay.data.specpack` keeps them per panel snapshot as C-contiguous float64
+`.npy` files and maps them read-only:
+
+| TOP1000 2016+ (2723 × 2421) | gathered from the panel | spec pack |
+|---|---|---|
+| load | 5.4 s | ~0 s (first build ~2 s on a worker) |
+| peak RSS scoring 55 Alpha101 factors | 2.6 GB | 1.5 GB |
+| disk | — | 460 MB |
+
+Scores are identical bit for bit. A pack is built on first use (the directory and each
+forward-return file appear by rename), horizons are added as they are asked for, and a
+newer panel snapshot gets new packs while the older ones are removed. Processes on one
+machine share the mapped pages.
+
 ## 4. Agent-native interface
 
 Designed for many agents sharing one server:
