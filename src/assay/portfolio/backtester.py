@@ -189,12 +189,17 @@ class PortfolioBacktester:
                     f"for market {config.market!r}; the signal was NOT sector-neutralised "
                     "and max_sector_weight did not bind."
                 )
-        signal = process_signal(factor, config, groups)
-        signal = np.where(eligible, signal, np.nan)  # ineligible -> NaN (weight 0)
-
         # --- 4. rebalance schedule (RebalanceScheduler) + execution offset ------
         reb_idx = rebalance_dates(factor, dates, config)
         offset = max(1, int(config.execution_offset_days))
+
+        # The signal is read on the rebalance dates only, and every step of
+        # process_signal works date by date, so only those rows are processed.
+        signal = np.full((T, N), np.nan)
+        rows = sorted({s for s in reb_idx if 0 <= s < T})
+        if rows:
+            signal[rows] = process_signal(factor[rows], config, groups)
+        signal = np.where(eligible, signal, np.nan)  # ineligible -> NaN (weight 0)
 
         # --- 5/6. per-rebalance weights + constraints -> accountant schedule ----
         schedule, n_scheduled = self._build_schedule(
@@ -231,6 +236,7 @@ class PortfolioBacktester:
             tradable_masks=mask_mat,
             dates=date_lbls,
             symbols=[str(s) for s in symbols],
+            record_trades=bool(config.save_trade_log),
         )
 
         # --- 9. benchmark series ------------------------------------------------

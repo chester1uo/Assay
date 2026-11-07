@@ -10,7 +10,7 @@ would get from the Python SDK (architecture §1, "one in-process service").
 Design (architecture §6):
 - High-level :class:`mcp.server.fastmcp.FastMCP` (decorator tools; supports the
   ``stdio`` default plus SSE / streamable-HTTP for remote agents — §6.1).
-- Eleven evaluation/library tools are complemented by fifteen durable research tools
+- Eleven evaluation/library tools and eight FactorDB tools accompany fifteen research tools
   for datasets, sessions, notes, experiments, comparisons and interruption recovery.
 - Tool descriptions are **agent-actionable**: they spell out the dual qlib /
   Python syntax and steer the agent toward ``assay_batch`` over a serial
@@ -31,10 +31,11 @@ numpy ``(T, N)`` float64 core upstream, polars frames, NaN-aware throughout.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from assay.engine import operator_schema
 from assay.service import AssayService
@@ -522,6 +523,112 @@ from assay.mcp.research import register_research_tools
 register_research_tools(mcp, get_service)
 
 
+# FactorDB tools (docs/en/design/factordb.md §4) — batch-first, deduplicated, shared
+# ---------------------------------------------------------------------------
+def _fdb():
+    from assay.factordb import service
+
+    return service.get()
+
+
+def _owner(ctx: Context | None) -> str:
+    """The signed-in caller over HTTP; ``ASSAY_AGENT_NAME`` (or "mcp") over stdio."""
+    try:
+        user = getattr(ctx.request_context.request.state, "user", None)
+        if user is not None:
+            return user.username
+    except Exception:  # noqa: BLE001 — stdio has no request
+        pass
+    return os.environ.get("ASSAY_AGENT_NAME", "mcp")
+
+
+def _safe(fn):
+    try:
+        return fn()
+    except RuntimeError as exc:
+        return {"error": {"code": "UNAVAILABLE", "message": str(exc)}}
+    except ValueError as exc:
+        return {"error": {"code": "INVALID", "message": str(exc)}}
+
+
+@mcp.tool(
+    name="fdb_submit",
+    description=(
+        "Score MANY factor expressions in one call (up to 5000) on a spec: universe "
+        "(TOP500/TOP1000/TOP3000/SP500/NASDAQ100), start, optional end/horizons/execution. "
+        "Returns at once: job_id for the new work, already_scored factors with their metrics, "
+        "duplicates (same canonical factor), rejected expressions with a hint. Time-series parts "
+        "are computed once and shared with every agent, so resubmitting costs nothing. Then poll "
+        "fdb_job. Tag your factors (tags) and name the factors they derive from (parents)."
+    ),
+)
+def fdb_submit(exprs: list[str], universe: str, start: str, end: str | None = None,
+               horizons: list[int] | None = None, execution: str = "next_open",
+               tags: list[str] | None = None, parents: list[str] | None = None, label: str = "",
+               ctx: Context | None = None) -> dict[str, Any]:
+    def run():
+        svc, owner = _fdb(), _owner(ctx)
+        if svc.over_budget(owner):
+            return {"error": {"code": "BUDGET", "message": "daily compute budget used up"}}
+        return svc.submit(owner, exprs[:5000], universe=universe, start=start, end=end,
+                          horizons=horizons or (1, 5, 10, 20), execution=execution,
+                          tags=tags or (), parents=parents or (), label=label)
+    return _safe(run)
+
+
+@mcp.tool(name="fdb_job", description="Progress of a submitted job: done/failed/total, ETA and its best factors so far (by |RankICIR|).")
+def fdb_job(job_id: str, top: int = 10) -> dict[str, Any]:
+    return _safe(lambda: _fdb().job(job_id, top=min(int(top), 100)))
+
+
+@mcp.tool(
+    name="fdb_query",
+    description=("Search scored factors. Filter by spec (from fdb_submit), min_abs_rank_icir, owner, tag; "
+                 "sort_by rank_icir|rank_ic|ic|icir|turnover|coverage|long_short|decay_halflife|created."),
+)
+def fdb_query(spec: str | None = None, sort_by: str = "rank_icir", descending: bool = True,
+              min_abs_rank_icir: float | None = None, owner: str | None = None, tag: str | None = None,
+              limit: int = 20, offset: int = 0) -> dict[str, Any]:
+    return _safe(lambda: _fdb().query(spec=spec, sort_by=sort_by, descending=descending,
+                                      min_abs_rank_icir=min_abs_rank_icir, owner=owner, tag=tag,
+                                      limit=min(int(limit), 500), offset=int(offset)))
+
+
+@mcp.tool(name="fdb_factor", description="One factor by id: canonical form, who proposed it, tags, parents and its scores per spec.")
+def fdb_factor(factor_id: str) -> dict[str, Any]:
+    return _safe(lambda: _fdb().factor(factor_id))
+
+
+@mcp.tool(
+    name="fdb_novelty",
+    description=("How new is a factor? Mean daily rank correlation of an expression (or factor id) with every "
+                 "factor already scored on the same spec; returns max_abs_corr and the nearest factors. "
+                 "Check before spending budget on variants of known factors."),
+)
+def fdb_novelty(expr: str, universe: str, start: str, end: str | None = None,
+                horizons: list[int] | None = None, top: int = 5) -> dict[str, Any]:
+    return _safe(lambda: _fdb().novelty(expr, universe=universe, start=start, end=end,
+                                        horizons=horizons or (1, 5, 10, 20), top=min(int(top), 20)))
+
+
+@mcp.tool(name="fdb_values", description="Cross-section of a factor on one date (default: latest): top and bottom names with values. Use to sanity-check what a factor picks.")
+def fdb_values(expr: str, universe: str, date: str | None = None, top: int = 10) -> dict[str, Any]:
+    return _safe(lambda: _fdb().values(expr, universe=universe, date=date, top=min(int(top), 100)))
+
+
+@mcp.tool(name="fdb_operators", description="Operator catalog (name, signature, category, arity) and available fields.")
+def fdb_operators() -> dict[str, Any]:
+    from assay.factordb.agent import FactorService
+
+    return FactorService.operators()
+
+
+@mcp.tool(name="fdb_budget", description="Compute seconds used and left today for the caller.")
+def fdb_budget(ctx: Context | None = None) -> dict[str, Any]:
+    return _safe(lambda: _fdb().budget(_owner(ctx)))
+
+
+# ---------------------------------------------------------------------------
 # Entry point (architecture §6.5)
 # ---------------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> None:

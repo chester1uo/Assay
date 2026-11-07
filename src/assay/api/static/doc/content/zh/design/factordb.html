@@ -1,0 +1,206 @@
+<h1 class="doc-title">FactorDB：面向大规模 agent 因子研究的因子库</h1>
+<p>状态：设计 + 第一阶段（日频）实现。范围：基于 QFinVerse 日频面板的 Assay（美股），第二阶段扩展到分钟线。</p>
+<h2 id="1-为什么要做">1. 为什么要做</h2>
+<p>现在的 Assay 评估一个因子时，先按一个股票池和区间加载「日期 × 证券」面板，再遍历表达式、打分。结果按（表达式, 股票池, 区间, 复权）缓存。一个研究员用没问题，几百个 agent 提出几万个因子就不行了：</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>问题</th>
+<th>后果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>结果按股票池和区间缓存</td>
+<td>SP500 2016–2026 算过的 <code>ts_mean(volume, 20)</code>，换成 NASDAQ100、换成 2018–2026、换一个 agent，都要重算</td>
+</tr>
+<tr>
+<td>一个请求一个进程一份面板</td>
+<td>32 核用不上，TOP3000 的一批因子卡在单线程</td>
+</tr>
+<tr>
+<td>全程 float64</td>
+<td>内存是源数据（float32）的两倍</td>
+</tr>
+<tr>
+<td>区间开头的预热 NaN</td>
+<td>60 日窗口的因子，每次请求开头都丢 60 天</td>
+</tr>
+<tr>
+<td>agent 工具照搬人用的接口</td>
+<td>一个因子一次阻塞调用、返回体大、agent 之间不去重、没有配额</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="2-核心思路-在全局网格上只算一次">2. 核心思路：在全局网格上只算一次</h2>
+<p>每个因子表达式都可以拆成两类计算：</p>
+<ul>
+<li><strong>按列可分</strong>的部分：时序和逐元素算子（<code>ts_*</code>、<code>+ - * /</code>、<code>log</code>、<code>where</code> …）。证券 <em>s</em> 在 <em>t</em> 日的值只取决于 <em>s</em> 自己截至 <em>t</em> 的历史，<strong>和股票池无关</strong>。</li>
+<li><strong>按行耦合</strong>的部分：截面算子（<code>cs_rank</code>、<code>cs_zscore</code>、<code>cs_neutralize</code>、分组算子）。值取决于当天截面里有哪些证券。</li>
+</ul>
+<p>FactorDB 把按列可分的部分在一张<strong>全局网格</strong>上只存一份：存储期内的每个交易日 × 曾经属于最大股票池（TOP3000 ∪ 指数成分）的每只证券。任何股票池、任何区间的请求，都从网格里切出对应的行和列，再按该股票池当天的成分即时计算截面部分。截面计算每天一遍，比滚动窗口便宜得多。</p>
+<pre><code>cs_rank( ts_corr(close, volume, 20) )
+         └──── 存在网格上 ────┘   每次请求按股票池成分计算
+</code></pre>
+<p>如果时序算子套在截面算子<strong>外面</strong>（<code>ts_mean(cs_rank(x), 5)</code>），结果依赖股票池，这类节点按股票池分别存储，仍然在区间和 agent 之间共享。</p>
+<h3 id="2-1-规范形式与身份">2.1 规范形式与身份</h3>
+<p>计算之前先解析并规范化：可交换算子（<code>add</code>、<code>mul</code>、<code>elem_min</code>、<code>elem_max</code>、<code>eq</code>、<code>ne</code>、<code>and</code>、<code>or</code>）的参数排序，数字字面量统一，窗口取整与引擎一致。规范树的结构哈希就是<strong>因子 id</strong>。两个 agent 分别写 <code>close/open</code> 和 <code>div(close, open)</code>，得到同一个 id；提交已知 id 不花任何计算。</p>
+<h3 id="2-2-节点存储">2.2 节点存储</h3>
+<p>每个存储节点是网格上的一个 float32 矩阵，按<strong>年份分块</strong>（<code>nodes/&lt;hash&gt;/&lt;year&gt;.npy</code>，内存映射读取）。按年分块让追加很便宜（只重写当年），读取也快（读 2016–2026 只映射 11 个文件）。年块按<strong>证券优先</strong>存放（<code>证券数 × 天数</code>）：工作进程按证券分片计算，写入的是连续区间；按股票池读取时每只证券读一段连续数据。（按日期优先存放时，每次写 25 列都会碰到文件的每一页，在 15 GB 内存的生产机上每个任务要读写几个 GB。）每个节点有一份 meta，记录规范表达式、所属网格、有效截至日、大小、计算耗时和命中次数（用于淘汰，也用于回答 agent 的「这个算过没有」）。</p>
+<p>存哪些节点：</p>
+<ul>
+<li>每个因子的<strong>前沿</strong>：最大的按列可分子树（第一个截面算子的输入；没有截面算子时就是整个因子）；</li>
+<li>被两个及以上因子用到的按列可分子树（按节点统计热度）。</li>
+</ul>
+<p>字段本身不复制，直接读 QFinVerse 面板的年块。</p>
+<h3 id="2-3-公司行动与时点正确性">2.3 公司行动与时点正确性</h3>
+<p>QFinVerse 面板按成交原样存价，读取时复权到窗口最后一天的股本口径。FactorDB 在存储的最后一天 <em>E</em> 的口径上计算网格节点。结束日 <em>E′ &lt; E</em> 的请求必须看到 <em>E′</em> 口径的值。对价格<strong>齐次</strong>的节点，两者只差一个按证券的常数：</p>
+<ul>
+<li>面板对价格和成交量各有一个调整因子 <code>P</code>、<code>V</code>：<code>close/open/high/low</code> 的阶为 (1, 0)，<code>volume</code> 为 (0, 1)，<code>transactions</code>、<code>dvol</code>、<code>ret</code> 为 (0, 0)；</li>
+<li>算子合成阶数：<code>mul</code> 相加，<code>div</code> 相减，<code>add/sub/min/max/where</code> 要求阶相同，<code>ts_mean/ts_sum/ts_std/ts_delay/ts_min/ts_max/abs/neg</code> 保持，<code>ts_corr/ts_rank/ts_returns/cs_*/sign/比较</code> 为 (0, 0)，非零阶的 <code>log/sqrt/pow</code> 没有阶；</li>
+<li>阶为 (a, b) 的节点，按证券除以 <code>P^a · V^b</code> 即可，<code>P</code>、<code>V</code> 是 (<em>E′</em>, <em>E</em>] 之间公司行动的累积因子。</li>
+</ul>
+<p>大多数 alpha 因子阶为 (0, 0)，不需要换算。没有阶的节点（如 <code>log(close)</code>）在结束日早于 <em>E</em> 的请求里不走网格，改用原引擎直接算。</p>
+<p>面板发布新版本时 FactorDB <strong>追加</strong>：每个节点只算新增的日期，输入从新日期往前多取该节点的回看长度（各层窗口之和；<code>ts_ema</code> 这类递推没有上限，整列重算）。有新拆股或分红的证券整列重算，因为新事件改变了它复权后的全部历史。一般一天只有几十列，约 9,000 列里的零头。</p>
+<h2 id="3-计算-按证券分片并行">3. 计算：按证券分片并行</h2>
+<p>一批表达式合成一张 DAG（共享子树只出现一次）。缺失的前沿节点由一组工作进程计算，每个进程负责一段证券：</p>
+<ol>
+<li>父进程把各节点的年块文件分配好（内存映射）；</li>
+<li>每个工作进程映射自己那几列的输入字段（QFinVerse 年块本来就是内存映射），用进程内的公共子表达式缓存算完这批所有缺失节点，直接写进输出文件的对应列；</li>
+<li>进程之间不传大数组，输入由操作系统页缓存共享。</li>
+</ol>
+<p>时序算子各列互不依赖，所以可以随核数扩展，直到内存带宽成为瓶颈。截面层和打分（IC、RankIC、衰减、换手）在父进程按日向量化计算。</p>
+<p>精度：输入为 float32，工作进程内用 float64 计算，存储为 float32。与原引擎的 IC 差异远小于 1e-4。</p>
+<h3 id="3-1-spec-pack-worker-的输入">3.1 Spec pack（worker 的输入）</h3>
+<p>ADES worker 按 spec（股票池、区间）给因子打分。同一个 spec 的每个因子读的都是同一批输入：区间内当过成分股的全部证券的 OHLCV（按交易日对齐，复权到区间最后一天）、成分股掩码，以及各周期的前向收益。设置 <code>ASSAY_PACK_DIR</code> 后（worker 上是 <code>/var/cache/assay-worker/packs</code>），<code>assay.data.specpack</code> 按面板快照把它们存成 C 连续的 float64 <code>.npy</code>，只读映射打开：</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>TOP1000 2016 年起（2723 × 2421）</th>
+<th>从面板读取</th>
+<th>spec pack</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>加载</td>
+<td>5.4 秒</td>
+<td>约 0 秒（worker 上首次构建约 2 秒）</td>
+</tr>
+<tr>
+<td>55 个 Alpha101 因子打分的峰值内存</td>
+<td>2.6 GB</td>
+<td>1.5 GB</td>
+</tr>
+<tr>
+<td>磁盘</td>
+<td>—</td>
+<td>460 MB</td>
+</tr>
+</tbody>
+</table></div>
+<p>打分结果逐位一致。pack 在第一次使用时构建（目录和每个前向收益文件都靠改名一次性出现），周期用到时再补；面板有新快照时生成新的 pack，并删掉旧快照的。同一台机器上的进程共享映射的页。</p>
+<h2 id="4-面向-agent-的接口">4. 面向 agent 的接口</h2>
+<p>为多个 agent 共享一台服务器而设计：</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>原则</th>
+<th>做法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>批量优先</td>
+<td>一次提交几百个表达式，拿到 job id</td>
+</tr>
+<tr>
+<td>幂等</td>
+<td>因子 id = 规范哈希；已知因子在已知规格上直接返回已有评分</td>
+</tr>
+<tr>
+<td>agent 之间共享</td>
+<td>一个节点库、一个注册表；正在计算的重复请求合并到同一个任务</td>
+</tr>
+<tr>
+<td>返回体小而稳定</td>
+<td>top-k 表格，字段固定；数值按需、抽样返回</td>
+</tr>
+<tr>
+<td>错误可操作</td>
+<td>每个拒绝都带错误码、表达式中的位置和修改建议</td>
+</tr>
+<tr>
+<td>内置新颖度</td>
+<td>用存储的值计算与因子库的相关性</td>
+</tr>
+<tr>
+<td>公平使用</td>
+<td>按用户排队、轮流调度，一个 agent 占不满全部算力；可选的每日计算上限（<code>ASSAY_FACTORDB_BUDGET_S</code>，默认不限）</td>
+</tr>
+<tr>
+<td>可追溯</td>
+<td>每个因子记录提出者、时间、父因子和标签</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="4-1-mcp-工具-v2">4.1 MCP 工具（v2）</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>工具</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fdb_submit</code></td>
+<td>在一个规格（股票池、区间、预测期）上评估大量表达式。立即返回 job id，以及重复、被拒（附建议）、已有评分的因子</td>
+</tr>
+<tr>
+<td><code>fdb_job</code></td>
+<td>进度、预计剩余时间、目前最好的因子、失败汇总</td>
+</tr>
+<tr>
+<td><code>fdb_query</code></td>
+<td>按指标、标签、提出者、新颖度筛选和排序已评分因子</td>
+</tr>
+<tr>
+<td><code>fdb_factor</code></td>
+<td>单个因子：规范形式、各规格评分、诊断、来源</td>
+</tr>
+<tr>
+<td><code>fdb_novelty</code></td>
+<td>一个表达式或 id 与因子库的最大相关性，以及最接近的几个因子</td>
+</tr>
+<tr>
+<td><code>fdb_values</code></td>
+<td>某日的截面快照（排名最高和最低的证券及数值），用于检查因子选出了什么</td>
+</tr>
+<tr>
+<td><code>fdb_operators</code></td>
+<td>算子目录：签名、类别、阶数规则</td>
+</tr>
+<tr>
+<td><code>fdb_budget</code></td>
+<td>调用者已用和剩余的计算量</td>
+</tr>
+</tbody>
+</table></div>
+<p>MCP 服务也以 streamable HTTP 方式挂在 Assay 站点的 <code>/mcp/</code> 下，使用与 REST API 相同的账户和个人 API 密钥。远程 agent（Claude、Codex 等）都连到同一个 FactorDB。</p>
+<h3 id="4-2-rest">4.2 REST</h3>
+<p>同样的操作在 <code>/v1/fdb/*</code> 下（<code>POST /submit</code>、<code>GET /jobs/{id}</code>、<code>GET /factors</code>、<code>GET /factors/{id}</code>、<code>POST /novelty</code>、<code>GET /values</code>、<code>GET /operators</code>、<code>GET /budget</code>）。</p>
+<h2 id="5-分钟线-第二阶段">5. 分钟线（第二阶段）</h2>
+<p>分钟数据大两个数量级（MASSIVE 分钟聚合，2003–2026 年约 100 GB parquet）。设计沿用同样的组件，但并行单位从证券换成<strong>交易日</strong>：</p>
+<ul>
+<li>分钟字段存储每天一块（常规交易时段 390 根 × 当天成分），float32，证券 id 与日频网格对齐；</li>
+<li>日内表达式按天计算（时间轴是当天第几根 bar），各天之间没有依赖，可以并行；</li>
+<li>主要用法是<strong>把日内特征归约成日频值</strong>，即 <code>day_agg(expr, &quot;last&quot; | &quot;mean&quot; | &quot;sum&quot; | &quot;std&quot; | …)</code>。结果进入日频节点库，可以和日频算子自由组合（<code>cs_rank(day_agg(ts_corr(close, volume, 30), &quot;mean&quot;))</code>）；</li>
+<li>只有分钟级回测需要时，才按天存完整的分钟输出。</li>
+</ul>
+<h2 id="6-阶段">6. 阶段</h2>
+<ol>
+<li><strong>日频 FactorDB</strong>：规范 id、全局网格、节点库、按证券分片并行计算、追加与公司行动重算、注册表与任务、REST 和 MCP v2、带账户鉴权的 HTTP MCP。与现有引擎做基准对比。</li>
+<li><strong>分钟线</strong>：分钟字段存储构建、按天的日内计算、<code>day_agg</code>、分钟回测。</li>
+<li><strong>横向扩展</strong>：按「代价 × 命中」淘汰；节点库放共享卷供多台计算机使用；面板每次更新后定时预算因子库的前沿节点。</li>
+</ol>

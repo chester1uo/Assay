@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 import polars as pl
 
+from assay import _native
 from assay.engine import operators
 from assay.engine.ast import FieldNode, LitNode, OpNode, iter_fields, iter_ops
 from assay.engine.parsing import ParseError, parse
@@ -118,6 +119,64 @@ class FactorEngine:
         self._panel = panel
         self._matrix_cache: dict[str, np.ndarray] = {}
         self._groups = self._build_groups(group_data or {})
+        self.membership: np.ndarray | None = None   # (T, N) bool: point-in-time universe membership
+        self.snapshot: str | None = None            # data version the panel was read from
+
+    @classmethod
+    def from_matrices(
+        cls,
+        dates,
+        symbols,
+        matrices: dict[str, np.ndarray],
+        group_data: dict[str, dict[str, object]] | None = None,
+    ) -> "FactorEngine":
+        """Build an engine from ``(T, N)`` field matrices (no long frame to pivot).
+
+        ``symbols`` must be sorted (the engine's cross-section axis order)."""
+        self = cls.__new__(cls)
+        self.dates = np.asarray(dates).astype("datetime64[D]")
+        self.symbols = np.asarray(symbols)
+        if not len(self.dates) or not len(self.symbols):
+            raise ValueError("cannot build a FactorEngine on an empty panel")
+        if np.any(self.symbols[1:] < self.symbols[:-1]):
+            raise ValueError("symbols must be sorted")
+        self._shape = (self.dates.shape[0], self.symbols.shape[0])
+        self._field_cols = list(matrices)
+        self._panel = None
+        self._matrix_cache = {f: np.asarray(m, dtype=np.float64) for f, m in matrices.items()}
+        for f, m in self._matrix_cache.items():
+            if m.shape != self._shape:
+                raise ValueError(f"field {f!r} has shape {m.shape}, expected {self._shape}")
+        self._groups = self._build_groups(group_data or {})
+        self.membership = None
+        self.snapshot = None
+        return self
+
+    def panel_frame(self):
+        """The panel as a long ``date, symbol, *fields`` frame (built on demand for matrix engines)."""
+        if self._panel is None:
+            import polars as pl
+
+            t, n = self._shape
+            cols = {"date": pl.Series(np.repeat(self.dates, n)).cast(pl.Date),
+                    "symbol": pl.Series(np.tile(self.symbols.astype(str), t))}
+            for f in self._field_cols:
+                cols[f] = pl.Series(self._matrix(f).reshape(-1))
+            frame = pl.DataFrame(cols)
+            self._panel = frame.filter(pl.any_horizontal([pl.col(f).is_not_nan() for f in self._field_cols]))
+        return self._panel
+
+    def _members_only(self, values: np.ndarray) -> np.ndarray:
+        """NaN where the security was not in the universe on that date (row orders
+        remembered for ``values`` carry over, filtered to the members)."""
+        if self.membership is None:
+            return values
+        out = np.where(self.membership, values, np.nan)
+        orders = _native.known_orders(values)
+        if orders is not None and _native.kernels is not None:
+            keep = np.ascontiguousarray(self.membership, dtype=bool)
+            _native.remember_orders(out, _native.kernels.orders_where(*orders, keep))
+        return out
 
     # -- field pivot ----------------------------------------------------------
     def _matrix(self, field: str) -> np.ndarray:
@@ -177,7 +236,8 @@ class FactorEngine:
         values = self._eval(node, ctx)
         if np.isscalar(values) or np.ndim(values) == 0:  # a constant factor
             values = np.full(self._shape, float(values), dtype=np.float64)
-        return FactorResult(expr_str, np.asarray(values, dtype=np.float64), ctx.dates, ctx.symbols)
+        values = self._members_only(np.asarray(values, dtype=np.float64))
+        return FactorResult(expr_str, values, ctx.dates, ctx.symbols)
 
     def _eval(self, node, ctx: EvalContext):
         if isinstance(node, FieldNode):
@@ -196,7 +256,7 @@ class FactorEngine:
         raise TypeError(f"unexpected AST node: {node!r}")
 
     # -- batch evaluation with common-sub-expression elimination (CSE) --------
-    def _eval_cse(self, node, ctx: EvalContext, memo: dict, hashes: dict):
+    def _eval_cse(self, node, ctx: EvalContext, memo: dict, hashes: dict, refs: dict | None = None):
         """Evaluate ``node`` reusing a structural-hash memo (shared across a batch).
 
         Every :class:`OpNode` result is cached in ``memo`` keyed by its structural
@@ -205,6 +265,10 @@ class FactorEngine:
         one factor is computed exactly once. ``memo`` may be pre-seeded from a
         precompute store before the walk; a seeded hash short-circuits the whole
         subtree. Field/literal leaves are returned directly — they cost nothing.
+
+        With ``refs`` (remaining uses per hash, see :meth:`_use_counts`) a child's entry
+        is dropped from ``memo`` once its last consumer has been computed, so only the
+        live frontier of the batch DAG stays in memory.
         """
         if isinstance(node, FieldNode):
             return ctx.matrices[node.name]
@@ -219,7 +283,7 @@ class FactorEngine:
             return cached
 
         spec = operators.get(node.op)
-        args = [self._eval_cse(child, ctx, memo, hashes) for child in node.children]
+        args = [self._eval_cse(child, ctx, memo, hashes, refs) for child in node.children]
         try:
             val = spec.fn(*args, ctx=ctx) if spec.needs_ctx else spec.fn(*args)
         except EvaluationError:
@@ -231,9 +295,48 @@ class FactorEngine:
         else:
             val = np.asarray(val, dtype=np.float64)
         memo[h] = val
+        if refs is not None:
+            del args
+            for child in node.children:
+                if isinstance(child, OpNode):
+                    self._release(hashes[id(child)], memo, refs)
         return val
 
+    @staticmethod
+    def _release(h: str, memo: dict, refs: dict) -> None:
+        refs[h] -= 1
+        if refs[h] <= 0:
+            memo.pop(h, None)
+
+    @staticmethod
+    def _use_counts(nodes, hashes: dict) -> dict[str, int]:
+        """Uses of each distinct subtree: one per (distinct parent, child slot), one per output."""
+        refs: dict[str, int] = {}
+        seen: set[str] = set()
+
+        def _walk(n):
+            h = hashes[id(n)]
+            if h in seen:
+                return
+            seen.add(h)
+            for c in n.children:
+                if isinstance(c, OpNode):
+                    ch = hashes[id(c)]
+                    refs[ch] = refs.get(ch, 0) + 1
+                    _walk(c)
+
+        for nd in nodes:
+            if isinstance(nd, OpNode):
+                refs[hashes[id(nd)]] = refs.get(hashes[id(nd)], 0) + 1
+                _walk(nd)
+        return refs
+
     def evaluate_many(self, exprs, *, precompute=None, precompute_min_nodes: int = 3) -> list[FactorResult]:
+        """All results of :meth:`evaluate_iter` as a list (see there)."""
+        return list(self.evaluate_iter(exprs, precompute=precompute, precompute_min_nodes=precompute_min_nodes))
+
+    def evaluate_iter(self, exprs, *, precompute=None, precompute_min_nodes: int = 3, release: bool = True,
+                      errors: str = "raise"):
         """Evaluate many expressions over one shared panel with CSE (engineering §4.3).
 
         Builds the field matrices once and threads a single structural-hash memo
@@ -246,12 +349,18 @@ class FactorEngine:
         disk overhead during the walk (tiny subtrees are cheaper to recompute than to
         load, so they are not fetched).
 
-        Returns one :class:`FactorResult` per input (aligned to ``exprs`` order). An
-        expression that fails to parse / evaluate raises, exactly as :meth:`evaluate`
-        would — call per-expression :meth:`diagnose` if you need soft failures.
+        Yields one :class:`FactorResult` per input, in ``exprs`` order, as each is done.
+        With ``release`` (the default; ignored with ``precompute``) a subtree's matrix
+        is freed after its last use in the batch, so peak memory follows the width of
+        the batch DAG rather than its number of distinct subtrees; a caller that
+        consumes results one at a time never holds the whole batch. An expression that
+        fails to parse / evaluate raises, exactly as :meth:`evaluate` would; with
+        ``errors="yield"`` its exception is yielded in its place and the batch goes on.
         """
         from assay.engine.ast import hash_tree
 
+        if errors not in ("raise", "yield"):
+            raise ValueError("errors is 'raise' or 'yield'")
         nodes = [parse(e) if isinstance(e, str) else e for e in exprs]
         fields: set[str] = set()
         hashes: dict[int, str] = {}
@@ -262,17 +371,28 @@ class FactorEngine:
         ctx = EvalContext(self.dates.tolist(), self.symbols.tolist(), matrices, self._groups)
 
         memo: dict[str, np.ndarray] = {}
+        refs = None
         if precompute is not None:
             self._seed_from_precompute(nodes, hashes, memo, precompute, precompute_min_nodes)
+        elif release:
+            refs = self._use_counts(nodes, hashes)
 
-        out: list[FactorResult] = []
         for src, nd in zip(exprs, nodes):
             expr_str = src if isinstance(src, str) else str(nd)
-            values = self._eval_cse(nd, ctx, memo, hashes)
+            try:
+                values = self._eval_cse(nd, ctx, memo, hashes, refs)
+            except Exception as exc:
+                if errors == "raise":
+                    raise
+                yield exc
+                continue
+            if refs is not None and isinstance(nd, OpNode):
+                self._release(hashes[id(nd)], memo, refs)
             if np.isscalar(values) or np.ndim(values) == 0:
                 values = np.full(self._shape, float(values), dtype=np.float64)
-            out.append(FactorResult(expr_str, np.asarray(values, dtype=np.float64), ctx.dates, ctx.symbols))
-        return out
+            yield FactorResult(expr_str, self._members_only(np.asarray(values, dtype=np.float64)),
+                               ctx.dates, ctx.symbols)
+            del values
 
     @staticmethod
     def _seed_from_precompute(nodes, hashes: dict, memo: dict, precompute, min_nodes: int) -> None:
@@ -323,6 +443,8 @@ class FactorEngine:
             "\x1f".join(sorted(self._field_cols)).encode(), digest_size=4
         ).hexdigest()
         preimage = f"{first}|{last}|{int(d.size)}|{int(self._shape[1])}|{sym_digest}|{fld_digest}"
+        if self.snapshot:  # a new data version (restated history) must not reuse cached matrices
+            preimage += f"|{self.snapshot}"
         return hashlib.blake2b(preimage.encode(), digest_size=16).hexdigest()
 
     # -- diagnostics ----------------------------------------------------------
@@ -433,13 +555,25 @@ class FactorEngine:
         construction — see engineering-docs section 3.4).
         """
         fields = fields or ["open", "high", "low", "close", "volume"]
-        symbols = store.get_universe(universe, period[1], as_of)
-        panel = store.get_panel(
-            fields=fields,
-            symbols=symbols,
-            start_date=period[0],
-            end_date=period[1],
-            as_of_date=as_of,
-            adj=adj,
-        )
-        return cls(panel, group_data=group_data)
+        if hasattr(store, "universe_span"):
+            # every security that was a member during the period, masked to its member dates below
+            symbols = store.universe_span(universe, period[0], period[1], as_of)
+        else:
+            symbols = store.get_universe(universe, period[1], as_of)
+        if hasattr(store, "get_matrices"):
+            dates, syms, mats = store.get_matrices(fields, symbols, period[0], period[1], as_of, adj)
+            engine = cls.from_matrices(dates, syms, mats, group_data=group_data)
+        else:
+            panel = store.get_panel(
+                fields=fields,
+                symbols=symbols,
+                start_date=period[0],
+                end_date=period[1],
+                as_of_date=as_of,
+                adj=adj,
+            )
+            engine = cls(panel, group_data=group_data)
+        if hasattr(store, "get_membership"):
+            engine.membership = store.get_membership(universe, engine.dates, engine.symbols, as_of)
+        engine.snapshot = getattr(store, "snapshot_id", None)
+        return engine

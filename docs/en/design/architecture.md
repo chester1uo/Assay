@@ -49,40 +49,10 @@ Assay exposes four consumption surfaces over a single shared engine. Every surfa
 
 ### 1.2  Layer diagram
 
-Boxes are tagged with their build status: ✅ implemented, 🔶 partial, 📋 planned.
+The dot on each box marks its build status: green for implemented, amber for partial, hollow for planned.
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│  Consumption surfaces                                              │
-│                                                                    │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐  │
-│  │  Python SDK  │  │   REST API   │  │  WebUI   │  │   MCP    │  │
-│  │ ✅ assay.*   │  │ ✅ (FastAPI) │  │🔶 vanilla│  │✅(FastMCP)│ │
-│  └──────┬───────┘  └──────┬───────┘  └────┬─────┘  └────┬─────┘  │
-│         │                 │               │              │        │
-│         └─────────────────┴───────────────┴──────────────┘        │
-│                                   │                                │
-├───────────────────────────────────┼────────────────────────────────┤
-│  Service layer   ✅ IMPLEMENTED    │                                │
-│                    ┌──────────────▼──────────────┐                 │
-│                    │      AssayService            │                 │
-│                    │  evaluate() · batch() ·      │                 │
-│                    │  library() · session()       │                 │
-│                    └──────────────┬──────────────┘                 │
-├───────────────────────────────────┼────────────────────────────────┤
-│  Core engine                      │                                │
-│         ┌─────────────────────────┼──────────────────────┐        │
-│         │             ┌───────────▼──────────┐            │        │
-│         │             │   FactorEngine ✅     │            │        │
-│         │             │ Parser ✅ · DAG/CSE 📋 │            │        │
-│         │             └───────────┬──────────┘            │        │
-│  ┌──────┴──────┐   ┌──────────────┴──────┐  ┌──────────┐  │        │
-│  │ DataStore ✅ │   │ Cache 🔶 session+L2 │  │Evaluator │  │        │
-│  │  (Parquet)  │   │  (L1 Arena/incr 📋)  │  │IC/Decay✅│  │        │
-│  └─────────────┘   └─────────────────────┘  └──────────┘  │        │
-│         └─────────────────────────────────────────────────┘        │
-└────────────────────────────────────────────────────────────────────┘
-```
+![Assay layers](../../assets/figures/en/architecture.svg)
+
 
 Built today: the full stack except the React WebUI — `DataStore`, `FactorEngine` +
 dual-syntax parser + operators + diagnostics, the IC/decay/groups/turnover `Evaluator`,
@@ -1054,6 +1024,10 @@ assay_evaluate.__doc__ += OPERATOR_DOCS
 
 ### 6.7  Typical agent loop
 
+![Agent loop](../../assets/figures/en/agent-loop.svg)
+
+What one session looks like:
+
 ```
 Agent iteration 1:
   call assay_library_list(limit=10) → "what high-quality factors already exist?"
@@ -1252,27 +1226,26 @@ python
 >>> assay.backtest("ts_returns(close, 20)", universe="NASDAQ100")
 ```
 
-### 8.2  Service topology 📋
+### 8.2  Service topology
 
-```
-Researcher laptop / server (planned):
+![Deployment](../../assets/figures/en/topology.svg)
 
-  ┌─────────────────────────────────────────────────┐
-  │  assay server                                   │
-  │                                                 │
-  │  :8000  FastAPI (REST API)                      │
-  │  :3000  Vite (WebUI dev) / Nginx (production)  │
-  │  stdio  MCP server (spawned by agent host)      │
-  │                                                 │
-  │  All three share one AssayService process       │
-  │  (single cache, single DataStore connection)    │
-  └─────────────────────────────────────────────────┘
-```
+One `uvicorn` process serves the REST API, `/auth`, the WebUI and the Doc Hub, so every
+caller shares one engine, one cache and one data connection. A reverse proxy in front
+terminates TLS. The MCP server is a separate process that the agent host starts over
+stdio; it builds the same `AssayService` in-process.
+
+- US data comes from the QFinVerse daily panel. QFinVerse rebuilds it after each close;
+  Assay switches to the new version on its next request.
+- The factor library and the L2 cache live in the Assay home (`ASSAY_DATA_DIR`); accounts
+  live in SQLite under `ASSAY_STATE_DIR`, which belongs on a local disk.
+
 
 ### 8.3  Docker Compose 📋
 
-The three images below (`assay-api`, `assay-ui`, `assay-mcp`) reference apps that are not
-built yet (`assay.api.app`, the UI bundle, `assay.mcp.server`). This is the target stack.
+The REST API, WebUI and MCP server behind the three images all exist; the compose file
+below is a sketch of a containerised setup and is not maintained. Production runs under
+systemd behind a reverse proxy, as in §8.2.
 
 ```yaml
 # docker-compose.yml   📋 PLANNED

@@ -5,6 +5,8 @@ parquet 存储。不会下载任何内容——数据管理从磁盘读取预先
 数据层是正确性的基石：每次读取都需要显式的 `as_of_date`，因此
 前视偏差在结构上不可能发生。
 
+> 设置了 `ASSAY_QFV_PANEL_DIR` 时（assay.qfinverse.com 就是这样），美股股票池改读 QFinVerse 日频面板，美股数据不再需要这条流水线，见[美股数据（QFinVerse）](qfv-data.md)。A 股和港股数据仍然来自 [Tushare](../tushare.md)。
+
 ## 本地数据源
 
 `MASSIVE_DATA_DIR`（默认 `/data/massive_data`）是本地镜像的根目录，由

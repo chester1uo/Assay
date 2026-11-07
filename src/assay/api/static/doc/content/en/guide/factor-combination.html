@@ -1,0 +1,221 @@
+<h1 class="doc-title">Factor Combination</h1>
+<p>Blend several single factors into one <strong>composite alpha</strong> and score it honestly
+out-of-sample. The combination layer follows the standard quant-research protocol —
+<strong>fit on train, select on validation, report on test</strong> — so the test IC you read is
+not contaminated by the fitting.</p>
+<p>It is exposed three ways over one shared engine:</p>
+<ul>
+<li><strong>WebUI</strong> — the <em>Factor Combination</em> tab.</li>
+<li><strong>REST</strong> — <code>POST /v1/combination</code> (and <code>GET /v1/combination/methods</code>).</li>
+<li><strong>SDK</strong> — <code>AssayService.combine_factors(...)</code>.</li>
+</ul>
+<hr />
+<h2 id="pipeline">Pipeline</h2>
+<p>For each rebalance the constituents go through:</p>
+<ol>
+<li><strong>Standardize</strong> — every factor is z-scored (<code>zscore</code>) or ranked (<code>rank</code>)
+cross-sectionally per day, so factors on different scales blend sanely.
+NaN-aware: a symbol missing on a date stays out of that day's cross-section.</li>
+<li><strong>Orient</strong> — each factor is flipped to point at <strong>positive train IC</strong>; the
+orientation (<code>+1</code> / <code>-1</code>) is reported so the weights stay readable.</li>
+<li><strong>Fit on TRAIN only</strong> — combination weights (or a model) are learned on the
+train window.</li>
+<li><strong>Select on VALIDATION</strong> — with <code>method=&quot;auto&quot;</code>, every candidate is fit on
+train and the one with the best <strong>validation ICIR</strong> is kept.</li>
+<li><strong>Score on TEST</strong> — the frozen composite's IC / RankIC / ICIR is reported on the
+untouched test window.</li>
+<li><strong>Embargo</strong> — the last <code>embargo</code> days of the train and validation blocks are
+purged (default = the largest forward horizon) so an overlapping horizon-<code>h</code>
+label can never leak across a split boundary (the &quot;purged&quot; split).</li>
+</ol>
+<p>The composite is a <code>(T, N)</code> signal evaluated everywhere with the <strong>same</strong> weights;
+only the <em>fit</em> used the train window.</p>
+<hr />
+<h2 id="methods">Methods</h2>
+<h3 id="analytic-optimization-always-available-numpy-scipy">Analytic / optimization (always available — numpy + scipy)</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Method</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>equal</code></td>
+<td>equal blend of the oriented factors</td>
+</tr>
+<tr>
+<td><code>ic_weight</code></td>
+<td>weight ∝ mean train IC magnitude</td>
+</tr>
+<tr>
+<td><code>icir_weight</code></td>
+<td>weight ∝ train ICIR (mean IC / std IC) — <strong>default</strong>; rewards <em>stable</em> predictors</td>
+</tr>
+<tr>
+<td><code>ols</code></td>
+<td>pooled cross-sectional regression of forward returns on the factors</td>
+</tr>
+<tr>
+<td><code>ridge</code></td>
+<td>L2-regularized regression (<code>ridge_lambda</code>); robust to collinear factors</td>
+</tr>
+<tr>
+<td><code>nnls</code></td>
+<td><strong>non-negative least squares</strong> — a constrained (long-only) optimization</td>
+</tr>
+<tr>
+<td><code>max_icir</code></td>
+<td>Grinold's <code>Σ⁻¹·IC̄</code> — the linear blend that <strong>maximizes the combination's IC information ratio</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>These produce an explicit per-factor <strong>weight</strong>; the composite is the linear blend
+<code>Σ wₖ·factorₖ</code>.</p>
+<h3 id="learned-models-qlib-style-optional-libraries">Learned models (qlib-style — optional libraries)</h3>
+<p>The composite is the model's <strong>prediction</strong> of the forward return from the oriented
+factors, so the per-factor numbers reported are <strong>feature importances</strong>, not linear
+weights.</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Method</th>
+<th>Library</th>
+<th>Kind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>linear</code>, <code>lasso</code>, <code>elastic_net</code></td>
+<td>scikit-learn</td>
+<td>linear</td>
+</tr>
+<tr>
+<td><code>random_forest</code>, <code>extra_trees</code></td>
+<td>scikit-learn</td>
+<td>tree ensemble</td>
+</tr>
+<tr>
+<td><code>gbrt</code>, <code>hist_gbrt</code></td>
+<td>scikit-learn</td>
+<td>gradient boosting</td>
+</tr>
+<tr>
+<td><code>mlp</code></td>
+<td>scikit-learn</td>
+<td>neural net</td>
+</tr>
+<tr>
+<td><code>lightgbm</code></td>
+<td>lightgbm</td>
+<td>gradient boosting</td>
+</tr>
+<tr>
+<td><code>xgboost</code></td>
+<td>xgboost</td>
+<td>gradient boosting</td>
+</tr>
+</tbody>
+</table></div>
+<p>A model appears in <code>GET /v1/combination/methods</code> (and the WebUI dropdown) only when
+its library is installed:</p>
+<pre><code class="language-bash">pip install scikit-learn lightgbm xgboost
+</code></pre>
+<p>Hyper-parameters can be overridden per call via <code>model_params</code> (e.g.
+<code>{&quot;n_estimators&quot;: 500, &quot;max_depth&quot;: 6, &quot;learning_rate&quot;: 0.03}</code>); sensible defaults
+are used otherwise, and every model is fit with a fixed seed so a run is a pure
+function of its inputs.</p>
+<hr />
+<h2 id="rest">REST</h2>
+<pre><code class="language-bash">curl -X POST localhost:8000/v1/combination \
+  -H 'content-type: application/json' \
+  -d '{
+    &quot;factors&quot;: [&quot;rank(close)&quot;, &quot;alpha101:1&quot;, &quot;lib:&lt;factor_id&gt;&quot;,
+                {&quot;name&quot;: &quot;mom&quot;, &quot;expr&quot;: &quot;delta(close, 10)&quot;}],
+    &quot;train&quot;: [&quot;2025-01-02&quot;, &quot;2025-10-31&quot;],
+    &quot;val&quot;:   [&quot;2025-11-01&quot;, &quot;2026-01-31&quot;],
+    &quot;test&quot;:  [&quot;2026-02-01&quot;, &quot;2026-06-09&quot;],
+    &quot;universe&quot;: &quot;NASDAQ100&quot;,
+    &quot;horizons&quot;: [1, 5, 10],
+    &quot;method&quot;: &quot;auto&quot;
+  }'
+
+# which methods are installed?
+curl localhost:8000/v1/combination/methods
+</code></pre>
+<h2 id="saving-reloading-runs">Saving &amp; reloading runs</h2>
+<p>Every run auto-saves as the rolling &quot;last run&quot;; save a named, reloadable record — with the
+fitted model (weights/importances, orientation, selection scores, scorecard) — and list or
+reload them later without recomputing.</p>
+<pre><code class="language-bash">curl -X POST   localhost:8000/v1/combination/saved -d '{&quot;name&quot;:&quot;my blend&quot;,&quot;result&quot;:&lt;result-json&gt;}'
+curl           localhost:8000/v1/combination/saved            # list summaries
+curl           localhost:8000/v1/combination/saved/&lt;id&gt;       # full record (the model)
+curl -X DELETE localhost:8000/v1/combination/saved -d '{&quot;ids&quot;:[&quot;&lt;id&gt;&quot;]}'
+</code></pre>
+<p>SDK equivalents on <code>AssayService</code>: <code>save_combination(result, name)</code>, <code>list_combinations()</code>,
+<code>get_combination(id)</code>, <code>delete_combinations(ids)</code> — backed by
+<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/library/combination_store.py" target="_blank" rel="noopener noreferrer"><code>CombinationStore</code></a> under <code>&lt;data_dir&gt;/combinations/</code>.</p>
+<p><strong>Factor specs</strong> accept: a bare expression (<code>&quot;rank(close)&quot;</code>), a library reference
+(<code>&quot;lib:&lt;factor_id&gt;&quot;</code>), an Alpha catalog number (<code>&quot;alpha101:&lt;n&gt;&quot;</code> / <code>&quot;alpha158:&lt;n&gt;&quot;</code>),
+or a dict <code>{&quot;name&quot;: ..., &quot;expr&quot;: ...}</code> / <code>{&quot;name&quot;: ..., &quot;id&quot;: ...}</code>.</p>
+<h3 id="response-shape">Response (shape)</h3>
+<pre><code class="language-jsonc">{
+  &quot;method&quot;: &quot;ridge&quot;,            // the chosen scheme (auto resolves it)
+  &quot;weight_kind&quot;: &quot;weight&quot;,      // &quot;weight&quot; (linear) | &quot;importance&quot; (learned model)
+  &quot;standardize&quot;: &quot;zscore&quot;,
+  &quot;horizon&quot;: 1,
+  &quot;factor_names&quot;: [&quot;rank(close)&quot;, &quot;alpha101_1&quot;, &quot;mom&quot;],
+  &quot;weights&quot;:      { &quot;rank(close)&quot;: 0.41, &quot;alpha101_1&quot;: 0.33, &quot;mom&quot;: 0.26 },
+  &quot;orientation&quot;:  { &quot;rank(close)&quot;: 1.0,  &quot;alpha101_1&quot;: -1.0, &quot;mom&quot;: 1.0 },
+  &quot;per_factor_train_ic&quot;: { &quot;...&quot;: 0.012 },
+  &quot;train&quot;: { &quot;n_dates&quot;: 170, &quot;ic&quot;: 0.018, &quot;icir&quot;: 0.21, &quot;rank_ic&quot;: 0.020, &quot;rank_icir&quot;: 0.24 },
+  &quot;val&quot;:   { &quot;...&quot;: &quot;...&quot; },
+  &quot;test&quot;:  { &quot;...&quot;: &quot;...&quot; },     // the headline, out-of-sample numbers
+  &quot;selection&quot;: { &quot;equal&quot;: 0.18, &quot;ridge&quot;: 0.21, &quot;...&quot;: &quot;...&quot; },  // present when method=&quot;auto&quot;
+  &quot;splits&quot;: { &quot;train&quot;: [&quot;...&quot;], &quot;val&quot;: [&quot;...&quot;], &quot;test&quot;: [&quot;...&quot;], &quot;embargo&quot;: 10 },
+  &quot;resolved_factors&quot;: [{ &quot;name&quot;: &quot;...&quot;, &quot;expr&quot;: &quot;...&quot; }],
+  &quot;dropped&quot;: [{ &quot;name&quot;: &quot;alpha101_25&quot;, &quot;failure_mode&quot;: &quot;...&quot; }],  // didn't evaluate
+  &quot;diagnostics&quot;: { &quot;composite_turnover_1d&quot;: 0.08, &quot;...&quot;: &quot;...&quot; }
+}
+</code></pre>
+<p>Non-finite floats are <code>null</code> (JSON-safe). If no data / no factor evaluates, the
+payload is <code>{&quot;failure&quot;: &quot;NO_DATA&quot; | &quot;NO_FACTORS&quot;, &quot;detail&quot;: &quot;...&quot;}</code> (HTTP 200);
+an invalid knob (bad <code>method</code> / <code>standardize</code> / out-of-range field) is HTTP 422.</p>
+<hr />
+<h2 id="sdk">SDK</h2>
+<pre><code class="language-python">from assay.service import AssayService
+from assay.config import AssayConfig
+
+svc = AssayService(AssayConfig())
+out = svc.combine_factors(
+    [&quot;rank(close)&quot;, &quot;alpha101:1&quot;, &quot;lib:&lt;id&gt;&quot;],
+    train=(&quot;2025-01-02&quot;, &quot;2025-10-31&quot;),
+    val=(&quot;2025-11-01&quot;, &quot;2026-01-31&quot;),
+    test=(&quot;2026-02-01&quot;, &quot;2026-06-09&quot;),
+    universe=&quot;NASDAQ100&quot;, horizons=[1, 5, 10],
+    method=&quot;auto&quot;,                       # or any name from combination_methods()
+    # method=&quot;lightgbm&quot;, model_params={&quot;n_estimators&quot;: 500},
+)
+print(out[&quot;method&quot;], out[&quot;test&quot;][&quot;ic&quot;], out[&quot;test&quot;][&quot;icir&quot;])
+
+print(svc.combination_methods())          # [{name, kind, available}, ...]
+</code></pre>
+<p>The pure-numpy kernel (engine-free, reusable in isolation) is
+<code>assay.evaluator.combine_factors(...)</code>, which returns a <code>CombinationResult</code> whose
+<code>.combined</code> is the <code>(T, N)</code> composite signal.</p>
+<hr />
+<h2 id="notes-caveats">Notes &amp; caveats</h2>
+<ul>
+<li><strong>Data window.</strong> The bundled US data covers a specific range — pass split windows
+inside it (the WebUI auto-fills them from the ingested range; CLI/SDK do not).</li>
+<li><strong><code>auto</code> candidate set</strong> defaults to the cheap analytic schemes. To let <code>auto</code>
+also try models, pass <code>candidate_methods=[...]</code> including model names.</li>
+<li><strong>Threading.</strong> Tree/boosting models are fit with a bounded worker count — the
+pooled design is small, and unbounded <code>n_jobs=-1</code> oversubscribes OpenMP on
+many-core hosts.</li>
+<li><strong>Backtesting the composite.</strong> The composite is a <em>learned signal</em>, not an
+expression, so it does not yet feed directly into the portfolio backtester (which
+takes an expression). The <code>(T, N)</code> composite is available on the kernel result for
+custom downstream use.</li>
+</ul>

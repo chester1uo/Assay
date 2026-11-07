@@ -1,0 +1,63 @@
+<h1 class="doc-title">Research workbench</h1>
+<p>Open <code>/#/research</code> on an Assay Web API server. The page reads the same durable
+research workspace as MCP and the SDK. It shows the research objective, stored
+experiment activity, parent/replay relationships, full evidence and handoff notes.
+It does not invent an agent trace or send the browser's objective to an LLM.</p>
+<h2 id="local-synthetic-walkthrough">Local synthetic walkthrough</h2>
+<p>From the repository root, in an environment with Assay's API and MCP extras:</p>
+<pre><code class="language-bash">pip install '.[api,mcp]'
+python -m assay.demo --prepare-only --output ./workbench-data
+export ASSAY_DATA_DIR=&quot;$PWD/workbench-data&quot;
+python -m uvicorn assay.api.app:app --host 127.0.0.1 --port 8014
+</code></pre>
+<p>Visit <code>http://127.0.0.1:8014/#/research</code>. The output directory must be new.
+The dataset is generated synthetic OHLCV, not historical market evidence.</p>
+<ol>
+<li>Open <strong>Start a new session</strong>, choose the synthetic dataset, enter a research
+goal and an attempt budget, and create the session.</li>
+<li>Open <strong>Evaluate a candidate</strong>. Enter a hypothesis and the intentionally invalid
+expression <code>unknown_operator(close)</code>. Its failure is saved and consumes one
+attempt, matching the MCP experiment contract.</li>
+<li>Select that failed attempt as the revision parent. Submit
+<code>-cs_rank(ts_returns(close,5))</code> with a revised hypothesis. Inspect its actual
+scores and the parent relationship.</li>
+<li>Save a handoff note and download the manifest. Reload the page to verify that
+the persisted research remains available.</li>
+</ol>
+<p>All browser-created sessions, experiments and notes are attributed to
+<code>human:webui</code>. This walkthrough is a real evaluator demonstration driven by
+human actions; it is not autonomous model evidence. A completed evaluation does
+not establish profitability or validate the accompanying hypothesis.</p>
+<h2 id="observe-an-agent-session">Observe an agent session</h2>
+<p>Run an MCP agent against the same <code>ASSAY_DATA_DIR</code>, following the reference-agent
+guide. Select its research session in the workbench. Auto-refresh polls saved
+state every three seconds; <strong>Refresh sessions</strong> also discovers newly created
+sessions. Disabling auto-refresh stops polling after any in-flight read.
+The page does not start, pause, or resume the agent's conversation. Experiment
+records are distinct from a complete model/tool execution trace.</p>
+<p>Click an experiment to inspect the stored payload. Parent relationships are
+clickable; external replay references remain labeled as references. The dataset
+configuration belongs to the research session. The top bar's legacy factor-page
+universe/period selectors are hidden on this page.</p>
+<h2 id="request-and-access-behavior">Request and access behavior</h2>
+<p>Research REST routes live under <code>/v1/research</code> and use the existing API-key
+configuration. When <code>ASSAY_API_KEYS</code> is set, the Web UI uses its existing
+<code>assay_api_key</code> local-storage header mechanism. There is no new authorization
+bypass for reading research data or downloading a manifest.</p>
+<p>Evaluation runs in the API's thread pool; concurrent reads can display a running
+attempt. Retrying unchanged inputs after a transport failure retains the same
+request ID while the page is open. A returned <code>running</code> record retains that ID
+until a later refresh observes a terminal state. Reloading discards client retry
+state: inspect persisted attempts before submitting again. There is no automatic
+worker takeover or durable background-job scheduler in this UI.</p>
+<h2 id="browser-regression">Browser regression</h2>
+<p>With a server using synthetic data, install Playwright and a compatible Chromium
+in a separate test environment, then run:</p>
+<pre><code class="language-bash">python scripts/check_research_workbench_browser.py \
+  --base-url http://127.0.0.1:8014 --output artifacts/workbench-browser
+</code></pre>
+<p>The test saves a real workflow screenshot and manifest, verifies its integrity,
+and imports the downloaded file into a fresh workspace. Downloads preserve the
+server JSON text so numeric representations covered by the hash remain intact. Separate mock-transport
+fixtures test pending-request idempotency and slow-list selection races; those
+fixtures are never presented as real model or market experiments.</p>

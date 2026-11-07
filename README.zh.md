@@ -15,12 +15,16 @@ Agent 自行选择模型和搜索策略；工作区跨重启保存数据集设�
 **数据管理器（Data Manager，WebUI）** 下载并保持同步，也可以从本地镜像导入——详见
 [数据流水线](docs/cn/guide/data-pipeline.md) 指南。
 
+
+整合版本保留上游 FactorDB、ADES 分布式计算、账户认证、QFinVerse 面板读取及可选原生内核。
+各模块的记录与预算边界见[整合架构](docs/cn/design/integration.md)。
+
 ### Agent-Native 研究工作区
 
 - **Dataset：** 固定股票池、读取/评分区间、交易日、执行设置和表达式约束。
 - **持久 Session：** 使用 SQLite 保存目标、笔记、尝试历史和评估次数预算。
 - **Experiment：** 成功和失败均独立保存，支持父子修订关系和配置一致性比较。
-- **MCP：** 共 26 个工具，包含 15 个 backend/dataset/session/experiment 工具，与 SDK 共用研究状态。
+- **MCP：** 共 34 个工具，包含 8 个 FactorDB 工具及 15 个 backend/dataset/session/experiment 工具，与 SDK 共用研究状态。
 - **后端接口：** 通过 Python 协议接入其他评估器，研究状态不绑定特定 LLM。
 
 详见 [Agent 研究指南](docs/cn/guide/agent-research.md)。规划循环由外部 Agent 驱动，Assay 执行并记录
@@ -31,9 +35,10 @@ Agent 自行选择模型和搜索策略；工作区跨重启保存数据集设�
 
 ## 📚 文档
 
-完整的设计规范与使用指南在 **[docs/](docs/cn/README.md)**：
+完整的设计规范与使用指南在 **[docs/](docs/cn/README.md)**，线上 Doc Hub 在 **https://assay.qfinverse.com/doc/**（任何部署的 `/doc/`；改完文档后运行 `python scripts/build_doc_hub.py` 重新生成）：
 
 - **从这里开始：** [快速上手](docs/cn/guide/getting-started.md)
+- **美股数据：** [QFinVerse 日频面板](docs/cn/guide/qfv-data.md)
 - **数据与正确性：** [数据与复权](docs/cn/guide/data-and-adjustment.md)
   （[English](docs/en/guide/data-and-adjustment.md)）—— 数据层、点对点读取，以及因子在
   **拆股与分红** 下看到的价格。

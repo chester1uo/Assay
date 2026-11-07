@@ -31,29 +31,15 @@ structured `PortfolioReport`.
 
 ### 1.1 Pipeline
 
-```
-factor expression
-    │  evaluate -> (T, N) factor matrix + close/open prices
-    ▼
-UniverseFilter        eligible = finite factor & finite price (& tradable mask)   ✅
-    ▼
-SignalProcessor       winsorize · neutralize · normalize (rank/zscore/raw)         ✅
-    ▼
-RebalanceScheduler    calendar · threshold · signal-autocorr                       ✅
-    ▼
-WeightConstructor     equal · signal_prop · quantile · mean-variance · risk-parity ✅
-    ▼
-ConstraintApplicator  position/count caps · turnover cap · gross/net · sector-neut ✅ / 🔶
-    ▼
-ExecutionSimulator    slippage · ADV cap · price limits · T+1 settlement           ✅ / 🔶
-    ▼
-PortfolioAccountant   weight drift · daily MTM NAV · costs · trade/position log    ✅
-    ▼
-PortfolioReport       Sharpe · drawdown · turnover · cost drag · benchmark · A-share ✅
-```
+![Portfolio backtest pipeline](../../assets/figures/en/portfolio-pipeline.svg "Dots: green implemented, amber partial")
 
-The optimization rebalancer uses **scipy** (`scipy.optimize.minimize`, SLSQP) and a numpy
-Ledoit-Wolf shrinkage — `cvxpy`/`scikit-learn` are intentionally *not* dependencies.
+
+The optimization rebalancer solves its QP with **OSQP** when it is installed (the `perf`
+extra), writing the Ledoit-Wolf covariance as identity plus rank-`W` so each rebalance
+takes ~0.3 s. When the turnover cap binds, that program is solved with **Clarabel**
+(interior point, ~1 s; OSQP alone takes ~2 s there). Without OSQP it falls back to **scipy**
+(`scipy.optimize.minimize`, SLSQP; ~3 s per rebalance at ~490 names). The Ledoit-Wolf
+shrinkage is numpy — `cvxpy`/`scikit-learn` are intentionally *not* dependencies.
 
 ---
 

@@ -17,10 +17,17 @@ dependencies = [
     "exchange-calendars>=4",
 ]
 
+[project.urls]
+Homepage = "https://assay.qfinverse.com"
+Documentation = "https://assay.qfinverse.com/doc/"
+Repository = "https://github.com/QFinVerse/Assay"
+
 [project.optional-dependencies]
 perf = [
     "numba>=0.60",
     "scipy>=1.13",
+    "osqp>=1.0",
+    "clarabel>=0.9",
 ]
 api = [
     "scipy>=1.13",
@@ -31,7 +38,7 @@ api = [
     "httpx>=0.27",
 ]
 mcp = [
-    "mcp>=1.0",
+    "mcp>=1.10,<2",
 ]
 data = [
     "boto3>=1.34",

@@ -1,0 +1,133 @@
+<h1 class="doc-title">CLI Reference</h1>
+<p>All commands run as <code>python -m assay.cli &lt;subcommand&gt;</code> (or <code>assay &lt;subcommand&gt;</code> once
+<code>pip install -e .</code>'d — the console scripts are <code>assay</code> and <code>assay-data</code>). Commands resolve
+config from the environment / <code>.env</code>; only data-touching commands need MASSIVE credentials.</p>
+<h2 id="data-pipeline">Data pipeline</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>discover</code></td>
+<td>List MASSIVE flat-file prefixes (connectivity sanity check)</td>
+</tr>
+<tr>
+<td><code>prepare-nasdaq100 --start S --end E</code></td>
+<td>Full prepare: universe → corp-actions → prices. Flags: <code>--skip-universe/-corp-actions/-prices</code></td>
+</tr>
+<tr>
+<td><code>universe --index NASDAQ100 --start S --end E</code></td>
+<td>Build <code>universe_snapshots</code></td>
+</tr>
+<tr>
+<td><code>corp-actions --start S --end E [--symbols A,B]</code></td>
+<td>Fetch splits &amp; dividends</td>
+</tr>
+<tr>
+<td><code>prices --start S --end E [--symbols A,B]</code></td>
+<td>Download &amp; normalize day aggregates</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>Show ingested rows, date range, partitions</td>
+</tr>
+<tr>
+<td><code>verify --start S --end E [--adj split]</code></td>
+<td>Read a PIT panel and print a summary</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="factor-engine">Factor engine</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>parse '&lt;expr&gt;'</code></td>
+<td>Parse a factor expression → dialect, AST, fields, operators (no data needed)</td>
+</tr>
+<tr>
+<td><code>eval '&lt;expr&gt;' --start S --end E [--as-of D] [--adj split] [--index NASDAQ100]</code></td>
+<td>Evaluate the factor matrix over the PIT panel; print coverage + top/bottom names</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="backtest-library-sdk-backed">Backtest &amp; library (SDK-backed)</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run '&lt;expr&gt;' --start S --end E [...]</code></td>
+<td>Full scored <code>FactorReport</code> summary (rank_ic, rank_icir, decay, failure_mode, suggestion)</td>
+</tr>
+<tr>
+<td>`batch &lt;file</td>
+<td>exprs...&gt; --start S --end E [--output results.parquet]`</td>
+</tr>
+<tr>
+<td><code>report &lt;factor_id&gt;</code></td>
+<td>Pretty-print a saved factor from the library</td>
+</tr>
+<tr>
+<td><code>library list/get/delete/prune [...]</code></td>
+<td>Manage the factor library (e.g. <code>library list --sort rank_icir --limit 20</code>)</td>
+</tr>
+<tr>
+<td><code>portfolio '&lt;expr&gt;' --start S --end E [--rebalance monthly] [--weight-method signal_prop] [--market US] [--long-short] [--output pf.json]</code></td>
+<td>Run a portfolio backtest; print total/annual return, Sharpe, max drawdown, turnover, cost drag</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="servers">Servers</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>serve-api [--host 0.0.0.0] [--port 8000]</code></td>
+<td>Run the FastAPI REST API + WebUI (uvicorn)</td>
+</tr>
+<tr>
+<td>`serve-mcp [--transport stdio</td>
+<td>sse] [--port 8001]`</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="examples">Examples</h2>
+<pre><code class="language-bash"># prepare + inspect
+python -m assay.cli prepare-nasdaq100 --start 2025-01-01 --end 2026-06-09
+python -m assay.cli status
+
+# evaluate
+python -m assay.cli parse 'cs_rank(ts_corr(close, volume, 20))'
+python -m assay.cli run   'cs_rank(ts_corr(close, volume, 20))' --start 2025-01-02 --end 2026-06-09
+
+# batch from a file
+printf 'ts_returns(close, 20)\nts_corr(close, volume, 20)\n' &gt; factors.txt
+python -m assay.cli batch factors.txt --start 2025-01-02 --end 2026-06-09 --output out.parquet
+
+# portfolio
+python -m assay.cli portfolio 'cs_rank(ts_returns(close, 20))' \
+    --start 2025-01-02 --end 2026-06-09 --rebalance monthly --weight-method signal_prop
+
+# serve
+python -m assay.cli serve-api --port 8000        # http://localhost:8000
+</code></pre>
+<p>Add <code>-v</code> before any subcommand for debug logging.</p>

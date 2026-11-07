@@ -1,0 +1,59 @@
+<h1 class="doc-title">Reference agent and offline demo</h1>
+<p>Assay's server exposes tools and persists research records. The optional reference
+client in <code>assay.agent</code> lets a Chat Completions-compatible model choose tools through
+real stdio MCP. It is replaceable: other MCP clients can use the same research state.</p>
+<h2 id="run-the-offline-demo">Run the offline demo</h2>
+<pre><code class="language-bash">pip install '.[mcp]'
+python -m assay.demo --output ./demo-workspace
+</code></pre>
+<p>The output directory must not already exist. This generates synthetic OHLCV,
+executes two factors and a diagnostic failure, restores the session after restart,
+and writes <code>manifest.json</code> and a portable <code>report.html</code>. No model call or vendor
+credential is needed. Synthetic prices do not establish investment performance.</p>
+<h2 id="let-a-model-operate-the-tools">Let a model operate the tools</h2>
+<p>Prepare a new workspace, then write a text task describing the research goal:</p>
+<pre><code class="language-bash">python -m assay.demo --prepare-only --output ./agent-workspace
+export ASSAY_DATA_DIR=&quot;$PWD/agent-workspace&quot;
+# Set DEEPSEEK_API_KEY through your normal secret manager or shell environment.
+python -m assay.agent \
+  --base-url https://api.deepseek.com --model deepseek-flash \
+  --api-key-env DEEPSEEK_API_KEY --extra-body '{&quot;thinking&quot;:{&quot;type&quot;:&quot;disabled&quot;}}' \
+  --task-file task.txt --output ./agent-run \
+  --max-turns 8 --max-tool-calls 16 --max-tokens 4096 \
+  --server-command python -m assay.mcp.server
+</code></pre>
+<p>For example, <code>task.txt</code> can ask the agent to discover the synthetic dataset, create a
+session with a three-attempt budget, test reversal hypotheses, inspect failures and
+save a handoff note. The client sends only the selected MCP tool schemas and tool
+results to the configured provider. Research text and reports may therefore leave
+your machine. API keys remain in environment variables and request headers.</p>
+<p><code>--server-command</code> must be the last option. Install the MCP extra in the interpreter
+used for both the client and server. <code>--extra-body</code> supplies provider-specific
+settings; it cannot override the model, conversation, tool schema or execution caps.
+Returned model identity must match the requested name unless explicit
+<code>--allow-returned-model</code> values are provided. Changing an alias is not evidence of
+model equivalence. Provider availability and protocol support must be verified for
+the selected deployment; this client does not make all models interchangeable.</p>
+<h2 id="inspect-the-run">Inspect the run</h2>
+<ul>
+<li><code>tools.json</code>: tool schemas discovered from the server.</li>
+<li><code>conversation.json</code>: the messages and tool outputs sent through the loop.</li>
+<li><code>run.json</code>: requested configuration, actual response identities, raw received
+responses, tool results, timing, reported usage and terminal status.</li>
+</ul>
+<p>The client does not retry HTTP failures or follow redirects. Invalid/truncated
+responses are retained; they do not execute tool calls. Unknown usage is marked
+incomplete. A model response without tool calls ends with <code>model_finished</code>, which
+means the model stopped, not that it achieved the user's objective. Check persisted
+experiments, notes and reports to evaluate completion. The reference client does
+not resume a partially recorded conversation; use a new client run and an existing
+research session for a deliberate handoff. Session budgets remain server-enforced.</p>
+<p>Routine experiment execution returns compact feedback to the model, while receipts
+retain the full report. The agent can explicitly request <code>assay_experiment_get</code> for
+metric series. Session discovery uses compact research context rather than full
+session exports. This reduces repeated report payloads without changing scores.</p>
+<p>The reference client normalizes structured JSON and a single JSON text block from
+MCP before constructing model feedback. Mixed content stays intact. The receipt
+keeps the original transport payload separately from <code>model_result</code>; MCP failures
+reach the model with an explicit <code>isError</code> flag. Compaction happens in this optional
+client, not in the server: other clients can inspect the full tool response.</p>

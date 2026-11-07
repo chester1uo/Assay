@@ -87,6 +87,7 @@ class PortfolioAccountant:
         tradable_masks: np.ndarray | None = None,
         dates: list[str] | None = None,
         symbols: list[str] | None = None,
+        record_trades: bool = True,
     ) -> AccountingResult:
         """Simulate the book over the ``(T,)`` date axis.
 
@@ -113,6 +114,9 @@ class PortfolioAccountant:
             price (trades always tradable, no NaN-price blocks).
         dates, symbols:
             optional labels for emitted :class:`Trade` records.
+        record_trades:
+            ``False`` => no :class:`Trade` records (an empty ``trades``), for runs
+            without a trade log; everything else is unchanged.
 
         Returns
         -------
@@ -194,6 +198,7 @@ class PortfolioAccountant:
                         step=step,
                         symbols=symbols,
                         date=d_lbl,
+                        record_trades=record_trades,
                     )
                     # One-way turnover realised by this rebalance.
                     turnover = 0.5 * float(np.nansum(np.abs(res.executed_weights - cur_w)))

@@ -21,7 +21,7 @@ function injectStyle() {
 .dm-tab { text-align: left; padding: 9px 12px; border-radius: 9px; border: 1px solid transparent;
   background: none; cursor: pointer; font-size: 13px; color: var(--text-muted); display: flex; align-items: center; gap: 8px; }
 .dm-tab:hover { background: var(--gray-1); color: var(--text); }
-.dm-tab.is-active { background: var(--blue, #2D5BE3); color: #fff; font-weight: 600; }
+.dm-tab.is-active { background: var(--blue, #2D5BE3); color: var(--on-accent); font-weight: 600; }
 .dm-tab .dm-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--gray-3, #cbd2dd); }
 .dm-content { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
 .dm-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px,1fr)); gap: var(--sp-3); }

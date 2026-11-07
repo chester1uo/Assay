@@ -1,0 +1,94 @@
+<h1 class="doc-title">Portfolio Backtest</h1>
+<p>Turn a factor signal into a simulated portfolio with real trading constraints and costs, and
+get a <code>PortfolioReport</code> (Sharpe, drawdown, turnover, cost drag, NAV series). Design spec:
+<a href="/doc/design/portfolio-backtest">portfolio-backtest.md</a>.</p>
+<h2 id="quick-start">Quick start</h2>
+<pre><code class="language-python">import assay
+from assay.portfolio import PortfolioBacktestConfig
+
+cfg = PortfolioBacktestConfig(
+    universe=&quot;NASDAQ100&quot;, period_start=&quot;2025-01-02&quot;, period_end=&quot;2026-06-09&quot;,
+    market=&quot;US&quot;,
+    rebalance_type=&quot;monthly&quot;,        # daily|weekly|monthly|quarterly|threshold|signal
+    weight_method=&quot;signal_prop&quot;,     # equal|signal_prop|quintile|decile|mv|bl|risk_parity
+    long_short=False,
+    max_single_weight=0.05,
+    execution_price=&quot;next_open&quot;,     # next_open|next_close
+)
+pf = assay.backtest_portfolio(&quot;cs_rank(ts_returns(close, 20))&quot;, cfg)
+
+print(pf.total_return, pf.annual_return, pf.sharpe, pf.max_drawdown,
+      pf.annual_turnover, pf.cost_drag, pf.n_rebalances)
+pf.to_dict()   # JSON-safe, agent-ready
+</code></pre>
+<p>CLI:</p>
+<pre><code class="language-bash">python -m assay.cli portfolio 'cs_rank(ts_returns(close, 20))' \
+    --start 2025-01-02 --end 2026-06-09 --rebalance monthly --weight-method signal_prop
+</code></pre>
+<p>REST: <code>POST /v1/portfolio/backtest</code> (see the <a href="/doc/guide/rest-api">REST guide</a>).</p>
+<h2 id="long-short-dollar-neutral">Long/short, dollar-neutral</h2>
+<pre><code class="language-python">cfg = PortfolioBacktestConfig(
+    universe=&quot;NASDAQ100&quot;, period_start=&quot;2025-01-02&quot;, period_end=&quot;2026-06-09&quot;,
+    weight_method=&quot;quintile&quot;, long_short=True, net_exposure=0.0,   # dollar-neutral
+    quintile_long_n=1, quintile_short_n=1,
+)
+pf = assay.backtest_portfolio(&quot;cs_rank(ts_corr(close, volume, 20))&quot;, cfg)
+</code></pre>
+<h2 id="weight-methods">Weight methods</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Method</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>equal</code></td>
+<td>equal weight across the eligible set</td>
+</tr>
+<tr>
+<td><code>signal_prop</code></td>
+<td>proportional to the (normalized) signal</td>
+</tr>
+<tr>
+<td><code>quintile</code> / <code>decile</code></td>
+<td>top/bottom buckets long/short</td>
+</tr>
+<tr>
+<td><code>mv</code></td>
+<td>mean-variance via OSQP and Clarabel (scipy SLSQP if OSQP is not installed) + numpy Ledoit-Wolf shrinkage (no cvxpy/sklearn)</td>
+</tr>
+<tr>
+<td><code>risk_parity</code></td>
+<td>inverse-vol / equal-risk-contribution (long-only)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="key-config-groups">Key config groups</h2>
+<p><code>rebalance_*</code> (schedule + <code>min_rebalance_interval</code>, <code>execution_offset_days</code>), weights
+(<code>gross_exposure</code>, <code>net_exposure</code>, <code>signal_transform</code>), constraints (<code>max_single_weight</code>,
+<code>max/min_stock_count</code>, <code>max_turnover_per_period</code>), execution (<code>slippage_model</code>, <code>slippage_k</code>,
+<code>max_adv_fraction</code>, <code>partial_fill_handling</code>), benchmark (<code>benchmark</code>, <code>risk_free_rate</code>), output
+(<code>save_trade_log</code>, <code>save_position_log</code>). <code>PortfolioBacktestConfig.preset('US'|'A'|'HK')</code> applies
+market cost/limit defaults. Full field list: the <a href="/doc/design/portfolio-backtest">design doc</a> §2.</p>
+<h2 id="metrics-in-the-report">Metrics in the report</h2>
+<p>Returns (total/annual/gross/excess), risk-adjusted (Sharpe, Sortino, Calmar, information ratio,
+max drawdown + recovery, beta, CAPM alpha, tracking error), turnover &amp; cost (annual turnover,
+cost drag, avg holding days), plus <code>nav_series</code>/<code>nav_dates</code>, <code>monthly_returns</code>, <code>trade_log</code>,
+<code>position_log</code>, and <code>a_share_metrics</code> (only when <code>market='A'</code>).</p>
+<h2 id="a-share">A-share</h2>
+<p>Set <code>market=&quot;A&quot;</code> (or <code>PortfolioBacktestConfig.preset(&quot;A&quot;)</code>) to activate T+1 settlement, price-limit
+blocking, and the stamp-duty/commission/transfer-fee cost model. These run on any market's data
+<strong>when their inputs are supplied</strong> (<code>prev_close</code> for price limits, a <code>tradable_mask</code> for
+ST/suspension, etc.). On US data the data-dependent filters are inert (no crash). A true index
+benchmark needs an index price series Assay doesn't have — the benchmark is an equal-weight-universe
+proxy.</p>
+<h2 id="caveats-on-the-current-dataset">Caveats on the current dataset</h2>
+<ul>
+<li><strong>Unadjusted splits.</strong> If the data folder has no <code>adj_events</code>, a few real splits show up as
+~−90% single-day returns that inflate results. Backfill corporate actions
+(<code>assay.cli corp-actions</code>) to get clean numbers — see the <a href="/doc/guide/data-pipeline">data pipeline guide</a>.</li>
+<li><strong><code>rebalance_type='signal'</code></strong> with a high-autocorrelation factor may never fire (spec-compliant),
+leaving a flat all-cash NAV — choose a calendar schedule for a non-degenerate run.</li>
+</ul>

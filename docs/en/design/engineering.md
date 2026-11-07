@@ -85,30 +85,8 @@ Assay is decomposed into five fully decoupled layers. Each layer exposes a well-
 
 A single factor evaluation request traverses the following path:
 
-```
-User / Agent
-    │  factor_expr: str
-    ▼
-ExprParser          ← parses qlib or Python syntax into unified AST
-    │  AST: OpNode tree
-    ▼
-FactorEngine         ← checks L2 factor string cache
-    │  cache miss → walk AST, check L1 per-operator cache
-    ▼
-OperatorRegistry     ← executes uncached nodes via Polars / Numba
-    │  raw factor DataFrame (T × N)
-    ▼
-BatchFactorBT        ← aligns factor with ForwardReturns
-    │  aligned (factor, returns) pair
-    ▼
-ICAnalyzer           ← computes IC, RankIC, ICIR, decay (Numba parallel)
-    │
-    ▼
-FactorReport         ← assembles structured JSON result
-    │  FactorReport JSON
-    ▼
-User / Agent
-```
+![Path of one factor evaluation](../../assets/figures/en/eval-flow.svg)
+
 
 ### 2.3  Key Design Decisions
 
@@ -136,19 +114,8 @@ Phase 1 uses Massive as the primary data provider for US equities. Massive provi
 
 #### Ingestion pipeline
 
-```
-MassiveConnector
-    ├── fetch_ohlcv(symbols, start, end)      → raw price DataFrame
-    ├── fetch_adj_events(symbols, start, end) → corporate action log
-    ├── fetch_universe(index, date)            → constituent snapshot
-    └── fetch_financials(symbols, as_of)      → PIT financial data
+![Ingestion](../../assets/figures/en/ingestion.svg)
 
-DataIngester
-    ├── validate_schema()    ← reject malformed rows, log to quarantine
-    ├── deduplicate()        ← exact duplicate rows
-    ├── normalize_timezone() ← all timestamps to NYSE calendar
-    └── write_parquet()      ← append to DataStore partition
-```
 
 #### Field mapping
 
@@ -499,23 +466,8 @@ The cache system is Assay's primary performance mechanism. It operates at two le
 
 ### 5.1  Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  L2 Factor String Cache (disk — Parquet, ~1MB/factor)       │
-│  key: hash(expr + universe + date_range + adj_version)      │
-│  stores: complete (T × N) factor result matrix              │
-│  invalidation: on adj_factor version bump                   │
-├─────────────────────────────────────────────────────────────┤
-│  L1 Operator Cache (RAM — Arena blocks, float32)            │
-│  key: (op, field, window, market, universe, date_range)     │
-│  stores: intermediate operator results, e.g. ts_mean(c,20)  │
-│  eviction: LFU with EMA heat scoring                        │
-├─────────────────────────────────────────────────────────────┤
-│  Incremental Maintenance Layer                              │
-│  daily append: O(1) update for linear sliding window ops    │
-│  topo scheduler: update dependents in correct order         │
-└─────────────────────────────────────────────────────────────┘
-```
+![Cache layers](../../assets/figures/en/cache-layers.svg)
+
 
 ### 5.2  L1 Operator Cache
 

@@ -1,0 +1,287 @@
+<h1 class="doc-title">REST API</h1>
+<p>一个 FastAPI 应用，通过 HTTP 暴露 <code>AssayService</code>，并为评估提供 SSE 流式。运行它：</p>
+<pre><code class="language-bash">python -m assay.cli serve-api --port 8000      # or: uvicorn assay.api.app:app --port 8000
+</code></pre>
+<ul>
+<li>基址：<code>http://localhost:8000</code> · 所有数据路由位于 <code>/v1</code> 之下</li>
+<li>交互式文档（Swagger）：<code>http://localhost:8000/docs</code></li>
+<li>WebUI 服务于 <code>/</code>（参见 <a href="/doc/guide/webui">WebUI 指南</a>）。</li>
+</ul>
+<h2 id="鉴权">鉴权</h2>
+<p>服务器有三种模式：</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>模式</th>
+<th>配置</th>
+<th>调用方如何表明身份</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>开放</td>
+<td>不设置</td>
+<td>不需要，所有请求都放行（本机使用）</td>
+</tr>
+<tr>
+<td>服务密钥</td>
+<td><code>ASSAY_API_KEYS</code>（逗号分隔），可选 <code>ASSAY_ADMIN_KEYS</code></td>
+<td><code>X-API-Key</code> 请求头</td>
+</tr>
+<tr>
+<td>账户</td>
+<td><code>ASSAY_ACCOUNTS=1</code></td>
+<td>浏览器登录状态，或放在 <code>X-API-Key</code> 里的个人密钥</td>
+</tr>
+</tbody>
+</table></div>
+<p>开启账户后（assay.qfinverse.com 就是这样），用户凭邀请注册，在 <code>/login</code> 登录，在「账户」页创建个人密钥（<code>asy_...</code>）。密钥代表本人，只显示一次，放在 <code>X-API-Key</code>（或 <code>Authorization: Bearer</code>）里发送。服务密钥在账户模式下照常可用。管理接口（<code>/v1/admin/*</code>、<code>/auth/users</code>、<code>/auth/invites</code>）需要管理员账户或管理员服务密钥。</p>
+<pre><code class="language-bash">export ASSAY_KEY=asy_...        # 在「账户」页创建
+curl -s -H &quot;X-API-Key: $ASSAY_KEY&quot; https://assay.qfinverse.com/v1/system/universes
+</code></pre>
+<h3 id="账户接口">账户接口</h3>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>方法</th>
+<th>路径</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/auth/status</code> · <code>/auth/me</code></td>
+<td>服务器模式；当前登录的用户</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/auth/login</code> · <code>/auth/logout</code></td>
+<td>登录 / 退出浏览器会话</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/auth/register</code> · <code>/auth/reset-password</code></td>
+<td>凭邀请注册；用重置链接设置密码</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/auth/password</code> · <code>PATCH /auth/profile</code></td>
+<td>修改自己的密码 / 显示名</td>
+</tr>
+<tr>
+<td><code>GET/POST/DELETE</code></td>
+<td><code>/auth/keys</code></td>
+<td>自己的 API 密钥（只能在已登录的浏览器里创建）</td>
+</tr>
+<tr>
+<td><code>GET/PATCH/DELETE</code></td>
+<td><code>/auth/users</code></td>
+<td>管理员：用户、角色、停用</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/auth/users/{id}/reset</code></td>
+<td>管理员：一次性密码重置链接</td>
+</tr>
+<tr>
+<td><code>GET/POST/DELETE</code></td>
+<td><code>/auth/invites</code></td>
+<td>管理员：邀请（角色、次数、有效期）</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="端点">端点</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>方法</th>
+<th>路径</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/health</code></td>
+<td>存活检查</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/factor/evaluate</code></td>
+<td>评估一个因子 —— 返回 JSON 报告，或在 <code>stream:true</code> 时返回 SSE 流</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/factor/batch</code></td>
+<td>批量评估 → <code>{total, elapsed_ms, reports}</code></td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/factor/lint</code></td>
+<td>仅解析：<code>{dialect, canonical, fields, operators, ast, diagnostics}</code>（无需数据）</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/library/factors</code></td>
+<td>带过滤条件的列表（<code>min_rank_icir</code>、<code>source</code>、<code>sort_by</code>、<code>limit</code>、...）</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/library/factors/{id}</code></td>
+<td>完整的 <code>FactorReport</code></td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/library/factors</code></td>
+<td>保存一份报告</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/v1/library/factors</code></td>
+<td>按 <code>{factor_ids: [...]}</code> 删除</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/library/correlation-matrix</code></td>
+<td>对 <code>factor_ids</code> 的两两相关性</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/library/ic-heatmap</code> · <code>/embedding</code> · <code>/lineage</code></td>
+<td>RankIC 随时间、二维相似度图、派生 DAG</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/library/factors/bulk</code></td>
+<td>批量评估 + 保存表达式</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/library/prune</code></td>
+<td>识别/移除冗余因子</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/combination/methods</code></td>
+<td>列出合成方案（可用的已学习模型会被标记）</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/combination</code></td>
+<td>合成因子，对训练/验证/测试打分 → 复合因子 + 模型</td>
+</tr>
+<tr>
+<td><code>POST/GET/DELETE</code></td>
+<td><code>/v1/combination/saved</code></td>
+<td>保存 / 列出 / 删除已保存的合成运行</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/combination/saved/{id}</code></td>
+<td>重新加载一个已保存的运行（拟合好的模型）</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/market/bars</code></td>
+<td>单个标的的 OHLCV K 线（<code>freq</code>、<code>adj</code>）</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/market/factor-series</code></td>
+<td>单个标的上某一因子的取值随时间序列</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/session/create</code> · <code>DELETE /v1/session/{id}</code></td>
+<td>创建 / 释放一个面板缓存会话</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/portfolio/backtest</code></td>
+<td>运行一次组合回测 → <code>PortfolioReport</code></td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/system/status</code> · <code>/universes</code> · <code>/data-calendar</code></td>
+<td>引擎/数据/缓存状态、股票池、覆盖范围</td>
+</tr>
+<tr>
+<td>—</td>
+<td><strong>数据管理器</strong>（<code>/v1/admin/*</code>，运维）</td>
+<td>见下文</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="数据管理器-管理员-端点">数据管理器（管理员）端点</h3>
+<p>位于 WebUI <em>Data</em> 标签页背后的运维界面（从 OpenAPI schema 中隐藏，但实际可用）：</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>方法</th>
+<th>路径</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET/PUT</code></td>
+<td><code>/v1/admin/config</code></td>
+<td>读取（脱敏）/ 更新目录、凭证、系统设置</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/admin/data/status</code> · <code>/usage</code></td>
+<td>RAW↔ASSAY 同步快照 · 各市场磁盘占用（RAW + ASSAY）</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/admin/data/test</code></td>
+<td>测试一个数据提供方连接（<code>{provider: massive|tushare}</code>）</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/admin/data/jobs</code></td>
+<td>入队一个任务（<code>mode: init|update|ingest</code>）；<code>GET</code> 列表；<code>GET /{id}</code> 单个</td>
+</tr>
+<tr>
+<td><code>GET/PUT</code></td>
+<td><code>/v1/admin/schedule</code></td>
+<td>自动更新计划（按市场：启用 + 每日时间）</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/admin/cache/status</code> · <code>/entries</code> · <code>POST /rebuild</code></td>
+<td>热缓存状态 / 内容 / 重建</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="评估-阻塞式">评估 —— 阻塞式</h2>
+<pre><code class="language-bash">curl -s -X POST http://localhost:8000/v1/factor/evaluate \
+  -H 'Content-Type: application/json' \
+  -d '{&quot;expr&quot;:&quot;ts_corr(close, volume, 20)&quot;,&quot;universe&quot;:&quot;NASDAQ100&quot;,
+       &quot;period&quot;:[&quot;2025-01-02&quot;,&quot;2026-06-09&quot;],&quot;horizons&quot;:[1,5,10,20]}'
+# -&gt; { ...FactorReport }
+</code></pre>
+<h2 id="评估-sse-流">评估 —— SSE 流</h2>
+<p>设置 <code>&quot;stream&quot;: true</code>；响应为 <code>text/event-stream</code>，包含以下帧：</p>
+<pre><code>event: eval.started   data: {&quot;factor_id&quot;: &quot;...&quot;, &quot;expr&quot;: &quot;...&quot;}
+event: eval.ic_series data: {&quot;ic&quot;: [...], &quot;rank_ic&quot;: [...], &quot;dates&quot;: [...]}
+event: eval.decay     data: {&quot;ic_by_horizon&quot;: {...}, &quot;halflife&quot;: 12}
+event: eval.groups    data: {&quot;quintile_returns&quot;: [...]}
+event: eval.complete  data: { ...full FactorReport }
+</code></pre>
+<p>所有数据都是 NaN 安全的 JSON（NaN/Inf → null），因此 <code>JSON.parse</code> 永不失败。<code>EventSource</code>
+无法 POST —— 请使用 <code>fetch</code> + 一个 <code>ReadableStream</code> reader 来消费该流（WebUI 就是这么做的）。</p>
+<h2 id="组合回测">组合回测</h2>
+<pre><code class="language-bash">curl -s -X POST http://localhost:8000/v1/portfolio/backtest \
+  -H 'Content-Type: application/json' \
+  -d '{&quot;expr&quot;:&quot;cs_rank(ts_returns(close, 20))&quot;,
+       &quot;config&quot;:{&quot;universe&quot;:&quot;NASDAQ100&quot;,&quot;period_start&quot;:&quot;2025-01-02&quot;,&quot;period_end&quot;:&quot;2026-06-09&quot;,
+                 &quot;rebalance_type&quot;:&quot;monthly&quot;,&quot;weight_method&quot;:&quot;signal_prop&quot;}}'
+</code></pre>
+<h2 id="错误-schema">错误 schema</h2>
+<p>错误映射自引擎诊断（<code>assay.engine.diagnostics</code>）：稳定的 <code>code</code>
+（<code>ASSAY-P###/E###/O###</code>）、<code>failure_mode</code>（<code>SYNTAX_ERROR · LOOKAHEAD · CONSTANT · ALL_NAN · RUNTIME_ERROR</code>）、<code>severity</code>、<code>stage</code>、<code>message</code>、<code>location</code>、<code>suggestion</code>。当数据存储为空时，
+一个需要已导入数据的请求会返回 <strong>503</strong>。</p>
+<p>完整契约：<a href="/doc/design/architecture">architecture.md</a> §4。</p>

@@ -1,6 +1,6 @@
 # MCP Server
 
-The server now has **26 tools**, including 15 durable backend/dataset/session/experiment
+The server now has **34 tools**, including eight FactorDB tools and 15 durable backend/dataset/session/experiment
 tools. See the [agent research guide](agent-research.md) for their workflow and recovery semantics.
 
 The MCP server exposes Assay's evaluate→library loop as Model Context Protocol tools that LLM
@@ -54,12 +54,7 @@ only tools that touch price data need MASSIVE creds.
 
 ## Typical agent loop
 
-```
-assay_library_list(limit=10)         → what high-quality factors already exist?
-assay_batch([...candidate exprs...]) → sorted results; top factor's rank_icir / redundancy
-assay_library_correlation([...])     → is the new factor redundant with existing ones?
-assay_library_save(best_report)      → keep the unique, high-ICIR factor
-assay_library_prune(dry_run=true)    → propose removing dominated factors
-```
+![Agent loop](../../assets/figures/en/agent-loop.svg)
+
 
 Design contract: [architecture.md](../design/architecture.md) §6.

@@ -16,11 +16,16 @@ from __future__ import annotations
 
 import numpy as np
 
+from assay._native import kernels as _native
+
 
 def group_returns(
-    factor: np.ndarray, fwd: np.ndarray, n_groups: int = 5
+    factor: np.ndarray, fwd: np.ndarray, n_groups: int = 5, *, order=None
 ) -> dict[str, object]:
     """Mean forward return per factor quantile, plus long-short spread.
+
+    ``order`` is :func:`.metrics.row_orders` of ``factor`` when already computed (the
+    native kernel then buckets each date in one scan instead of sorting it).
 
     Returns ``{"quantile_returns": {"Q1": .., ..., "Qn": ..}, "long_short": float,
     "monotonic": bool}``. ``Q1`` is the lowest-factor bucket.
@@ -38,20 +43,24 @@ def group_returns(
     sums = np.zeros((t_n, n_groups), dtype=np.float64)
     counts = np.zeros((t_n, n_groups), dtype=np.float64)
 
-    for t in range(t_n):
+    if _native is not None and order is not None:
+        sums, counts = _native.group_sums_ordered(np.ascontiguousarray(factor), *order, np.ascontiguousarray(fwd),
+                                                  n_groups)
+    elif _native is not None:
+        sums, counts = _native.group_sums(np.ascontiguousarray(factor), np.ascontiguousarray(fwd), n_groups)
+    for t in range(t_n if _native is None else 0):
         mask = np.isfinite(factor[t]) & np.isfinite(fwd[t])
         m = int(mask.sum())
         if m < n_groups:  # not enough names to populate every bucket
             continue
         fvals = factor[t][mask]
         rvals = fwd[t][mask]
-        order = np.argsort(fvals, kind="mergesort")  # ascending: low factor first
+        srt = np.argsort(fvals, kind="mergesort")  # ascending: low factor first
         # Equal-count buckets via positional edges (handles ragged remainders).
         edges = (np.arange(m) * n_groups) // m  # bucket id per sorted position
-        for pos in range(m):
-            g = edges[pos]
-            sums[t, g] += rvals[order[pos]]
-            counts[t, g] += 1.0
+        # bincount adds in sorted order, the same sums as a loop over positions
+        sums[t] = np.bincount(edges, weights=rvals[srt], minlength=n_groups)
+        counts[t] = np.bincount(edges, minlength=n_groups)
 
     # Per-date bucket means, then average over dates (ignoring empty dates).
     with np.errstate(invalid="ignore"):

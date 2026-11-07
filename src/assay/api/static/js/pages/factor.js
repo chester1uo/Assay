@@ -1,3 +1,4 @@
+import { P } from "../palette.js";
 // pages/factor.js — Single Factor Test (assay_webui_design.md §5).
 //
 // The centerpiece screen. A lightweight expression editor (mono <textarea>),
@@ -149,7 +150,7 @@ function injectStyle() {
   background: var(--gray-1); color: var(--text); tab-size: 2;
 }
 .factor-editor:focus-visible { outline: none; box-shadow: var(--focus-ring); border-color: var(--blue); }
-.factor-editor.is-error { border-color: #E8B5AE; }
+.factor-editor.is-error { border-color: var(--danger-border); }
 .factor-lintbar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; font-size: 12px; min-height: 20px; }
 .factor-diag { display: flex; gap: var(--sp-2); align-items: flex-start; padding: var(--sp-1) 0; }
 .factor-diag-msg { font-size: 12px; }
@@ -164,7 +165,7 @@ function injectStyle() {
 .factor-horizons { display: inline-flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 .factor-horizons label { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; cursor: pointer; }
 .factor-horizon-input { width: 130px; font-family: var(--font-mono); }
-.factor-horizon-input.is-error { border-color: #E8B5AE; }
+.factor-horizon-input.is-error { border-color: var(--danger-border); }
 .factor-override { color: var(--amber); font-weight: 600; cursor: help; }
 .factor-main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--sp-4); align-items: start; }
 @media (max-width: 1200px) { .factor-main { grid-template-columns: minmax(0, 1fr); } }
@@ -185,7 +186,7 @@ function injectStyle() {
 .factor-metric .val { font-family: var(--font-mono); font-size: 16px; font-weight: 500; }
 .factor-expr-box { font-family: var(--font-mono); font-size: 13px; background: var(--gray-1); padding: var(--sp-2); border-radius: var(--radius-badge); word-break: break-word; }
 .factor-json { font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; background: var(--gray-1); padding: var(--sp-2); border-radius: var(--radius-badge); margin: var(--sp-2) 0 0; }
-.factor-diag-card { border: 1px solid #E8B5AE; background: #FCF4F3; border-radius: var(--radius-card); padding: var(--sp-3); }
+.factor-diag-card { border: 1px solid var(--danger-border); background: var(--danger-bg); border-radius: var(--radius-card); padding: var(--sp-3); }
 .factor-diag-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
 .factor-diag-card-title { font-weight: 500; color: var(--red); }
 .factor-toast { position: fixed; bottom: var(--sp-6); left: 50%; transform: translateX(-50%);
@@ -867,8 +868,8 @@ function buildCards(ctx) {
       return;
     }
     const series = [];
-    if (ic.length) series.push({ name: "IC", values: ic, color: "#2D5BE3" });
-    if (rankIc.length) series.push({ name: "RankIC", values: rankIc, color: "#0E8A7E" });
+    if (ic.length) series.push({ name: "IC", values: ic, color: P.primary });
+    if (rankIc.length) series.push({ name: "RankIC", values: rankIc, color: P.second });
     c1.body.appendChild(charts.legend(series));
     c1.body.appendChild(chartWrap(charts.lineChart({
       series, dates, height: 240,
@@ -910,7 +911,7 @@ function buildCards(ctx) {
     if (!arr || !arr.length) { c3.body.appendChild(emptyChart(ctx, ctx.t("factor.noGroupReturns"))); c3.hint.textContent = ""; return; }
     const labels = arr.map((_, i) => "Q" + (i + 1));
     // Q1 red (short), Q5 green (long), middle gray
-    const colors = arr.map((_, i) => i === 0 ? "#C0392B" : i === arr.length - 1 ? "#1E7B4B" : "#8892AA");
+    const colors = arr.map((_, i) => i === 0 ? P.down : i === arr.length - 1 ? P.up : P.muted);
     c3.body.appendChild(chartWrap(charts.barChart({ labels, values: arr, colors, valueLabels: true, height: 240 })));
     const spread = arr[arr.length - 1] - arr[0];
     const monotonic = isMonotonic(arr);
@@ -949,7 +950,7 @@ function buildCards(ctx) {
     if (!arr || !arr.length) { c6.node.classList.add("hidden"); return; }
     c6.node.classList.remove("hidden");
     const labels = arr.map((_, i) => "Q" + (i + 1));
-    const colors = arr.map((_, i) => i === 0 ? "#C0392B" : i === arr.length - 1 ? "#1E7B4B" : "#8892AA");
+    const colors = arr.map((_, i) => i === 0 ? P.down : i === arr.length - 1 ? P.up : P.muted);
     c6.body.replaceChildren(
       chartWrap(charts.barChart({ labels, values: arr, colors, valueLabels: true, height: 200 })),
       ctx.el("div", { className: "muted", style: { marginTop: "4px" } },

@@ -3,7 +3,7 @@ export function render(root, {api, el}) {
   const host = el('div', {className: 'research-workbench'});
   root.replaceChildren(host);
   const style = el('style', {}, `
-    body:has(.research-workbench) .topnav-controls {display:none}
+    body:has(.research-workbench) .contextbar-controls {display:none}
     .research-workbench {max-width:1500px;margin:auto;padding:24px}
     .research-workbench h1 {margin:0;font-size:28px}
     .research-workbench h2 {font-size:17px;margin:0 0 14px}

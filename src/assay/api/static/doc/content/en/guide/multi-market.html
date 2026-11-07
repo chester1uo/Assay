@@ -1,0 +1,193 @@
+<h1 class="doc-title">Multi-market support (China A-share + Hong Kong)</h1>
+<p>Assay's data layer and portfolio backtester are market-agnostic: prices,
+corporate actions and index membership live in canonical stores partitioned by
+<code>market=...</code>, and the execution simulator already models the A-share
+microstructure rules. This doc covers running the framework on <strong>Chinese
+A-shares</strong> end-to-end, using the Tushare mirror (see <a href="/doc/guide/tushare">tushare.md</a>).</p>
+<h2 id="1-ingest-raw-tushare-canonical-cn-stores">1. Ingest: raw Tushare → canonical CN stores</h2>
+<p><code>assay.data.tushare.ingest.prepare_cn</code> reads the raw mirror
+(<code>$TUSHARE_DATA_DIR</code>, default <code>/data/tushare_data</code>) and writes the same canonical
+stores the US pipeline produces, under <code>market=CN</code>:</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>store</th>
+<th>source</th>
+<th>notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>price_raw</code></td>
+<td><code>cn/daily</code></td>
+<td>unadjusted OHLCV (<code>volume</code> in 手/lots)</td>
+</tr>
+<tr>
+<td><code>adj_events</code></td>
+<td><code>cn/dividend</code></td>
+<td>送转 → forward <code>split_ratio = 1 + stk_div</code>; pre-tax cash (<code>cash_div_tax</code>) → <code>dividend_cash</code>; only <em>implemented</em> (实施) dividends</td>
+</tr>
+<tr>
+<td><code>universe_snapshots</code></td>
+<td><code>cn/index_weight</code></td>
+<td>CSI300/500/1000 point-in-time membership (composition-change snapshots)</td>
+</tr>
+<tr>
+<td><code>trade_status</code></td>
+<td><code>cn/stk_limit</code> + <code>cn/daily</code></td>
+<td>raw 涨停价/跌停价 bands + locked flags (A-share only)</td>
+</tr>
+<tr>
+<td><code>security_groups</code></td>
+<td><code>cn/meta/stock_basic</code></td>
+<td>per-symbol industry label for sector-neutralisation (current snapshot)</td>
+</tr>
+</tbody>
+</table></div>
+<pre><code class="language-bash"># writes market=CN partitions under $ASSAY_DATA_DIR
+python scripts/prepare_cn.py 2010-01-01 2026-06-27
+</code></pre>
+<p>Adjustment is recomputed from primitive events at read time (the same forward
+machinery as US equities), so <code>adj=&quot;split&quot;</code> adjusts for 送转 only and
+<code>adj=&quot;total&quot;</code> adds cash dividends.</p>
+<h2 id="2-trading-constraints-in-the-portfolio-backtest">2. Trading constraints in the portfolio backtest</h2>
+<p>The execution layer (<code>assay.portfolio.execution.ExecutionSimulator</code>) enforces the
+A-share rules whenever <code>PortfolioBacktestConfig.market == &quot;A&quot;</code> and the data is
+present. All three are now wired from the canonical stores:</p>
+<ul>
+<li><strong>Daily price limits (涨跌停).</strong> A buy into a name trading at its ceiling and a
+sell into one at its floor get <strong>zero fill</strong> (<code>blocked_reason</code> <code>limit_up</code> /
+<code>limit_down</code>). The backtester auto-loads the <strong>real per-board bands</strong> from
+<code>trade_status</code> (10% main board, 20% STAR/ChiNext, 30% BSE, 5% ST) rather than a
+flat percentage. Limit prices are raw while the price panel is adjusted, so each
+band is rebased into the panel basis by <code>adj_close / raw_close</code> before the
+comparison — see <code>PortfolioBacktester._cn_limit_matrices</code>.</li>
+<li><strong>T+1 settlement.</strong> Shares bought on a rebalance cannot be sold the same step
+(<code>blocked_reason</code> <code>t_plus_1</code>). Active for <code>market == &quot;A&quot;</code> via the preset.</li>
+<li><strong>Suspension (停牌).</strong> A halted name simply has no <code>price_raw</code> bar, so its price
+is NaN and the executor treats it as untradable (<code>blocked_reason</code> <code>suspended</code>).
+No extra data needed.</li>
+</ul>
+<p>The <code>A</code>-preset also applies the A-share <strong>cost model</strong>: <strong>0.05% stamp duty</strong>
+(sell; cut from 0.1% on 2023-08-28), 0.03% commission (min ¥5), 0.002% transfer
+fee, √-impact <code>k=0.20</code>.</p>
+<p>Other market-correctness defaults (preset <code>'A'</code>):</p>
+<ul>
+<li><strong>Long-only enforced.</strong> <code>market=='A'</code> with <code>long_short=True</code> raises — A-share
+短 selling (融券) is restricted/unavailable, so a short book isn't executable.</li>
+<li><strong>Total-return basis.</strong> The engine's adjustment basis is derived from <code>market</code>
+(A/HK → <code>total</code> = dividends reinvested, the correct basis for alpha P&amp;L; US →
+<code>split</code>), so it never silently aliases two runs in the evaluation cache.</li>
+<li><strong>Sector-neutralisation</strong> uses real industry labels: set <code>sector_neutral=True</code>
+and the backtester auto-loads <code>security_groups</code> from the store (Tushare
+<code>industry</code>); both the signal neutraliser and the sector-weight constraint then
+engage. Without it, runs are never silently sector-balanced.</li>
+</ul>
+<h2 id="3-running-a-cn-backtest">3. Running a CN backtest</h2>
+<pre><code class="language-python">import datetime as dt
+from assay.config import AssayConfig
+from assay.data.store.datastore import DataStore
+from assay.portfolio import PortfolioBacktestConfig, PortfolioBacktester
+
+# A CN DataStore reads market=CN partitions; the 'A' preset drives trading rules.
+store = DataStore(AssayConfig(market=&quot;CN&quot;, data_dir=AssayConfig.from_env().data_dir))
+bt = PortfolioBacktester(store=store)
+
+cfg = PortfolioBacktestConfig.preset(
+    &quot;A&quot;, universe=&quot;CSI300&quot;,
+    period_start=&quot;2022-01-01&quot;, period_end=&quot;2023-12-31&quot;,
+    rebalance_type=&quot;monthly&quot;, weight_method=&quot;signal_prop&quot;,
+)
+report = bt.run(&quot;ts_delta(close, 20) / delay(close, 20)&quot;, cfg)   # a momentum factor
+print(report.total_return, report.sharpe, report.a_share_metrics)
+</code></pre>
+<p>Two market knobs, intentionally separate:</p>
+<ul>
+<li><code>AssayConfig.market=&quot;CN&quot;</code> selects which <strong>data partition</strong> the store reads.</li>
+<li><code>PortfolioBacktestConfig.market=&quot;A&quot;</code> selects the <strong>trading-rule regime</strong>
+(limits / T+1 / cost model). <code>report.a_share_metrics</code> reports <code>n_limit_hits</code>,
+<code>n_forced_holds</code> (T+1), <code>n_blocked_suspended</code>, and the corresponding rates.</li>
+</ul>
+<p>Universes available for CN: <code>CSI300</code>, <code>CSI500</code>, <code>CSI1000</code> (point-in-time,
+survivorship-free).</p>
+<h2 id="4-hong-kong">4. Hong Kong</h2>
+<p>HK rides the same canonical stores under <code>market=HK</code>, fed by
+<code>assay.data.tushare.ingest.prepare_hk</code> (CLI: <code>scripts/prepare_hk.py</code>). It needs
+an entitled Tushare endpoint — see <a href="/doc/guide/tushare">tushare.md</a>.</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>store</th>
+<th>source</th>
+<th>notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>price_raw</code></td>
+<td><code>hk/daily</code></td>
+<td>unadjusted OHLCV (<code>volume</code> in <strong>shares</strong>, not lots)</td>
+</tr>
+<tr>
+<td><code>adj_events</code></td>
+<td><code>hk/adj_factor</code></td>
+<td>reconstructed from <code>cum_adjfactor</code> steps, corroborated against <code>pre_close</code></td>
+</tr>
+<tr>
+<td><code>universe_snapshots</code></td>
+<td><code>hk/daily</code> turnover + <code>hk_basic</code> ISIN</td>
+<td><strong>HK100</strong> and <strong>HSHARE100</strong> point-in-time membership</td>
+</tr>
+<tr>
+<td><code>trade_status</code></td>
+<td>—</td>
+<td>not written: HKEX has no daily price-limit bands</td>
+</tr>
+<tr>
+<td><code>security_groups</code></td>
+<td>—</td>
+<td>not written: Tushare exposes no HK industry classification</td>
+</tr>
+</tbody>
+</table></div>
+<pre><code class="language-bash"># writes market=HK partitions under $ASSAY_DATA_DIR_HK (default ./data_hk)
+python scripts/prepare_hk.py 2015-01-01 2026-07-27
+</code></pre>
+<p><strong>HK100</strong> is the whole-board universe. It ranks every name that actually traded
+by trailing three-month turnover at each month end and takes the top 100 effective
+on the <em>next</em> month's first trading day — so a snapshot can never see the returns
+it would be scored on.</p>
+<p><strong>HSHARE100</strong> applies exactly the same ranking to <strong>H-shares</strong> only —
+mainland-China-incorporated issuers listed on HKEX, as opposed to the red chips
+(Cayman/Bermuda holding companies) and local Hong Kong issuers that make up the
+rest of the board. Membership is decided by the ISIN country prefix (<code>CNE</code>),
+which is a property of where the issuer is registered and therefore never changes;
+because the listings table is downloaded with delisted names included, the pool is
+survivorship-free. The two universes overlap by roughly half — H-shares that are
+also among the most-traded names on the board.</p>
+<p>Use <code>HSHARE100</code> when the thesis is about mainland corporates (A/H pairs, mainland
+policy exposure, the Connect flow) and <code>HK100</code> when it is about the Hong Kong
+market as a whole. <code>HSI</code> and <code>HSTECH</code> are also registered but are vendored
+<strong>current</strong> snapshots and therefore survivorship-biased.</p>
+<p>The <code>HK</code> preset differs from <code>A</code> in every respect that matters:</p>
+<ul>
+<li><strong>No price limits, no T+1.</strong> HKEX has neither, so <code>price_limit_pct=None</code> and
+<code>t_plus_1=False</code>; the limit and settlement gates simply do not engage.</li>
+<li><strong>Shorting allowed.</strong> Unlike <code>A</code>, <code>long_short=True</code> is accepted.</li>
+<li><strong>Stamp duty on both sides.</strong> HKEX levies 0.10% on buys as well as sells, so
+<code>TransactionCostModel</code> charges it symmetrically when <code>market == &quot;HK&quot;</code> — the
+A-share 印花税 stays sell-side only. Per side the preset totals 0.1484%:
+brokerage 0.04% + stamp duty 0.10% + HKEX trading fee 0.00565% + SFC levy
+0.0027% + FRC levy 0.00015%.</li>
+<li><strong>Total-return basis</strong>, same as <code>A</code>, and now genuinely backed by ingested
+<code>adj_events</code>.</li>
+</ul>
+<pre><code class="language-python">store = DataStore(AssayConfig(market=&quot;HK&quot;, data_dir=Path(os.environ[&quot;ASSAY_DATA_DIR_HK&quot;])))
+cfg = PortfolioBacktestConfig.preset(
+    &quot;HK&quot;, universe=&quot;HK100&quot;,       # or &quot;HSHARE100&quot; for H-shares only
+    period_start=&quot;2022-01-01&quot;, period_end=&quot;2023-12-31&quot;,
+)
+</code></pre>
+<p>Two caveats specific to HK: <strong>sector-neutralisation is unavailable</strong> (no group
+labels), and NAV is denominated in <strong>HKD</strong> with no FX book, so an HK run is not
+directly comparable to a US or CN one.</p>

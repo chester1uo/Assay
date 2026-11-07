@@ -1,6 +1,6 @@
 # MCP Server
 
-服务现有 **26 个工具**，含 15 个后端发现、持久数据集、研究会话与实验工具。
+服务现有 **34 个工具**，含 8 个 FactorDB 工具及 15 个后端发现、持久数据集、研究会话与实验工具。
 使用流程与恢复语义见 [Agent 研究指南](agent-research.md)。
 
 MCP server 将 Assay 的 evaluate→library 循环暴露为 Model Context Protocol 工具，供 LLM
@@ -54,12 +54,7 @@ python -m assay.cli serve-mcp --transport sse --port 8001   # SSE/HTTP (remote a
 
 ## 典型的 agent 循环
 
-```
-assay_library_list(limit=10)         → what high-quality factors already exist?
-assay_batch([...candidate exprs...]) → sorted results; top factor's rank_icir / redundancy
-assay_library_correlation([...])     → is the new factor redundant with existing ones?
-assay_library_save(best_report)      → keep the unique, high-ICIR factor
-assay_library_prune(dry_run=true)    → propose removing dominated factors
-```
+![agent 循环](../../assets/figures/cn/agent-loop.svg)
+
 
 设计契约：[architecture.md](../design/architecture.md) §6。

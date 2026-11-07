@@ -28,29 +28,14 @@
 
 ### 1.1 流水线
 
-```
-factor expression
-    │  evaluate -> (T, N) factor matrix + close/open prices
-    ▼
-UniverseFilter        eligible = finite factor & finite price (& tradable mask)   ✅
-    ▼
-SignalProcessor       winsorize · neutralize · normalize (rank/zscore/raw)         ✅
-    ▼
-RebalanceScheduler    calendar · threshold · signal-autocorr                       ✅
-    ▼
-WeightConstructor     equal · signal_prop · quantile · mean-variance · risk-parity ✅
-    ▼
-ConstraintApplicator  position/count caps · turnover cap · gross/net · sector-neut ✅ / 🔶
-    ▼
-ExecutionSimulator    slippage · ADV cap · price limits · T+1 settlement           ✅ / 🔶
-    ▼
-PortfolioAccountant   weight drift · daily MTM NAV · costs · trade/position log    ✅
-    ▼
-PortfolioReport       Sharpe · drawdown · turnover · cost drag · benchmark · A-share ✅
-```
+![组合回测流水线](../../assets/figures/cn/portfolio-pipeline.svg "圆点：绿色已实现，黄色部分实现")
 
-优化再平衡器使用 **scipy**（`scipy.optimize.minimize`，SLSQP）和一个 numpy
-Ledoit-Wolf 收缩——`cvxpy`/`scikit-learn` 被有意*排除*在依赖之外。
+
+优化再平衡器在装有 **OSQP**（`perf` 额外依赖）时用它求解二次规划，并把 Ledoit-Wolf
+协方差写成单位阵加秩 `W` 的形式，每次调仓约 0.3 秒。换手上限生效时改用 **Clarabel**
+（内点法，约 1 秒；只用 OSQP 约 2 秒）求解。没有 OSQP 时回退到 **scipy**
+（`scipy.optimize.minimize`，SLSQP；约 490 只股票时每次调仓约 3 秒）。
+Ledoit-Wolf 收缩用 numpy 实现——`cvxpy`/`scikit-learn` 被有意*排除*在依赖之外。
 
 ---
 

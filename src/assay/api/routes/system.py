@@ -31,6 +31,7 @@ router = APIRouter()
 # no ingested snapshot in any shipped store; it reports 0 symbols and is flagged
 # ``wired: false`` rather than pretending to be an available universe.
 _KNOWN_UNIVERSES = (
+    "TOP500", "TOP1000", "TOP3000",
     "NASDAQ100", "SP500", "Russell2000",
     "CSI300", "CSI500", "CSI1000",
     "HK100", "HSHARE100", "HSI", "HSTECH",
@@ -67,6 +68,14 @@ def _market_dirs(svc) -> dict[str, Path]:
     return out
 
 
+def _store_span(svc, data_dir: Path, market: str) -> dict[str, Any]:
+    """The span the market's store reports itself (QFinVerse panel), else the parquet scan."""
+    store = svc._store_for(market) if hasattr(svc, "_store_for") else None
+    if store is not None and hasattr(store, "price_span"):
+        return store.price_span()
+    return _price_span(data_dir, market)
+
+
 def _price_span(data_dir: Path, market: str) -> dict[str, Any]:
     """Real ingested span of one market's ``price_raw`` store (or an error)."""
     from assay.data.schemas import price_root
@@ -97,7 +106,7 @@ def _market_block(svc, market: str, data_dir: Path) -> dict[str, Any]:
     """Per-market data facts, measured from that market's own store."""
     block: dict[str, Any] = {"market": market, "data_dir": str(data_dir)}
     try:
-        block.update(_price_span(data_dir, market))
+        block.update(_store_span(svc, data_dir, market))
     except Exception as exc:  # noqa: BLE001 — surface the failure, never fake zeros
         block.update({"first_date": None, "last_date": None, "trading_days": 0,
                       "symbols_in_store": 0, "last_sync": None, "ingested": False,
@@ -227,7 +236,7 @@ def list_universes(api_key: str | None = Depends(get_api_key)) -> list[dict]:
     latest: dict[str, str | None] = {}
     for mk, d in dirs.items():
         try:
-            latest[mk] = _price_span(d, mk).get("last_date")
+            latest[mk] = _store_span(svc, d, mk).get("last_date")
         except Exception:  # noqa: BLE001
             latest[mk] = None
 
@@ -252,7 +261,10 @@ def list_universes(api_key: str | None = Depends(get_api_key)) -> list[dict]:
         except Exception as exc:  # noqa: BLE001
             row["error"] = f"{type(exc).__name__}: {exc}"
         d = dirs.get(str(market).upper())
-        if d is not None:
+        store = svc._store_for(str(market).upper()) if market else None
+        if store is not None and hasattr(store, "last_rebalance"):
+            row["last_rebalance"] = store.last_rebalance(uid, as_of)
+        elif d is not None:
             row["last_rebalance"] = _last_rebalance(d, market, uid, as_of)
         out.append(row)
     return out
@@ -273,6 +285,9 @@ def data_calendar(
     svc = get_service()
     dirs = _market_dirs(svc)
     mk = str(market or svc.config.market).upper()
+    store = svc._store_for(mk) if mk in svc._UNIVERSE_MARKET.values() else None
+    if store is not None and hasattr(store, "coverage"):
+        return store.coverage(year)
     data_dir = dirs.get(mk)
     if data_dir is None:
         return []

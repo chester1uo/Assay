@@ -85,30 +85,8 @@ Assay 被拆解为五个完全解耦的层。每一层暴露一个定义良好�
 
 单次因子评估请求会经过以下路径:
 
-```
-User / Agent
-    │  factor_expr: str
-    ▼
-ExprParser          ← parses qlib or Python syntax into unified AST
-    │  AST: OpNode tree
-    ▼
-FactorEngine         ← checks L2 factor string cache
-    │  cache miss → walk AST, check L1 per-operator cache
-    ▼
-OperatorRegistry     ← executes uncached nodes via Polars / Numba
-    │  raw factor DataFrame (T × N)
-    ▼
-BatchFactorBT        ← aligns factor with ForwardReturns
-    │  aligned (factor, returns) pair
-    ▼
-ICAnalyzer           ← computes IC, RankIC, ICIR, decay (Numba parallel)
-    │
-    ▼
-FactorReport         ← assembles structured JSON result
-    │  FactorReport JSON
-    ▼
-User / Agent
-```
+![一次因子评估的路径](../../assets/figures/cn/eval-flow.svg)
+
 
 ### 2.3  关键设计决策
 
@@ -136,19 +114,8 @@ DAG 执行规划器(调度)与算子计算内核(执行)完全分离。这使得
 
 #### 导入流水线
 
-```
-MassiveConnector
-    ├── fetch_ohlcv(symbols, start, end)      → raw price DataFrame
-    ├── fetch_adj_events(symbols, start, end) → corporate action log
-    ├── fetch_universe(index, date)            → constituent snapshot
-    └── fetch_financials(symbols, as_of)      → PIT financial data
+![数据导入](../../assets/figures/cn/ingestion.svg)
 
-DataIngester
-    ├── validate_schema()    ← reject malformed rows, log to quarantine
-    ├── deduplicate()        ← exact duplicate rows
-    ├── normalize_timezone() ← all timestamps to NYSE calendar
-    └── write_parquet()      ← append to DataStore partition
-```
 
 #### 字段映射
 
@@ -499,23 +466,8 @@ class ParallelExecutor:
 
 ### 5.1  架构概览
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  L2 Factor String Cache (disk — Parquet, ~1MB/factor)       │
-│  key: hash(expr + universe + date_range + adj_version)      │
-│  stores: complete (T × N) factor result matrix              │
-│  invalidation: on adj_factor version bump                   │
-├─────────────────────────────────────────────────────────────┤
-│  L1 Operator Cache (RAM — Arena blocks, float32)            │
-│  key: (op, field, window, market, universe, date_range)     │
-│  stores: intermediate operator results, e.g. ts_mean(c,20)  │
-│  eviction: LFU with EMA heat scoring                        │
-├─────────────────────────────────────────────────────────────┤
-│  Incremental Maintenance Layer                              │
-│  daily append: O(1) update for linear sliding window ops    │
-│  topo scheduler: update dependents in correct order         │
-└─────────────────────────────────────────────────────────────┘
-```
+![缓存分层](../../assets/figures/cn/cache-layers.svg)
+
 
 ### 5.2  L1 算子缓存
 

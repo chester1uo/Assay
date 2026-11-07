@@ -1,0 +1,144 @@
+<h1 class="doc-title">US data from QFinVerse</h1>
+<p>On assay.qfinverse.com, US universes read the daily panel store that QFinVerse builds
+from MASSIVE: end-of-day bars from September 2003, splits and dividends, and the
+MASSIVE ticker reference. Assay does not ingest US data itself in this setup.</p>
+<figure class="doc-fig"><svg xmlns="http://www.w3.org/2000/svg" class="fig" viewBox="0 0 760 300" width="760" height="300" role="img" aria-label="US data: from MASSIVE to an Assay evaluation"><style>
+.f-box{fill:var(--fig-box,#FFFFFF);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-group{fill:var(--fig-group,#F4F6FA);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-acc{fill:var(--fig-accent-bg,#E3F6F2);stroke:var(--fig-accent,#00A38B);stroke-width:1.2}
+.f-warm{fill:var(--fig-warm-bg,#FFF0E6);stroke:var(--fig-warm,#E8590C);stroke-width:1.2}
+.f-gold{fill:var(--fig-gold-bg,#FDF4DF);stroke:var(--fig-gold,#B7791F);stroke-width:1.2}
+.f-t{fill:var(--fig-text,#1A1D2E);font:600 13px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-h{fill:var(--fig-muted,#5A6477);font:600 10.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.f-s{fill:var(--fig-muted,#5A6477);font:400 11.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-m{fill:var(--fig-text,#1A1D2E);font:500 11.5px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ms{fill:var(--fig-muted,#5A6477);font:400 11px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ta{fill:var(--fig-accent,#00A38B);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tw{fill:var(--fig-warm,#E8590C);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tg{fill:var(--fig-gold,#B7791F);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-a{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4}
+.f-ad{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4;stroke-dasharray:4 3}
+.f-head{fill:var(--fig-arrow,#8A93A6)}
+.f-dot-ok{fill:var(--fig-accent,#00A38B)} .f-dot-part{fill:var(--fig-gold,#B7791F)} .f-dot-plan{fill:none;stroke:var(--fig-muted,#5A6477);stroke-width:1.2}
+@media (prefers-color-scheme:dark){svg.fig{--fig-box:#1F232E;--fig-line:#3A3F4C;--fig-group:#171B25;--fig-text:#D7DAE1;--fig-muted:#8A8F9C;--fig-arrow:#6E7484;--fig-accent:#00D6B3;--fig-accent-bg:#11302C;--fig-warm:#FF7A3D;--fig-warm-bg:#3A2418;--fig-gold:#E3B341;--fig-gold-bg:#352B14}}
+</style><rect x="12" y="12" width="180" height="276" rx="10" class="f-group"/><text x="28" y="36" class="f-h" text-anchor="start">MASSIVE</text><rect x="24" y="50" width="156" height="62" rx="8" class="f-box"/><text x="102.0" y="77.0" class="f-t" text-anchor="middle">Day bars</text><text x="102.0" y="93.0" class="f-s" text-anchor="middle">us_stocks_sip, from 2003</text><rect x="24" y="126" width="156" height="62" rx="8" class="f-box"/><text x="102.0" y="153.0" class="f-t" text-anchor="middle">Corporate actions</text><text x="102.0" y="169.0" class="f-s" text-anchor="middle">splits · dividends</text><rect x="24" y="202" width="156" height="62" rx="8" class="f-box"/><text x="102.0" y="229.0" class="f-t" text-anchor="middle">Ticker reference</text><text x="102.0" y="245.0" class="f-s" text-anchor="middle">type · FIGI · CIK · renames</text><path d="M192,150 L212,150" class="f-a"/><path d="M212.0,150.0 L204.8,153.5 L204.8,146.5 Z" class="f-head"/><rect x="214" y="104" width="156" height="92" rx="8" class="f-acc"/><text x="292.0" y="130.0" class="f-t" text-anchor="middle">qfz-data daily</text><text x="292.0" y="146.0" class="f-s" text-anchor="middle">security ids · renames</text><text x="292.0" y="163.0" class="f-s" text-anchor="middle">checks every split</text><text x="292.0" y="180.0" class="f-s" text-anchor="middle">PIT universes</text><path d="M370,150 L392,150" class="f-a"/><path d="M392.0,150.0 L384.8,153.5 L384.8,146.5 Z" class="f-head"/><rect x="394" y="12" width="190" height="276" rx="10" class="f-gold"/><text x="410" y="36" class="f-tg" text-anchor="start">Daily panel store</text><text x="410" y="66" class="f-m" text-anchor="start">CURRENT</text><text x="410" y="82" class="f-s" text-anchor="start">points to the live version</text><text x="410" y="112" class="f-m" text-anchor="start">v00000N/</text><text x="410" y="128" class="f-s" text-anchor="start">immutable versions</text><text x="410" y="158" class="f-m" text-anchor="start">blocks/YYYY</text><text x="410" y="174" class="f-s" text-anchor="start">float32 dates × sids</text><text x="410" y="204" class="f-m" text-anchor="start">events</text><text x="410" y="220" class="f-s" text-anchor="start">checked splits, dividends</text><text x="410" y="250" class="f-m" text-anchor="start">universes</text><text x="410" y="266" class="f-s" text-anchor="start">TOP500 / 1000 / 3000</text><path d="M584,150 L604,150" class="f-a"/><path d="M604.0,150.0 L596.8,153.5 L596.8,146.5 Z" class="f-head"/><rect x="606" y="96" width="142" height="108" rx="8" class="f-acc"/><text x="677.0" y="122.0" class="f-t" text-anchor="middle">QFVPanelStore</text><text x="677.0" y="138.0" class="f-s" text-anchor="middle">memory-mapped reads</text><text x="677.0" y="155.0" class="f-s" text-anchor="middle">adjusts on read</text><text x="677.0" y="172.0" class="f-s" text-anchor="middle">member mask per day</text><text x="677.0" y="189.0" class="f-s" text-anchor="middle">picks up new versions</text></svg></figure>
+<h2 id="setup">Setup</h2>
+<pre><code class="language-bash">export ASSAY_QFV_PANEL_DIR=/srv/qfinverse/data/daily_panel   # the store's root (holds CURRENT)
+assay serve-api
+</code></pre>
+<p>The reader is vendored in <code>src/assay/data/qfv_panel</code> (format <code>qfv-daily-panel/1</code>);
+<code>scripts/sync_qfv_panel.py</code> copies it again from a QFinVerse checkout. QFinVerse
+updates the store every trading day at 21:45 New York time; Assay switches to the new
+version on its next request, and results cached for the old version are not reused.</p>
+<h2 id="universes">Universes</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Universe</th>
+<th>Members</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TOP500</code>, <code>TOP1000</code>, <code>TOP3000</code></td>
+<td>most liquid common stocks on the first trading day of each month</td>
+</tr>
+<tr>
+<td><code>SP500</code>, <code>NASDAQ100</code></td>
+<td>dated index histories, matched to QFinVerse securities</td>
+</tr>
+</tbody>
+</table></div>
+<p>The <code>TOP</code> universes rank by median dollar volume over the previous 63 trading days
+(at least 50 days traded, last close at least $5). ETFs, ADRs, preferreds, warrants,
+units and rights are left out. Membership uses only earlier data and keeps securities
+that later delisted.</p>
+<p>An evaluation covers every security that was a member at any time in the period and
+scores it only on the days it was a member. A universe read from the members on the
+last day would leave out every stock that dropped out; on NASDAQ100 over 2016–2026
+that flips the sign of low-volatility and range factors.</p>
+<h2 id="securities">Securities</h2>
+<p>Bars carry tickers only, so each security has a permanent id:</p>
+<ul>
+<li>a ticker that comes back after more than 63 trading days without a bar is a new
+security; the older one is labelled <code>TICKER~YYYY-MM</code> (for example <code>ABC~2004-03</code>);</li>
+<li>renames are one security when the MASSIVE ticker history or a shared composite FIGI
+says so (<code>FB</code> → <code>META</code>), or when a delisted and a new common stock share a CIK and
+the price carries on within 25% (<code>COH</code> → <code>TPR</code>).</li>
+</ul>
+<p>A ticker in an expression or a chart means the security that held it on the last day
+of the window.</p>
+<h2 id="corporate-actions">Corporate actions</h2>
+<p>Prices are stored as traded and adjusted when read, onto the share basis of the last
+day of the window. Only events with an ex-date inside the window are applied, so a
+backtest that ends in the past never sees a later split.</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>open high low close</code></td>
+<td>split- and dividend-adjusted (total return basis)</td>
+</tr>
+<tr>
+<td><code>volume</code></td>
+<td>split-adjusted</td>
+</tr>
+<tr>
+<td><code>transactions</code></td>
+<td>as reported</td>
+</tr>
+<tr>
+<td><code>dvol</code></td>
+<td>close × volume, as traded</td>
+</tr>
+<tr>
+<td><code>ret</code></td>
+<td>daily total return, the same in every window</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every split is checked against the prices before it is used:</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+<th>Applied</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ok</code></td>
+<td>prices jump by the split ratio on the ex-date</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>moved</code></td>
+<td>the jump is a few days off the vendor's date; the split moves there</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>no_jump</code></td>
+<td>no such jump within 10 trading days: already adjusted, or never happened</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>small</code></td>
+<td>ratio within 10% of 1:1 (stock dividends)</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table></div>
+<p>Dividends are applied as <code>1 − cash / previous close</code>. A dividend is skipped when it
+is not paid in USD, when it is more than half the price (nearly always a unit error),
+or when there is no close in the 15 days before the ex-date.</p>
+<h2 id="speed">Speed</h2>
+<p>Panels are dense float32 arrays by year, memory-mapped. <code>TOP500</code> over 2016–2026 loads
+in about 0.3 s and all of <code>TOP3000</code> over 2010–2026 in about 3 s. Six factors on
+<code>SP500</code> over ten years evaluate in about 11 s, against 54 s on the per-ticker parquet
+store.</p>

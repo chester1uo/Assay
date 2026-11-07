@@ -92,3 +92,26 @@ def test_running_request_can_be_inspected_and_retried_without_duplicate_executio
         result=future.result(timeout=10)
     assert result.json()['status']=='completed'
     assert backend.calls==1 and retry.json()['id']==result.json()['id']
+
+
+def test_workbench_inherits_account_cookie_auth_and_csrf(workbench, tmp_path, monkeypatch):
+    from assay.api import auth
+    from assay.accounts import ensure_setup_token
+    client, _, dataset = workbench
+    monkeypatch.setenv('ASSAY_ACCOUNTS', '1')
+    monkeypatch.setenv('ASSAY_STATE_DIR', str(tmp_path / 'accounts'))
+    monkeypatch.delenv('ASSAY_SECRET_KEY', raising=False)
+    auth._reset_for_tests()
+    try:
+        assert client.get('/v1/research/datasets').status_code == 401
+        response = client.post('/auth/setup', json={'token':ensure_setup_token(),
+            'username':'researcher', 'password':'correct horse battery'})
+        assert response.status_code == 200
+        assert client.get('/v1/research/datasets').status_code == 200
+        payload = {'dataset_id':dataset['id'], 'goal':'authenticated research'}
+        assert client.post('/v1/research/sessions', json=payload,
+                           headers={'Origin':'https://unrelated.example'}).status_code == 403
+        created = client.post('/v1/research/sessions', json=payload)
+        assert created.status_code == 200 and created.json()['agent'] == 'human:webui'
+    finally:
+        auth._reset_for_tests()

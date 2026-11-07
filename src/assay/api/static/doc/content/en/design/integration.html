@@ -1,0 +1,84 @@
+<h1 class="doc-title">Integrated Assay architecture</h1>
+<p>Assay combines the upstream factor computation platform with a persistent research
+workspace. Both live in this repository; QFinVerse is an optional data producer,
+not a service that must be installed for the offline research workflow.</p>
+<h2 id="responsibilities">Responsibilities</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Component</th>
+<th>Responsibility</th>
+<th>Retained implementation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Factor engine and portfolio evaluation</td>
+<td>Parse expressions, compute panels, score factors, simulate portfolios</td>
+<td>Upstream engine, vectorized operations, optional Rust kernels and OSQP/Clarabel solvers</td>
+</tr>
+<tr>
+<td>Shared factor infrastructure</td>
+<td>Canonical factor identities, stored values, novelty queries, asynchronous jobs</td>
+<td>Upstream FactorDB and its eight MCP operations</td>
+</tr>
+<tr>
+<td>Distributed execution</td>
+<td>Lease factor-computation slices to workers</td>
+<td>Upstream ADES controller, worker, heartbeat and task queue</td>
+</tr>
+<tr>
+<td>Research workspace</td>
+<td>Dataset specifications, goals, attempt budgets, hypotheses, failed evaluations, parent links, notes, manifests</td>
+<td>Persistent SQLite workspace and backend protocol</td>
+</tr>
+<tr>
+<td>Agent and human clients</td>
+<td>Choose research actions, inspect outcomes and continue sessions</td>
+<td>Reference agent, 15 research MCP operations, SDK/REST and browser workbench</td>
+</tr>
+<tr>
+<td>Application shell</td>
+<td>Authentication, navigation and documentation</td>
+<td>Upstream account/session authentication and sidebar, with the research page added</td>
+</tr>
+</tbody>
+</table></div>
+<p>The MCP server has 34 operations: 11 evaluation/library tools, eight FactorDB tools,
+and 15 research tools. HTTP MCP is mounted at <code>/mcp/</code>; each API application owns
+an independent HTTP lifecycle. Stdio remains available for local agent clients.</p>
+<h2 id="distinct-records-and-budgets">Distinct records and budgets</h2>
+<p>A FactorDB factor is a shared, canonical expression and its computed evidence. A
+research attempt records one session decision, including failure and provenance.
+Repeated attempts remain separate records even when their expressions match.
+The existing factor library remains available as well. Integrating the modules
+does not silently merge their schemas or delete historical records.</p>
+<p>The default research backend calls the in-process evaluator. It does not
+implicitly submit a FactorDB job or route a research attempt through ADES. Agents
+can discover and invoke both tool groups, but the job IDs and experiment IDs are
+distinct. FactorDB's daily compute budget applies to FactorDB jobs; the workspace
+separately enforces a per-session attempt budget. Neither is a global budget
+coordinator for all backends.</p>
+<p>Persistent research sessions also differ from the evaluator's temporary panel
+sessions. Restarting a client preserves research records, not a live conversation
+or running worker. An interrupted attempt must be inspected and explicitly
+abandoned when appropriate; ADES task leases do not automatically recover these
+research attempts.</p>
+<h2 id="authentication-and-data">Authentication and data</h2>
+<p>Research REST routes use the existing <code>get_api_key</code> dependency, inheriting service
+keys, personal API keys, account cookies and same-origin mutation checks. The
+workspace is shared among authorized callers; accounts do not create private
+per-user research stores. Manual browser writes remain labeled <code>human:webui</code>.</p>
+<p>The built-in data store and upstream QFinVerse-panel reader are retained. Local
+synthetic and prepared data remain usable without a QFinVerse installation.
+Dataset specification hashes identify configuration, not immutable physical data.</p>
+<h2 id="integration-provenance">Integration provenance</h2>
+<p>The preserved local research implementation is commit <code>871a961</code>; the upstream
+baseline is <code>103532807af5fdcbf8748d081ca953bf430a35be</code>. A backup branch,
+<code>codex/pre-upstream-integration-20261108</code>, retains the complete local state before
+integration. The integration branch is <code>codex/integrate-upstream-20261108</code>.</p>
+<p>Historical model studies retain their original source snapshots, plans and
+receipts. Integration does not rewrite their results or imply that the studies
+evaluated FactorDB, ADES or the new HTTP endpoint. New live studies must freeze
+the integrated source as a new inventory. Integration checks and the independent
+audit are retained under <code>artifacts/upstream-integration-20261108/</code>.</p>

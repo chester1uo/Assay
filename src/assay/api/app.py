@@ -16,7 +16,10 @@ House style: ``from __future__ import annotations``, type hints, concise docstri
 
 from __future__ import annotations
 
+import os
+
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +38,7 @@ from assay.service import AssayService
 __all__ = ["app", "create_app", "get_service"]
 
 logger = logging.getLogger("assay.api")
+_mcp_app_lock = threading.Lock()
 
 
 # --------------------------------------------------------------- service dep --
@@ -208,12 +212,16 @@ def create_app() -> FastAPI:
     except Exception:  # pragma: no cover
         pass
 
-    app = FastAPI(title="Assay API", version=assay.__version__)
+    mcp_app, mcp_lifespan = _mcp_http()
+    app = FastAPI(title="Assay API", version=assay.__version__, lifespan=mcp_lifespan)
 
+    # ASSAY_CORS_ORIGINS: comma-separated origins allowed to call the API from a
+    # browser (default: any origin, without credentials).
+    origins = [o.strip() for o in os.environ.get("ASSAY_CORS_ORIGINS", "").split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=origins or ["*"],
+        allow_credentials=bool(origins),
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -223,9 +231,11 @@ def create_app() -> FastAPI:
     # Routers import `get_service` from this module, so import them here (after the
     # accessor + handlers are defined) to keep a clean one-way dependency.
     from assay.api.routes import (
-        admin, combination, data_admin, factor, legacy, library, market, portfolio,
+        account, admin, ades, combination, data_admin, factor, fdb, legacy, library, market, portfolio,
         session, system, research,
     )
+
+    app.include_router(account.router, tags=["Accounts"])
 
     app.include_router(factor.router, prefix="/v1/factor", tags=["Factor"])
     app.include_router(library.router, prefix="/v1/library", tags=["Library"])
@@ -235,10 +245,16 @@ def create_app() -> FastAPI:
     app.include_router(session.router, prefix="/v1/session", tags=["Session"])
     app.include_router(research.router, prefix="/v1/research", tags=["Research"])
     app.include_router(system.router, prefix="/v1/system", tags=["System"])
+    app.include_router(fdb.router, prefix="/v1/fdb", tags=["FactorDB"])
+    app.include_router(ades.router, prefix="/v1/ades", tags=["ADES"])
     # Unlinked operations console at GET /admin (also installs the request-log
     # middleware + WARNING-level log capture it renders). Reached by URL only.
-    app.include_router(admin.router, tags=["Admin"])
-    app.include_router(data_admin.router, tags=["Admin"])
+    from fastapi import Depends
+
+    from assay.api.auth import require_admin
+
+    app.include_router(admin.router, tags=["Admin"], dependencies=[Depends(require_admin)])
+    app.include_router(data_admin.router, tags=["Admin"], dependencies=[Depends(require_admin)])
     admin.install(app)
     # Easter egg: the same SPA in a 2000s skin at GET /legacy (URL only).
     app.include_router(legacy.router, tags=["Legacy"])
@@ -246,7 +262,9 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["System"])
     async def health() -> dict:
         """Liveness probe — always cheap, never touches data."""
-        return {"status": "ok", "engine_version": assay.__version__}
+        from assay.api.build import build_info
+
+        return {"status": "ok", "engine_version": assay.__version__, "build": build_info()}
 
     # WebUI: serve the zero-build static shell at "/". Mounted LAST so the explicit
     # ``/v1/*`` routers and ``/health`` still resolve first; ``html=True`` serves
@@ -254,10 +272,110 @@ def create_app() -> FastAPI:
     # this file so it works from any CWD. Skipped if the dir is absent (e.g. a
     # backend-only checkout) so importing the app never fails.
     static_dir = Path(__file__).resolve().parent / "static"
+    _mount_doc_hub(app, static_dir / "doc")
+    if mcp_app is not None:
+        app.mount("/mcp", _McpAuth(mcp_app))
+
+    @app.get("/login", include_in_schema=False)
+    async def login_page():
+        """Sign in, sign up with an invitation (``?invite=``), reset (``?reset=``), first setup."""
+        from fastapi.responses import FileResponse
+
+        return FileResponse(static_dir / "login.html", headers={"Cache-Control": "no-cache"})
     if static_dir.is_dir():
         app.mount("/", _NoCacheStaticFiles(directory=static_dir, html=True), name="webui")
 
     return app
+
+
+def _mcp_http():
+    """The MCP server as a streamable-HTTP ASGI app for ``/mcp/`` (or ``(None, None)``).
+
+    Stateless (no per-client session state), so any worker can answer any call. The
+    host check of the MCP SDK is off: the app sits behind the reverse proxy and every
+    call is authenticated by :class:`_McpAuth`. ``ASSAY_MCP_HTTP=0`` turns it off."""
+    if os.environ.get("ASSAY_MCP_HTTP", "1") == "0":
+        return None, None
+    try:
+        from contextlib import asynccontextmanager
+
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        from assay.mcp.server import mcp
+    except Exception as exc:  # noqa: BLE001 — the API runs without the optional mcp extra
+        logger.info("MCP over HTTP is off (%s)", exc)
+        return None, None
+    with _mcp_app_lock:
+        mcp.settings.streamable_http_path = "/"
+        mcp.settings.stateless_http = True
+        mcp.settings.transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+        # FastMCP caches a one-shot HTTP manager on the shared tool server. Each
+        # create_app() needs its own manager, including concurrent app instances.
+        # Capture it here so later factories cannot replace a running app's lifespan.
+        mcp._session_manager = None
+        asgi = mcp.streamable_http_app()
+        manager = mcp.session_manager
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        async with manager.run():
+            yield
+
+    return asgi, lifespan
+
+
+class _McpAuth:
+    """Authenticate ``/mcp/`` calls like the REST API (session cookie, personal or service key)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            from assay.api.auth import _presented, auth_enabled, resolve_user
+
+            request = Request(scope, receive)
+            user = None
+            if auth_enabled():
+                try:
+                    user = resolve_user(request, _presented(request.headers.get("x-api-key"),
+                                                            request.headers.get("authorization")))
+                except StarletteHTTPException:
+                    user = None
+                if user is None:
+                    resp = JSONResponse({"error": "sign in or send an API key (X-API-Key or Bearer)"}, status_code=401,
+                                        headers={"WWW-Authenticate": "Bearer"})
+                    await resp(scope, receive, send)
+                    return
+            scope.setdefault("state", {})["user"] = user
+        await self.app(scope, receive, send)
+
+
+def _mount_doc_hub(app: FastAPI, doc_dir: Path) -> None:
+    """Doc Hub at ``/doc/``: its own files, else its page shell (paths like ``/doc/guide/cli``).
+
+    The pages are pre-rendered from ``docs/`` by ``scripts/build_doc_hub.py``.
+    """
+    from fastapi.responses import FileResponse, RedirectResponse
+
+    root = doc_dir.resolve()
+    shell = root / "index.html"
+    headers = {"Cache-Control": "no-cache"}
+
+    @app.get("/doc", include_in_schema=False)
+    async def doc_root() -> RedirectResponse:
+        return RedirectResponse("/doc/", status_code=308)
+
+    @app.get("/doc/{path:path}", include_in_schema=False)
+    async def doc_page(path: str):
+        target = (root / path).resolve()
+        if path and target.is_file() and root in target.parents:
+            return FileResponse(target, headers=headers)
+        if Path(path).suffix and Path(path).suffix != ".html":
+            raise StarletteHTTPException(status_code=404)
+        if not shell.is_file():
+            raise StarletteHTTPException(status_code=404)
+        return FileResponse(shell, headers=headers)
 
 
 class _NoCacheStaticFiles(StaticFiles):

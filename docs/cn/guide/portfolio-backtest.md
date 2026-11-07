@@ -53,7 +53,7 @@ pf = assay.backtest_portfolio("cs_rank(ts_corr(close, volume, 20))", cfg)
 | `equal` | 在合格集合上等权 |
 | `signal_prop` | 与（归一化后的）信号成比例 |
 | `quintile` / `decile` | 顶部/底部分桶做多/做空 |
-| `mv` | 均值-方差，经由 scipy SLSQP + numpy Ledoit-Wolf 收缩（不用 cvxpy/sklearn） |
+| `mv` | 均值-方差，经由 OSQP 和 Clarabel（未安装时用 scipy SLSQP）+ numpy Ledoit-Wolf 收缩（不用 cvxpy/sklearn） |
 | `risk_parity` | 逆波动率 / 等风险贡献（纯多头） |
 
 ## 关键配置分组

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="fig" viewBox="0 0 760 330" width="760" height="330" role="img" aria-label="缓存分层，自上而下查找"><style>
+.f-box{fill:var(--fig-box,#FFFFFF);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-group{fill:var(--fig-group,#F4F6FA);stroke:var(--fig-line,#CBD0DC);stroke-width:1}
+.f-acc{fill:var(--fig-accent-bg,#E3F6F2);stroke:var(--fig-accent,#00A38B);stroke-width:1.2}
+.f-warm{fill:var(--fig-warm-bg,#FFF0E6);stroke:var(--fig-warm,#E8590C);stroke-width:1.2}
+.f-gold{fill:var(--fig-gold-bg,#FDF4DF);stroke:var(--fig-gold,#B7791F);stroke-width:1.2}
+.f-t{fill:var(--fig-text,#1A1D2E);font:600 13px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-h{fill:var(--fig-muted,#5A6477);font:600 10.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.f-s{fill:var(--fig-muted,#5A6477);font:400 11.5px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-m{fill:var(--fig-text,#1A1D2E);font:500 11.5px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ms{fill:var(--fig-muted,#5A6477);font:400 11px 'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace}
+.f-ta{fill:var(--fig-accent,#00A38B);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tw{fill:var(--fig-warm,#E8590C);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-tg{fill:var(--fig-gold,#B7791F);font:600 11px 'DM Sans','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif}
+.f-a{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4}
+.f-ad{fill:none;stroke:var(--fig-arrow,#8A93A6);stroke-width:1.4;stroke-dasharray:4 3}
+.f-head{fill:var(--fig-arrow,#8A93A6)}
+.f-dot-ok{fill:var(--fig-accent,#00A38B)} .f-dot-part{fill:var(--fig-gold,#B7791F)} .f-dot-plan{fill:none;stroke:var(--fig-muted,#5A6477);stroke-width:1.2}
+@media (prefers-color-scheme:dark){svg.fig{--fig-box:#1F232E;--fig-line:#3A3F4C;--fig-group:#171B25;--fig-text:#D7DAE1;--fig-muted:#8A8F9C;--fig-arrow:#6E7484;--fig-accent:#00D6B3;--fig-accent-bg:#11302C;--fig-warm:#FF7A3D;--fig-warm-bg:#3A2418;--fig-gold:#E3B341;--fig-gold-bg:#352B14}}
+</style><rect x="110" y="16" width="634" height="86" rx="10" class="f-acc"/><text x="130" y="42" class="f-t" text-anchor="start">L2 因子缓存 · 磁盘 Parquet（每个因子约 1 MB）</text><text x="130" y="62" class="f-s" text-anchor="start">键：hash(表达式, 股票池, 区间, 复权版本)</text><text x="130" y="78" class="f-s" text-anchor="start">存完整的 T × N 因子矩阵</text><text x="130" y="94" class="f-s" text-anchor="start">复权版本变化时失效</text><circle cx="62" cy="59" r="22" class="f-acc"/><text x="62" y="64" class="f-t" text-anchor="middle">L2</text><rect x="110" y="116" width="634" height="86" rx="10" class="f-box"/><text x="130" y="142" class="f-t" text-anchor="start">L1 算子缓存 · 内存 arena 块，float32</text><text x="130" y="162" class="f-s" text-anchor="start">键：(算子, 字段, 窗口, 市场, 股票池, 区间)</text><text x="130" y="178" class="f-s" text-anchor="start">存中间结果，如 ts_mean(close, 20)</text><text x="130" y="194" class="f-s" text-anchor="start">淘汰：LFU + EMA 热度</text><circle cx="62" cy="159" r="22" class="f-box"/><text x="62" y="164" class="f-t" text-anchor="middle">L1</text><rect x="110" y="216" width="634" height="86" rx="10" class="f-group"/><text x="130" y="242" class="f-t" text-anchor="start">增量维护</text><text x="130" y="262" class="f-s" text-anchor="start">每日追加：线性滑窗算子 O(1) 更新</text><text x="130" y="278" class="f-s" text-anchor="start">按拓扑顺序更新依赖项</text><circle cx="62" cy="259" r="22" class="f-group"/><text x="62" y="264" class="f-t" text-anchor="middle">Δ</text><path d="M62,65 L62,137" class="f-a"/><path d="M62.0,137.0 L58.5,129.8 L65.5,129.8 Z" class="f-head"/><path d="M62,165 L62,237" class="f-a"/><path d="M62.0,237.0 L58.5,229.8 L65.5,229.8 Z" class="f-head"/><text x="20" y="104" class="f-ms" text-anchor="start">未命中</text><text x="20" y="204" class="f-ms" text-anchor="start">未命中</text></svg>

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in · Assay</title>
+  <link rel="icon" type="image/svg+xml" href="/brand/qfinverse-app-icon.svg" />
+  <script>
+    (function () {
+      var m = "system";
+      try { m = localStorage.getItem("qfv-theme") || "system"; } catch (e) {}
+      var dark = m === "dark" || (m === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.classList.toggle("dark", dark);
+    })();
+  </script>
+  <link rel="stylesheet" href="/fonts.css" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    body.auth { min-height: 100vh; height: auto; display: flex; flex-direction: column; background: var(--bg); }
+    .auth-top { display: flex; align-items: center; justify-content: space-between; height: 56px;
+      padding: 0 max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px)); }
+    .auth-brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); }
+    .auth-brand:hover { text-decoration: none; }
+    .auth-brand .lockup { height: 30px; }
+    .auth-lang { border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 13px; cursor: pointer;
+      height: 32px; padding: 0 10px; border-radius: var(--radius-btn); }
+    .auth-lang:hover { background: var(--accent-bg); color: var(--text); }
+    .auth-main { flex: 1 1 auto; display: grid; place-items: center; padding: 24px 16px 64px; }
+    .auth-card { width: min(400px, 100%); background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 32px 28px; display: grid; gap: 18px; }
+    .auth-card h1 { font-family: var(--font-display); font-size: 24px; font-weight: 600; letter-spacing: -0.015em; }
+    .auth-sub { margin: 4px 0 0; font-size: 13.5px; color: var(--text-muted); line-height: 1.5; }
+    .auth-form { display: grid; gap: 14px; }
+    .auth-field { display: grid; gap: 6px; }
+    .auth-field span { font-size: 12.5px; font-weight: 500; color: var(--text); }
+    .auth-field small { font-size: 12px; color: var(--text-muted); }
+    .auth-field .input { height: 38px; font-size: 14px; padding: 0 12px; width: 100%; }
+    .auth-form .btn { height: 40px; font-size: 14px; width: 100%; margin-top: 4px; }
+    .auth-err { min-height: 1.2em; font-size: 13px; color: var(--danger); }
+    .auth-note { font-size: 12.5px; color: var(--text-muted); text-align: center; line-height: 1.5; }
+    .auth-foot { display: flex; justify-content: center; gap: 18px; font-size: 12.5px; padding: 16px; }
+    .auth-foot a { color: var(--text-muted); }
+    .auth-foot a:hover { color: var(--text); }
+  </style>
+</head>
+<body class="auth">
+  <header class="auth-top">
+    <a class="auth-brand" href="/">
+      <img class="lockup lockup-light" src="/brand/assay-lockup-light.svg" alt="ASSAY" /><img class="lockup lockup-dark" src="/brand/assay-lockup-dark.svg" alt="ASSAY" />
+    </a>
+    <button type="button" class="auth-lang" id="lang">中文</button>
+  </header>
+  <main class="auth-main">
+    <section class="auth-card" id="card" aria-live="polite"></section>
+  </main>
+  <footer class="auth-foot">
+    <a href="/doc/" id="foot-docs">Docs</a>
+    <a href="https://dashboard.qfinverse.com" id="foot-qfv" rel="noopener">QFinVerse</a>
+  </footer>
+  <script type="module" src="/js/login.js"></script>
+</body>
+</html>

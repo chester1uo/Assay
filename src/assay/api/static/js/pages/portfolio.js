@@ -1,3 +1,4 @@
+import { P } from "../palette.js";
 // pages/portfolio.js — Portfolio Backtest (portfolio design-doc Phase 5).
 //
 // Turns a factor expression into an achievable *net* return: builds a portfolio,
@@ -77,13 +78,13 @@ function injectStyle() {
 .pf-tab { border: none; background: none; cursor: pointer; font-size: 13px; padding: 4px 10px;
   border-radius: var(--radius-badge); color: var(--text-muted); font-weight: 500; }
 .pf-tab:hover { background: var(--gray-1); color: var(--text); }
-.pf-tab.is-active { background: var(--blue, #2D5BE3); color: #fff; }
+.pf-tab.is-active { background: var(--blue, #2D5BE3); color: var(--on-accent); }
 .pf-kv { display: grid; grid-template-columns: auto 1fr; gap: 4px var(--sp-3); font-size: 13px; }
 .pf-kv dt { color: var(--text-muted); }
 .pf-kv dd { margin: 0; font-family: var(--font-mono); }
 .pf-json { font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; word-break: break-word;
   max-height: 360px; overflow: auto; background: var(--gray-1); padding: var(--sp-2); border-radius: var(--radius-badge); margin: var(--sp-2) 0 0; }
-.pf-err { border: 1px solid #E8B5AE; background: #FCF4F3; border-radius: var(--radius-card); padding: var(--sp-3); }
+.pf-err { border: 1px solid var(--danger-border); background: var(--danger-bg); border-radius: var(--radius-card); padding: var(--sp-3); }
 .pf-err-title { font-weight: 600; color: var(--red); }
 .pf-latency { font-family: var(--font-mono); font-size: 12px; }
 .pf-hint { font-size: 12px; color: var(--text-muted); }
@@ -472,7 +473,7 @@ export function render(root, ctx) {
       if (i === 0 || !Number.isFinite(v) || !Number.isFinite(nav[i - 1]) || nav[i - 1] === 0) return NaN;
       return v / nav[i - 1] - 1;
     });
-    const series = [{ name: ctx.t("pf.dailyReturn"), values: rets, color: "#2D5BE3" }];
+    const series = [{ name: ctx.t("pf.dailyReturn"), values: rets, color: P.primary }];
     body.appendChild(wrap(ctx.charts.lineChart({ series, dates, height: 280, width: 900,
       interactive: true, valueFmt: (v) => ctx.pct(v, 2) })));
   }
@@ -483,9 +484,9 @@ export function render(root, ctx) {
     const dates = r.nav_dates || [];
     if (!nav.some(Number.isFinite) || !(capital > 0)) { body.appendChild(empty(ctx, ctx.t("pf.noNav"))); return; }
     const values = nav.map((v) => (Number.isFinite(v) ? v * capital : NaN));
-    const series = [{ name: ctx.t("pf.portfolioValue"), values, color: "#0E8A7E" }];
+    const series = [{ name: ctx.t("pf.portfolioValue"), values, color: P.second }];
     const bench = r.benchmark_series || [];
-    if (bench.some(Number.isFinite)) series.push({ name: ctx.t("pf.benchmark"), values: bench.map((v) => (Number.isFinite(v) ? v * capital : NaN)), color: "#8892AA" });
+    if (bench.some(Number.isFinite)) series.push({ name: ctx.t("pf.benchmark"), values: bench.map((v) => (Number.isFinite(v) ? v * capital : NaN)), color: P.muted });
     const fin = values.filter(Number.isFinite);
     const peak = fin.length ? Math.max(...fin) : capital;
     const end = fin.length ? fin[fin.length - 1] : capital;
@@ -546,9 +547,9 @@ export function render(root, ctx) {
       body.appendChild(empty(ctx, ctx.t("pf.noNav")));
       return;
     }
-    const series = [{ name: ctx.t("pf.strategy"), values: nav, color: "#2D5BE3" }];
+    const series = [{ name: ctx.t("pf.strategy"), values: nav, color: P.primary }];
     const bench = r.benchmark_series || [];
-    if (bench.some(Number.isFinite)) series.push({ name: ctx.t("pf.benchmark"), values: bench, color: "#8892AA" });
+    if (bench.some(Number.isFinite)) series.push({ name: ctx.t("pf.benchmark"), values: bench, color: P.muted });
     body.appendChild(ctx.charts.legend(series));
     body.appendChild(wrap(ctx.charts.lineChart({ series, dates, height: 280, width: 900,
       yDomain: tightDomain(series.map((s) => s.values)), interactive: true, valueFmt: (v) => ctx.fmt(v, 3) })));
@@ -560,7 +561,7 @@ export function render(root, ctx) {
     const keys = Object.keys(mr).sort();
     const values = keys.map((k) => Number(mr[k]));
     if (!keys.length || !values.some(Number.isFinite)) { body.appendChild(empty(ctx, ctx.t("pf.noMonthly"))); return; }
-    const colors = values.map((v) => (v >= 0 ? "#1E7B4B" : "#C0392B"));
+    const colors = values.map((v) => (v >= 0 ? P.up : P.down));
     const labels = keys.map((k) => k.slice(2)); // 'YYYY-MM' -> 'YY-MM'
     body.appendChild(wrap(ctx.charts.barChart({ labels, values, colors, dates: keys, height: 280, width: 900,
       interactive: true, valueFmt: (v) => ctx.pct(v, 2) })));

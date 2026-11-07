@@ -1,0 +1,96 @@
+<h1 class="doc-title">Data Pipeline</h1>
+<p>Assay transforms a <strong>local mirror</strong> of the <strong>MASSIVE</strong> US-equity dataset into point-in-time
+parquet stores. Nothing is downloaded — the pipeline reads pre-downloaded files from disk. The
+data layer is the correctness foundation: every read takes an explicit <code>as_of_date</code>, so
+look-ahead bias is structurally impossible.</p>
+<blockquote>
+<p>When <code>ASSAY_QFV_PANEL_DIR</code> is set (as on assay.qfinverse.com), US universes read the
+QFinVerse daily panel instead and this pipeline is not needed for US data. See
+<a href="/doc/guide/qfv-data">US data from QFinVerse</a>. A-share and Hong Kong data still come from
+<a href="/doc/guide/tushare">Tushare</a>.</p>
+</blockquote>
+<h2 id="local-source">Local source</h2>
+<p><code>MASSIVE_DATA_DIR</code> (default <code>/data/massive_data</code>) is the root of the local mirror, produced
+out-of-band by the <code>downloader_*</code> scripts. Expected layout:</p>
+<pre><code>$MASSIVE_DATA_DIR/
+├── us_stocks_sip/day_aggs_v1/{YYYY}/{MM}/{YYYY-MM-DD}.parquet   # daily OHLCV bars
+├── corporate_actions/splits/{TICKER}.jsonl                      # one split record per line
+└── corporate_actions/dividends/{TICKER}.jsonl                   # one dividend record per line
+</code></pre>
+<p>Each day-aggregate parquet has the MASSIVE flat-file columns
+<code>ticker, volume, open, close, high, low, window_start, transactions</code> (<code>window_start</code> is the
+Unix-nanosecond start of the trading-day window in US/Eastern).</p>
+<h2 id="stores">Stores</h2>
+<p>Under <code>ASSAY_DATA_DIR</code> (default <code>data/</code>):</p>
+<pre><code>&lt;data_dir&gt;/
+├── price_raw/market=US/year=YYYY/month=MM/price_raw.parquet   # unadjusted OHLCV + transactions
+├── adj_events/market=US/adj_events.parquet                    # splits &amp; dividends (corp actions)
+└── universe_snapshots/market=US/universe_snapshots.parquet    # PIT index membership
+</code></pre>
+<p>The MASSIVE day-aggregate source provides <strong>open/high/low/close/volume/transactions</strong> — there
+is <strong>no <code>vwap</code></strong>, and <code>market_cap</code> is not ingested.</p>
+<h2 id="one-shot-prepare">One-shot prepare</h2>
+<pre><code class="language-bash">python -m assay.cli prepare-nasdaq100 --start 2025-01-01 --end 2026-06-09
+</code></pre>
+<p>Runs three stages in order, into the configured data dir:</p>
+<ol>
+<li><strong>universe</strong> — NASDAQ-100 PIT constituent snapshots (the survivorship-bias-free <em>union</em> of
+every ticker that was a member at any point in the range; built from vendored YAML, no source
+files needed).</li>
+<li><strong>corp-actions</strong> — splits &amp; dividends read from the local <code>corporate_actions/</code> JSONL files
+(best-effort: a failure here no longer aborts the price transfer).</li>
+<li><strong>prices</strong> — daily OHLCV from the local day-aggregate parquet, filtered to the universe,
+written as monthly partitions.</li>
+</ol>
+<p>Flags: <code>--skip-universe</code>, <code>--skip-corp-actions</code>, <code>--skip-prices</code>.</p>
+<h2 id="data-manager-webui-api">Data Manager (WebUI / API)</h2>
+<p>The WebUI <strong>Data</strong> tab (and the <code>/v1/admin/*</code> API) drives the whole data layer without the CLI:</p>
+<ul>
+<li><strong>Keys &amp; Dirs</strong> — configure the MASSIVE S3 credentials (US), the Tushare token + API endpoint (CN/HK), and the
+data dirs; <strong>Test connection</strong> lists the datasets your S3 key can read / validates the token.
+Secrets are stored masked in a git-ignored <code>.assay.config.json</code>.</li>
+<li><strong>Data Setup</strong> — run jobs per market with <code>mode</code>:
+<ul>
+<li><code>init</code> — full history (download + ingest);</li>
+<li><code>update</code> — incremental download + ingest (CN and HK fetch <strong>by trade-date</strong>, all symbols per
+call, so a daily refresh is a handful of API calls, then appends to the raw files);</li>
+<li><code>ingest</code> — <strong>RAW→ASSAY only</strong>, no download (when the raw mirror is already populated).</li>
+<li>An <strong>auto-update schedule</strong> (per market, a daily time) queues <code>update</code> jobs automatically.</li>
+</ul>
+</li>
+<li><strong>Data Status</strong> — per-market cards showing both <strong>RAW</strong> (source: latest date, size, dir) and
+<strong>ASSAY</strong> (store: latest date, trading days, size, dir), plus days-behind and in-sync.</li>
+</ul>
+<p>Jobs run one-at-a-time in the background with a live progress bar and log. For adjustment
+semantics (splits/dividends, point-in-time), see <a href="/doc/guide/data-and-adjustment">Data &amp; Adjustment</a>
+(<a href="/doc/guide/data-and-adjustment">中文</a>).</p>
+<h2 id="individual-stages">Individual stages</h2>
+<pre><code class="language-bash">python -m assay.cli universe     --index NASDAQ100 --start 2025-01-01 --end 2026-06-09
+python -m assay.cli corp-actions --start 2025-01-01 --end 2026-06-09
+python -m assay.cli prices       --start 2025-01-01 --end 2026-06-09
+python -m assay.cli discover                         # show the local source layout (sanity check)
+</code></pre>
+<h2 id="inspect-verify">Inspect &amp; verify</h2>
+<pre><code class="language-bash">python -m assay.cli status                                       # row counts, date range, partitions
+python -m assay.cli verify --start 2025-06-01 --end 2025-06-30 --adj split   # read a PIT panel
+</code></pre>
+<p><code>--adj</code> is <code>none | split | total</code> (alias <code>forward</code>). Adjustment uses only corporate actions
+known as-of the query date.</p>
+<h2 id="separate-data-folders">Separate data folders</h2>
+<p><code>ASSAY_DATA_DIR</code> selects the active store, so you can keep multiple datasets side by side and
+the loader/engine set up a fresh folder automatically:</p>
+<pre><code class="language-bash">ASSAY_DATA_DIR=data_2025_2026h1 python -m assay.cli prepare-nasdaq100 --start 2025-01-01 --end 2026-06-09
+ASSAY_DATA_DIR=data_2025_2026h1 python -m assay.cli serve-api          # engine uses that folder
+</code></pre>
+<p>Set it permanently in <code>.env</code> (<code>ASSAY_DATA_DIR=data_2025_2026h1</code>). Folders matching <code>data*/</code> are
+git-ignored.</p>
+<h2 id="known-data-caveats">Known data caveats</h2>
+<ul>
+<li><strong>No <code>adj_events</code> ⇒ unadjusted splits.</strong> If the corp-actions stage was skipped or the local
+<code>corporate_actions/</code> tree is missing, the folder has no <code>adj_events</code>, so <code>adj='split'</code> is a
+no-op and real stock splits appear as large single-day &quot;returns&quot; that pollute factor/portfolio
+results. Backfill: <code>python -m assay.cli corp-actions --start ... --end ...</code>.</li>
+<li><strong><code>vwap</code> is unavailable</strong> — factor expressions referencing <code>vwap</code> (and <code>market_cap</code>/<code>cap</code>)
+cannot run on ingested data; ~52 of the 101 Alpha-101 factors run on OHLCV alone.</li>
+</ul>
+<p>See the data-layer design in <a href="/doc/design/engineering">engineering.md</a> §3.</p>
