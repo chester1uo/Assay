@@ -1,5 +1,8 @@
 # MCP Server
 
+服务现有 **26 个工具**，含 15 个后端发现、持久数据集、研究会话与实验工具。
+使用流程与恢复语义见 [Agent 研究指南](agent-research.md)。
+
 MCP server 将 Assay 的 evaluate→library 循环暴露为 Model Context Protocol 工具，供 LLM
 agent 调用以驱动自主的 alpha 挖掘。基于高层的 **FastMCP** API 构建
 （[`src/assay/mcp/server.py`](../../../src/assay/mcp/server.py)）。
@@ -14,7 +17,7 @@ python -m assay.cli serve-mcp --transport sse --port 8001   # SSE/HTTP (remote a
 模块导入时不需要凭证；服务底层的数据存储是惰性构建的，因此
 只有触及价格数据的工具才需要 MASSIVE 凭证。
 
-## 工具（11 个）
+## 评估与因子库工具（11 个）
 
 | Tool | Purpose |
 |---|---|

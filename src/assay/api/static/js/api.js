@@ -50,7 +50,7 @@ async function parseError(res) {
   });
 }
 
-async function request(method, path, { body, query, signal } = {}) {
+async function request(method, path, { body, query, signal, raw = false } = {}) {
   let url = path;
   if (query) {
     const qs = new URLSearchParams();
@@ -69,6 +69,7 @@ async function request(method, path, { body, query, signal } = {}) {
   const res = await fetch(url, init);
   if (!res.ok) throw await parseError(res);
   if (res.status === 204) return null;
+  if (raw) return res.text();
   const ct = res.headers.get("content-type") || "";
   if (ct.includes("application/json")) return res.json();
   return res.text();
@@ -81,6 +82,14 @@ export class ApiClient {
 
   _p(path) {
     return this.base + path;
+  }
+
+  researchManifest(sessionId) {
+    return request("GET", this._p("/v1/research/sessions/" + encodeURIComponent(sessionId) + "/manifest"), {raw: true});
+  }
+
+  research(path, body) {
+    return request(body === undefined ? "GET" : "POST", this._p("/v1/research" + path), { body });
   }
 
   // ---- system / health -----------------------------------------------------

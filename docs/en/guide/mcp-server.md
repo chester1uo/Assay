@@ -1,5 +1,8 @@
 # MCP Server
 
+The server now has **26 tools**, including 15 durable backend/dataset/session/experiment
+tools. See the [agent research guide](agent-research.md) for their workflow and recovery semantics.
+
 The MCP server exposes Assay's evaluate→library loop as Model Context Protocol tools that LLM
 agents call to drive autonomous alpha mining. Built on the high-level **FastMCP** API
 ([`src/assay/mcp/server.py`](../../../src/assay/mcp/server.py)).
@@ -14,7 +17,7 @@ python -m assay.cli serve-mcp --transport sse --port 8001   # SSE/HTTP (remote a
 The module imports with no credentials; the data store under the service is built lazily, so
 only tools that touch price data need MASSIVE creds.
 
-## Tools (11)
+## Evaluation and library tools (11)
 
 | Tool | Purpose |
 |---|---|

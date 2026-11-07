@@ -224,7 +224,7 @@ def create_app() -> FastAPI:
     # accessor + handlers are defined) to keep a clean one-way dependency.
     from assay.api.routes import (
         admin, combination, data_admin, factor, legacy, library, market, portfolio,
-        session, system,
+        session, system, research,
     )
 
     app.include_router(factor.router, prefix="/v1/factor", tags=["Factor"])
@@ -233,6 +233,7 @@ def create_app() -> FastAPI:
     app.include_router(market.router, prefix="/v1/market", tags=["Market"])
     app.include_router(portfolio.router, prefix="/v1/portfolio", tags=["Portfolio"])
     app.include_router(session.router, prefix="/v1/session", tags=["Session"])
+    app.include_router(research.router, prefix="/v1/research", tags=["Research"])
     app.include_router(system.router, prefix="/v1/system", tags=["System"])
     # Unlinked operations console at GET /admin (also installs the request-log
     # middleware + WARNING-level log capture it renders). Reached by URL only.

@@ -162,6 +162,18 @@ class AssayService:
         # onto the live config, so a customised store takes effect at startup.
         self.apply_system_config()
 
+    @property
+    def research(self):
+        """Durable agent research workspace, separate from in-memory panel sessions."""
+        from assay.research import AssayBackend, ResearchWorkspace
+
+        if not hasattr(self, "_research"):
+            self._research = ResearchWorkspace(
+                self.config.data_dir / "research" / "workspace.sqlite3",
+                {"assay": AssayBackend(self)},
+            )
+        return self._research
+
     # ----------------------------------------------------- system settings -----
     def apply_system_config(self) -> dict:
         """Apply the admin ``system`` settings onto the live :class:`AssayConfig`.

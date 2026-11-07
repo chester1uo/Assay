@@ -26,25 +26,9 @@ from assay.api.app import get_service
 from assay.api.auth import get_api_key
 from assay.api.models import BatchRequest, BatchResponse, EvaluateRequest
 from assay.engine import detect_dialect, iter_fields, iter_ops, lint, parse
-from assay.engine.ast import FieldNode, LitNode, OpNode
+from assay.engine.ast import ast_to_dict as _ast_to_dict
 
 router = APIRouter()
-
-
-def _ast_to_dict(node) -> Any:
-    """Render the unified AST as a compact, JSON-serialisable nested structure.
-
-    ``OpNode`` -> ``{"op": name, "args": [...]}``; ``FieldNode`` -> ``{"field": name}``;
-    ``LitNode`` -> ``{"lit": value}``. Used by ``/lint`` so the editor can show the
-    parsed tree without a round-trip through the numeric core.
-    """
-    if isinstance(node, OpNode):
-        return {"op": node.op, "args": [_ast_to_dict(c) for c in node.children]}
-    if isinstance(node, FieldNode):
-        return {"field": node.name}
-    if isinstance(node, LitNode):
-        return {"lit": node.value}
-    return str(node)
 
 
 def _json_safe(obj: Any) -> Any:

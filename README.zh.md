@@ -2,8 +2,11 @@
 
 [English](README.md) · **简体中文**
 
-Assay 是一个高性能、点对点（point-in-time）正确的因子回测引擎，面向 LLM 智能体驱动的
-Alpha 挖掘。在同一套引擎之上，它提供四种接入方式——Python SDK、REST API（支持 SSE 流式）、
+**面向自主 Alpha 因子研究的 Agent-Native 框架。**
+
+Assay 为外部研究 Agent 提供结构化工具、持久研究会话与实验记录，底层复用日频因子评估引擎。
+Agent 自行选择模型和搜索策略；工作区跨重启保存数据集设置、假设、失败尝试、决策笔记和实验谱系，
+支持不同 Agent 接续研究。在同一套引擎之上，它提供四种接入方式——Python SDK、REST API（支持 SSE 流式）、
 面向智能体的 MCP 服务，以及零安装的 WebUI——外加完整的 **组合回测（portfolio backtest）**
 模块和 **因子合成（factor combination）** 工作区。
 
@@ -11,6 +14,20 @@ Alpha 挖掘。在同一套引擎之上，它提供四种接入方式——Pytho
 （沪深 300 / 500 / 1000，数据源 Tushare）与 **港股**（HK100，数据源 Tushare）。原始（RAW）供应商数据既可以由内置的
 **数据管理器（Data Manager，WebUI）** 下载并保持同步，也可以从本地镜像导入——详见
 [数据流水线](docs/cn/guide/data-pipeline.md) 指南。
+
+### Agent-Native 研究工作区
+
+- **Dataset：** 固定股票池、读取/评分区间、交易日、执行设置和表达式约束。
+- **持久 Session：** 使用 SQLite 保存目标、笔记、尝试历史和评估次数预算。
+- **Experiment：** 成功和失败均独立保存，支持父子修订关系和配置一致性比较。
+- **MCP：** 共 26 个工具，包含 15 个 backend/dataset/session/experiment 工具，与 SDK 共用研究状态。
+- **后端接口：** 通过 Python 协议接入其他评估器，研究状态不绑定特定 LLM。
+
+详见 [Agent 研究指南](docs/cn/guide/agent-research.md)。规划循环由外部 Agent 驱动，Assay 执行并记录
+单次实验。数据集注册固定的是评估配置，不冻结实际行情，也不代表已通过样本外验证。
+
+
+可直接运行 [离线演示与参考 Agent](docs/cn/guide/reference-agent.md)。
 
 ## 📚 文档
 
@@ -293,3 +310,5 @@ python scripts/run_tests.py engine     # 一个分组
 python scripts/run_tests.py diagnostics # 一个模块
 python scripts/run_tests.py engine -k corr -x   # 额外参数透传
 ```
+
+[研究工作台](docs/cn/guide/research-workbench.md) — 持久研究会话、实验来源关系与证据查看。

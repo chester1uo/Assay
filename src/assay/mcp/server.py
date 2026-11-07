@@ -10,8 +10,8 @@ would get from the Python SDK (architecture §1, "one in-process service").
 Design (architecture §6):
 - High-level :class:`mcp.server.fastmcp.FastMCP` (decorator tools; supports the
   ``stdio`` default plus SSE / streamable-HTTP for remote agents — §6.1).
-- Eight tools (§6.2) cover the full loop: evaluate, batch, and the five library
-  operations plus a system-status probe.
+- Eleven evaluation/library tools are complemented by fifteen durable research tools
+  for datasets, sessions, notes, experiments, comparisons and interruption recovery.
 - Tool descriptions are **agent-actionable**: they spell out the dual qlib /
   Python syntax and steer the agent toward ``assay_batch`` over a serial
   ``assay_evaluate`` loop (§6.7 typical agent loop).
@@ -110,7 +110,9 @@ _EVALUATE_DESC = (
     "Evaluate a quantitative alpha factor expression and return a structured "
     "FactorReport: IC, RankIC, ICIR/RankICIR, ic_by_horizon, decay half-life, "
     "turnover, redundancy_score, lookahead detection and a natural-language "
-    "suggestion. Accepts BOTH dialects, which parse to the same factor: qlib "
+    "suggestion. The automatic redundancy_score is currently a placeholder; use "
+    "assay_library_correlation for a measured similarity comparison. "
+    "Accepts BOTH dialects, which parse to the same factor: qlib "
     "syntax (e.g. Corr($close,$volume,20), Ref($close,5)) and Python syntax "
     "(e.g. ts_corr(close,volume,20), ts_delay(close,5)). When evaluating MANY "
     "expressions, call assay_batch instead of looping this tool — batch shares "
@@ -203,8 +205,9 @@ def assay_batch(
     ),
 )
 def assay_lint(expr: str) -> dict[str, Any]:
-    """Parse-only diagnostics: ``{dialect, canonical, fields, operators, diagnostics}``."""
+    """Parse-only diagnostics plus a JSON AST for window/lookback policy checks."""
     from assay.engine import detect_dialect, iter_fields, iter_ops, lint, parse
+    from assay.engine.ast import ast_to_dict
 
     diagnostics = lint(expr).to_dict()
     dialect = detect_dialect(expr)
@@ -213,13 +216,16 @@ def assay_lint(expr: str) -> dict[str, Any]:
         canonical = str(node)
         fields = sorted(iter_fields(node))
         operators = sorted(iter_ops(node))
+        ast = ast_to_dict(node)
     except Exception:
         canonical, fields, operators = None, [], []
+        ast = None
     return {
         "dialect": dialect,
         "canonical": canonical,
         "fields": fields,
         "operators": operators,
+        "ast": ast,
         "diagnostics": diagnostics,
     }
 
@@ -323,8 +329,8 @@ def assay_portfolio_backtest(
     description=(
         "List factors already in the Assay library, with optional filters. Call "
         "this BEFORE generating new factors to see what already exists and how "
-        "good it is — redundancy_score tells you how similar a candidate is to "
-        "the existing set, so you can avoid duplicating known alphas. Returns "
+        "good it is. Use assay_library_correlation to measure similarity; the "
+        "automatic redundancy_score is not currently computed. Returns "
         "compact summary rows sorted descending by sort_by."
     ),
 )
@@ -510,6 +516,12 @@ def assay_system_status() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Durable research tools share the same service as SDK and existing MCP tools.
+from assay.mcp.research import register_research_tools
+
+register_research_tools(mcp, get_service)
+
+
 # Entry point (architecture §6.5)
 # ---------------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> None:

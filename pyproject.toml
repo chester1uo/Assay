@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "assay"
 version = "0.1.0"
-description = "Assay — high-performance factor backtesting engine. Data layer (MASSIVE, US equities) + dual-syntax factor execution engine."
+description = "Assay — agent-native alpha factor research with durable sessions, dataset specifications, experiment records and MCP tools."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
@@ -23,6 +23,7 @@ perf = [
     "scipy>=1.13",
 ]
 api = [
+    "scipy>=1.13",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "sse-starlette>=2.1",
@@ -48,6 +49,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "assay.data.universe" = ["data/*.yaml"]
+"assay.api" = ["static/*", "static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -2,8 +2,13 @@
 
 **English** · [简体中文](README.zh.md)
 
-Assay is a high-performance, point-in-time-correct factor backtesting engine built for LLM
-agent-driven alpha mining. On top of a shared engine it exposes four surfaces — a Python SDK,
+**An Agent-Native Framework for Autonomous Alpha Factor Research.**
+
+Assay gives external research agents structured tools, durable research sessions and
+recorded factor experiments on top of a shared daily factor evaluation engine. Agents
+choose their own models and search strategies; the workspace retains dataset settings,
+hypotheses, failures, decisions and experiment lineage across restarts and agent handoffs.
+It exposes four surfaces — a Python SDK,
 a REST API (with SSE streaming), an MCP server for agents, and a zero-install WebUI — plus a
 full **portfolio backtest** module and a **factor-combination** workspace.
 
@@ -11,6 +16,21 @@ It serves **US equities** (NASDAQ-100 / S&P 500, via MASSIVE), **China A-shares*
 (CSI300/500/1000, via Tushare) and **Hong Kong** (HK100, via Tushare). Raw vendor data can be downloaded and kept in sync from the
 built-in **Data Manager** (WebUI) or ingested from a local mirror — see the
 [Data Pipeline](docs/en/guide/data-pipeline.md) guide.
+
+### Agent-native research workspace
+
+- **Datasets:** fix data-read/scoring windows, trading dates, execution settings and expression contracts.
+- **Persistent sessions:** retain goals, notes, attempts and evaluation budgets in SQLite.
+- **Experiments:** preserve successful and failed attempts, link revisions and compare settings.
+- **MCP:** 26 tools, including 15 backend/dataset/session/experiment tools, share state with the SDK.
+- **Backend boundary:** connect other evaluators through a Python protocol, independently of the LLM.
+
+See the [agent research guide](docs/en/guide/agent-research.md) for examples and recovery
+semantics. External agents drive the planning loop; Assay executes and records individual
+experiments. Dataset specifications do not freeze market data or certify out-of-sample validity.
+
+
+Try the [installable offline demo and reference agent](docs/en/guide/reference-agent.md).
 
 ## 📚 Documentation
 
@@ -338,3 +358,5 @@ PYTHONPATH=src python -m pytest tests                # all groups
 PYTHONPATH=src python -m pytest tests/engine        # by path
 PYTHONPATH=src python -m pytest -m data             # by marker
 ```
+
+[Research workbench](docs/en/guide/research-workbench.md) — persistent sessions, experiment lineage and evidence inspection.

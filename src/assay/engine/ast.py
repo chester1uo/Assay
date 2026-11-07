@@ -79,6 +79,17 @@ def _digest(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
 
+def ast_to_dict(node):
+    """Stable JSON AST shared by REST and MCP, including literal windows."""
+    if isinstance(node, OpNode):
+        return {"op": node.op, "args": [ast_to_dict(c) for c in node.children]}
+    if isinstance(node, FieldNode):
+        return {"field": node.name}
+    if isinstance(node, LitNode):
+        return {"lit": node.value}
+    return str(node)
+
+
 def hash_tree(node, out: dict | None = None) -> dict:
     """Structural hash of every node in ``node``, computed bottom-up in O(n).
 

@@ -1,4 +1,8 @@
-"""Assay — a high-performance factor backtesting engine for agent-driven alpha mining.
+"""Assay — agent-native alpha factor research with durable experiment state.
+
+``research_workspace()`` exposes datasets, persistent research sessions, notes,
+and independent experiment attempts. External agents own their search strategy;
+the workspace survives service restarts and is shared with the MCP research tools.
 
 This package ships the data layer (MASSIVE US-equity loaders, point-in-time stores),
 the factor execution engine + diagnostics, the IC/decay/turnover evaluator, the
@@ -95,6 +99,11 @@ def batch_backtest(exprs, **kw):
     forward returns are paid once.
     """
     return _service().batch(exprs, **kw)
+
+
+def research_workspace():
+    """Return the durable dataset/session/experiment workspace for any agent."""
+    return _service().research
 
 
 async def stream(expr, **kw) -> AsyncGenerator[dict, None]:
@@ -273,4 +282,5 @@ __all__ = [
     "stream",
     "library",
     "Session",
+    "research_workspace",
 ]

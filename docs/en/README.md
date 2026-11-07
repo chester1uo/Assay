@@ -14,7 +14,8 @@ New here? Start with **[Getting Started](guide/getting-started.md)**.
 | [Python SDK](guide/python-sdk.md) | `backtest`, `Session`, `batch_backtest`, `library`, `stream`, `backtest_portfolio` |
 | [CLI](guide/cli.md) | Every `python -m assay.cli` subcommand |
 | [REST API](guide/rest-api.md) | `/v1/*` endpoints, SSE streaming, lint, auth |
-| [MCP Server](guide/mcp-server.md) | The 11 agent tools and client setup |
+| [MCP Server](guide/mcp-server.md) | The 26 agent tools and client setup |
+| [Agent Research](guide/agent-research.md) | Datasets, persistent sessions, experiment records and execution backends |
 | [WebUI](guide/webui.md) | The zero-install web app served by FastAPI |
 | [Factor Combination](guide/factor-combination.md) | Blend factors into a composite; train/val/test; analytic, optimization & ML methods |
 | [Portfolio Backtest](guide/portfolio-backtest.md) | Config, running, metrics, A-share notes |

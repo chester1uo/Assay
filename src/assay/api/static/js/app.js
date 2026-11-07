@@ -44,6 +44,7 @@ import * as combination from "./pages/combination.js";
 import * as portfolio from "./pages/portfolio.js";
 import * as chart from "./pages/chart.js";
 import * as dataManager from "./pages/data.js";
+import * as research from "./pages/research.js";
 import * as docs from "./pages/docs.js";
 
 const appEl = document.getElementById("app");
@@ -305,6 +306,7 @@ function mount(pageModule, params, path) {
 function registerRoutes() {
   router
     .route("#/dashboard", ({ path }) => mount(dashboard, {}, path))
+    .route("#/research", ({ path }) => mount(research, {}, path))
     .route("#/library", ({ path }) => mount(library, {}, path))
     .route("#/factor", ({ path }) => mount(factor, {}, path))
     .route("#/factor/:id", ({ params, path }) => mount(factor, params, path))

@@ -38,6 +38,11 @@ import pytest
 # both directions (none missing, none extra) so adding/removing a tool without
 # updating this list fails loudly.
 EXPECTED_TOOLS = {
+    "assay_research_import",
+    "assay_backend_list",
+    "assay_research_context",
+    "assay_research_export",
+    "assay_experiment_replay",
     "assay_evaluate",
     "assay_batch",
     "assay_lint",
@@ -49,6 +54,16 @@ EXPECTED_TOOLS = {
     "assay_library_correlation",
     "assay_library_prune",
     "assay_system_status",
+    "assay_dataset_register",
+    "assay_dataset_list",
+    "assay_research_session_create",
+    "assay_research_session_list",
+    "assay_research_session_get",
+    "assay_research_note",
+    "assay_experiment_run",
+    "assay_experiment_get",
+    "assay_experiment_compare",
+    "assay_experiment_abandon",
 }
 
 

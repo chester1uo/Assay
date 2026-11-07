@@ -14,7 +14,8 @@ Assay 是一个点对点(PIT)正确的、面向 agent 原生的因子回测引�
 | [Python SDK](guide/python-sdk.md) | `backtest`、`Session`、`batch_backtest`、`library`、`stream`、`backtest_portfolio` |
 | [CLI](guide/cli.md) | 每一个 `python -m assay.cli` 子命令 |
 | [REST API](guide/rest-api.md) | `/v1/*` 端点、SSE 流式、lint、鉴权 |
-| [MCP 服务器](guide/mcp-server.md) | 11 个 agent 工具与客户端配置 |
+| [MCP 服务器](guide/mcp-server.md) | 26 个 agent 工具与客户端配置 |
+| [Agent 研究](guide/agent-research.md) | 数据集、持久研究会话、实验记录与执行后端 |
 | [WebUI](guide/webui.md) | 由 FastAPI 提供的零安装 web 应用 |
 | [因子合成](guide/factor-combination.md) | 将多个因子混合为一个复合因子;训练/验证/测试;解析式、优化式与 ML 方法 |
 | [组合回测](guide/portfolio-backtest.md) | 配置、运行、指标、A 股说明 |
