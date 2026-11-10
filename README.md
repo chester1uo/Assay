@@ -27,7 +27,8 @@ authentication, QFinVerse-panel ingestion, and optional native kernels. See the
 - **Datasets:** fix data-read/scoring windows, trading dates, execution settings and expression contracts.
 - **Persistent sessions:** retain goals, notes, attempts and evaluation budgets in SQLite.
 - **Experiments:** preserve successful and failed attempts, link revisions and compare settings.
-- **MCP:** 39 tools, including 8 FactorDB tools and 20 backend/dataset/session/experiment tools, share state with the SDK.
+- **MCP:** 40 tools, including 8 FactorDB tools and 21 backend/dataset/session/experiment tools, share state with the SDK.
+- **Research audit:** read-only judge packets check budgets, provenance, metric series and lifecycle evidence through MCP, REST, the workbench or offline manifests. See the [audit guide](docs/en/guide/research-audit.md).
 - **Public endpoint:** `https://assay.qfinverse.com/mcp/` (Streamable HTTP with Bearer/API-key authentication). See the [deployment guide](docs/en/guide/deployment.md) for configuration and release checks.
 - **Backend boundary:** connect other evaluators through a Python protocol, independently of the LLM.
 

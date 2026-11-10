@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 RESEARCH_TOOLS = {
+    'assay_research_audit',
     'assay_candidate_decide', 'assay_candidate_list', 'assay_factor_history',
     'assay_backend_list', 'assay_dataset_register', 'assay_dataset_list',
     'assay_research_session_create', 'assay_research_session_list',

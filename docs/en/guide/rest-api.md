@@ -24,6 +24,7 @@ All routes below use the same workspace as MCP and require the configured API cr
 | GET / POST | `/sessions` | Discover / create research sessions |
 | POST | `/sessions/import` | Import a verified session manifest |
 | GET | `/sessions/{id}` · `/manifest` · `/context` | State, export and compact context |
+| GET | `/sessions/{id}/audit` | Read-only judge packet; `offset`, `limit`, `expected_manifest_hash` |
 | POST | `/sessions/{id}/experiments` · `/notes` | Evaluate an attempt / append a note |
 | GET | `/experiments/{id}` | Summary or paginated `section`, `offset`, `limit` |
 | POST | `/experiments/compare` | Compare at least two attempts |

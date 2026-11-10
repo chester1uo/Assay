@@ -97,6 +97,10 @@ export class ApiClient {
     return request("GET", this._p("/v1/research/sessions/" + encodeURIComponent(sessionId) + "/manifest"), {raw: true});
   }
 
+  researchAudit(sessionId, query) {
+    return request("GET", this._p("/v1/research/sessions/" + encodeURIComponent(sessionId) + "/audit"), {query,raw:true});
+  }
+
   research(path, body) {
     return request(body === undefined ? "GET" : "POST", this._p("/v1/research" + path), { body });
   }

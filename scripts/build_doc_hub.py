@@ -46,6 +46,7 @@ NAV = [
     ]),
     ("research", {"en": "Research", "zh": "研究"}, [
         ("guide/agent-research", "guide/agent-research.md"),
+        ("guide/research-audit", "guide/research-audit.md"),
         ("guide/reference-agent", "guide/reference-agent.md"),
         ("guide/research-workbench", "guide/research-workbench.md"),
         ("guide/factor-combination", "guide/factor-combination.md"),

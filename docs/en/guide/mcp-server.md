@@ -1,7 +1,10 @@
 # MCP Server
 
-The server now has **39 tools**, including eight FactorDB tools and 20 durable backend/dataset/session/experiment
+The server now has **40 tools**, including eight FactorDB tools and 21 durable backend/dataset/session/experiment
 tools. See the [agent research guide](agent-research.md) for their workflow and recovery semantics.
+
+`assay_research_audit` returns read-only, evidence-linked checks for a human or agent
+judge. See [research audit](research-audit.md) for its scope, paging and snapshot pinning.
 
 The MCP server exposes Assay's evaluate→library loop as Model Context Protocol tools that LLM
 agents call to drive autonomous alpha mining. Built on the high-level **FastMCP** API

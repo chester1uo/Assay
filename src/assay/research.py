@@ -440,6 +440,13 @@ class ResearchWorkspace:
         payload = dict(schema_version=1, kind="assay_research_session_manifest", state=self.get_session(session_id))
         return dict(payload, manifest_hash=hashlib.sha256(_json(payload).encode()).hexdigest())
 
+    def audit_session(self, session_id: str, *, offset: int = 0, limit: int = 20,
+                      expected_manifest_hash: str | None = None) -> dict:
+        """Read-only evidence audit for a judge; no experiment execution or budget use."""
+        from assay.research_audit import audit_session
+        return audit_session(self, session_id, offset=offset, limit=limit,
+                             expected_manifest_hash=expected_manifest_hash)
+
     @staticmethod
     def verify_manifest(manifest: dict) -> bool:
         """Check content integrity, not authenticity or physical-data reproducibility."""

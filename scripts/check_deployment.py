@@ -57,7 +57,7 @@ async def check(base, key, timeout):
         async with connect_mcp(url=base+'/mcp/', api_key=key, timeout=timeout) as session:
             tools = await session.list_tools()
             names = {t.name for t in tools.tools}
-            required = {'assay_dataset_register','assay_research_session_create','assay_experiment_run',
+            required = {'assay_research_audit','assay_dataset_register','assay_research_session_create','assay_experiment_run',
                         'assay_experiment_get','assay_research_context','assay_research_export',
                         'assay_research_import','assay_candidate_decide','assay_factor_history'}
             record('mcp_tools', required <= names and len(names) == discovery.get('mcp',{}).get('tool_count'),

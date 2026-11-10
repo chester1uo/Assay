@@ -10,7 +10,7 @@ would get from the Python SDK (architecture §1, "one in-process service").
 Design (architecture §6):
 - High-level :class:`mcp.server.fastmcp.FastMCP` (decorator tools; supports the
   ``stdio`` default plus SSE / streamable-HTTP for remote agents — §6.1).
-- Eleven evaluation/library tools and eight FactorDB tools accompany twenty research tools
+- Eleven evaluation/library tools and eight FactorDB tools accompany twenty-one research tools
   for datasets, sessions, notes, experiments, comparisons and interruption recovery.
 - Tool descriptions are **agent-actionable**: they spell out the dual qlib /
   Python syntax and steer the agent toward ``assay_batch`` over a serial

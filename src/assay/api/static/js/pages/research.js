@@ -42,6 +42,10 @@ export function render(root, {api, el}) {
   const selectedSummary = el('p', {className:'rw-muted'});
   const notes = el('div');
   const decisions = el('div');
+  const auditView = el('div');
+  const auditStatus = el('p', {className:'rw-muted', role:'status'});
+  let auditResult = null, auditRaw = '', auditTicket = 0, auditStateKey = '';
+  const stateKey = data => JSON.stringify([data?.id,data?.experiments.map(a=>[a.id,a.status]),data?.notes.length,data?.decisions?.length]);
   const decision = el('select', {'aria-label':'Candidate decision'},
     ...['accepted','rejected','archived','candidate'].map(value => el('option',{value},value)));
   const decisionReason = el('textarea', {'aria-label':'Decision reason',placeholder:'Explain the selection decision using the saved evidence'});
@@ -65,6 +69,8 @@ export function render(root, {api, el}) {
   }
   function draw(data) {
     state = data;
+    if(auditResult && auditResult.session_id !== data.id) {auditTicket++;auditResult=null;auditStatus.textContent='';auditView.replaceChildren();}
+    if(auditResult && auditStateKey !== stateKey(data)) auditStatus.textContent = 'Session changed. Run audit again to inspect the latest evidence.';
     if(retry?.experimentId && data.experiments.some(a => a.id === retry.experimentId && a.status !== 'running')) retry = null;
     objective.replaceChildren(el('p', {}, data.goal), el('p', {className:'rw-muted'},
       `Remaining attempts: ${data.remaining_experiments} / ${data.budget} · Dataset: ${data.dataset.name}`),
@@ -187,7 +193,38 @@ export function render(root, {api, el}) {
       setTimeout(() => URL.revokeObjectURL(url),1000);
     } catch(e) {fail(e);}
   });
-  sessions.addEventListener('change', () => {selection++;sid=sessions.value; revision++; selected=null; retry=null; error.textContent=''; if(sid) refresh().catch(fail); else {state=null;objective.replaceChildren();attempts.replaceChildren();lineage.replaceChildren();notes.replaceChildren();detail.textContent='';selectedSummary.textContent='';parent.replaceChildren();}});
+  async function loadAudit(offset=0, expected=null) {
+    if(!sid) throw new Error('Select a research session first.');
+    const target=sid, ticket=++auditTicket, capturedStateKey=stateKey(state);
+    const raw=await api.researchAudit(target,{offset,limit:20,expected_manifest_hash:expected});
+    const result=JSON.parse(raw);
+    if(!active() || target!==sid || ticket!==auditTicket) return;
+    auditResult=result; auditRaw=raw; auditStateKey=capturedStateKey;
+    auditStatus.textContent=`${result.status} · Record consistency: ${result.record_integrity} · ${result.finding_counts.errors} errors · ${result.finding_counts.warnings} review items`;
+    if(capturedStateKey!==stateKey(state)) auditStatus.textContent+=' · Session changed; run audit again for the latest snapshot.';
+    auditView.replaceChildren(
+      el('p',{className:'rw-muted'},'Checks saved records without rerunning experiments. Goal achievement and out-of-sample validity require a judge.'),
+      el('p',{className:'rw-muted'},'Manifest: '+result.manifest_hash),
+      ...result.checks.map(c=>el('p',{},`${c.category}: ${c.status}`)),
+      ...result.findings.map(f=>el('article',{className:'rw-attempt'+(f.severity==='error'?' failed':'')},
+        el('strong',{},`${f.severity} · ${f.code}`),el('p',{},f.message),
+        el('small',{},f.evidence.join(' · ')))),
+      el('p',{className:'rw-muted'},`Findings ${Math.min(offset,result.page.finding_total)}–${Math.min(offset+20,result.page.finding_total)} of ${result.page.finding_total}`),
+      el('details',{},el('summary',{},'Judge evidence'),el('pre',{className:'rw-detail'},JSON.stringify(result.summary,null,2))));
+    const pages=el('div',{className:'rw-actions'});
+    if(offset>0) pages.append(button('Previous audit page',()=>loadAudit(Math.max(0,offset-20),result.manifest_hash).catch(fail)));
+    if(result.page.has_more || result.page.candidates_have_more) pages.append(button('Next audit page',()=>loadAudit(offset+20,result.manifest_hash).catch(fail)));
+    auditView.append(pages);
+  }
+  const runAudit = button('Audit session',()=>loadAudit().catch(fail));
+  const downloadAudit = button('Download audit JSON',()=>{
+    if(!auditResult || auditResult.session_id!==sid) {fail(new Error('Run the session audit first.'));return;}
+    // Preserve numeric JSON representations covered by audit_hash.
+    const url=URL.createObjectURL(new Blob([auditRaw],{type:'application/json'}));
+    el('a',{href:url,download:sid+'.audit.json'}).click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
+  sessions.addEventListener('change', () => {selection++;sid=sessions.value; revision++; selected=null; retry=null; auditTicket++; auditResult=null;auditStatus.textContent='';auditView.replaceChildren(); error.textContent=''; if(sid) refresh().catch(fail); else {state=null;objective.replaceChildren();attempts.replaceChildren();lineage.replaceChildren();notes.replaceChildren();detail.textContent='';selectedSummary.textContent='';parent.replaceChildren();}});
   const panel = (title,...children) => el('section',{className:'rw-panel'},el('h2',{},title),...children);
   host.append(style, el('h1',{},'Research Workbench'),
     el('p',{className:'rw-muted'},'Persistent research shared with MCP agents. Human actions are labeled; saved experiment records are not a live model reasoning trace.'),
@@ -198,6 +235,7 @@ export function render(root, {api, el}) {
         el('details',{},el('summary',{},'Evaluate a candidate'),hypothesis,expr,el('label',{},'Revision parent',parent),evaluate)),
       panel('Experiment activity',attempts),
       panel('Experiment lineage',lineage),
+      panel('Research audit',el('div',{className:'rw-actions'},runAudit,downloadAudit),auditStatus,auditView),
       panel('Evidence & handoff',selectedSummary,el('details',{},el('summary',{},'Full experiment record'),detail),
         el('details',{},el('summary',{},'Cancel an asynchronous experiment'),
           el('p',{className:'rw-muted'},'Cancellation stops queued work and rejects late results. Remote computation may still finish.'),

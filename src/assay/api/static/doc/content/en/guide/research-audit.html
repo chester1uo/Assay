@@ -1,0 +1,135 @@
+<h1 class="doc-title">Research audit for judges</h1>
+<p>An audit turns a research session into a compact, evidence-linked review packet.
+It checks the saved records without calling a model, executing a backend, changing
+candidate decisions or consuming experiment budget. The same implementation serves
+MCP, REST, the Python workspace, the workbench and offline manifests.</p>
+<h2 id="run-an-audit">Run an audit</h2>
+<p>In the workbench, select a session and click <strong>Audit session</strong>. The panel shows
+check results, errors, review items and candidate evidence. <strong>Download audit JSON</strong>
+preserves the server response and its content hash. Download the session manifest
+alongside it to give a judge the underlying evidence.</p>
+<p>MCP clients call the read-only, idempotent <code>assay_research_audit</code> tool:</p>
+<pre><code class="language-json">{&quot;session_id&quot;:&quot;research_...&quot;,&quot;offset&quot;:0,&quot;limit&quot;:20}
+</code></pre>
+<p>The deployed HTTP API exposes the same packet:</p>
+<pre><code class="language-bash">curl -H &quot;Authorization: Bearer $ASSAY_MCP_API_KEY&quot; \
+  'https://assay.qfinverse.com/v1/research/sessions/research_.../audit?limit=20'
+</code></pre>
+<p>Python callers use their existing workspace:</p>
+<pre><code class="language-python">report = service.research.audit_session(session_id)
+print(report[&quot;record_integrity&quot;], report[&quot;finding_counts&quot;])
+</code></pre>
+<p>A judge can also audit an exported manifest without a server or market data:</p>
+<pre><code class="language-bash">python -m assay.audit --manifest session.json --output session.audit.json
+# Equivalent console entry point after installing the updated package:
+assay-audit --manifest session.json --output session.audit.json
+</code></pre>
+<p>The CLI returns 1 for failed record checks, 0 for consistent records (including
+review warnings), and 2 for invalid command/input. It refuses to overwrite an
+existing output file. Offline audits do not import the manifest or open a workspace.</p>
+<h2 id="what-is-checked">What is checked</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Check</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Manifest and specification</td>
+<td>Envelope/version/hash, dataset hash and record structure</td>
+</tr>
+<tr>
+<td>Attempts and budget</td>
+<td>Unique IDs/request IDs, all terminal and running attempts, spent/remaining budget</td>
+</tr>
+<tr>
+<td>Provenance</td>
+<td>Session/spec links, canonical expression, parent/replay relationships and time order</td>
+</tr>
+<tr>
+<td>Lifecycle</td>
+<td>Candidate decisions point to matching evidence; acceptance needs a completed attempt</td>
+</tr>
+<tr>
+<td>Diagnostics</td>
+<td>Saved lookahead flags, scoring completeness and registered expression policy</td>
+</tr>
+<tr>
+<td>IC metrics</td>
+<td>Finite values, correlation bounds, aligned dates, score-window bounds and series means</td>
+</tr>
+<tr>
+<td>Portfolio</td>
+<td>Saved NAV arithmetic, config/spec consistency, numeric metrics and cost assumptions</td>
+</tr>
+<tr>
+<td>Local registry</td>
+<td>Factor-attempt links and experiment/decision identity columns, in the same SQLite snapshot</td>
+</tr>
+</tbody>
+</table></div>
+<p>The live database connection is query-only. Cross-session replay sources are checked
+when present in that snapshot. An offline audit reports an external source as a
+review item, since that source is absent from the exported session. Registry jobs,
+score discovery views and usage accounting are outside these registry checks.</p>
+<p>Failed and cancelled experiments remain in the counts. A recorded experimental
+failure is not itself an audit failure. Running attempts produce a review item;
+auditing them neither cancels them nor makes them importable as terminal records.</p>
+<h2 id="read-the-result">Read the result</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>record_integrity</code></td>
+<td><code>passed</code> or <code>failed</code> saved-record consistency</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>failed</code>, <code>needs_review</code> or <code>passed</code>; warnings do not change the integrity verdict</td>
+</tr>
+<tr>
+<td><code>checks</code> / <code>finding_counts</code></td>
+<td>Whole-session results, independent of pagination</td>
+</tr>
+<tr>
+<td><code>findings</code></td>
+<td>Stable codes, severity, experiment ID and JSON Pointer evidence locations</td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td>Goal, dataset, budget, all status counts, decisions and candidate metrics</td>
+</tr>
+<tr>
+<td><code>assessment</code></td>
+<td>Explicit scope and which judgments have not been performed</td>
+</tr>
+<tr>
+<td><code>manifest_hash</code> / <code>audit_hash</code></td>
+<td>Selected input revision and report content digest</td>
+</tr>
+</tbody>
+</table></div>
+<p>Unfrozen data specifications and portfolio execution/cost warnings are review items.
+They do not imply malformed records. Candidate metrics are descriptive; the audit
+does not impose a positive-IC threshold or make acceptance decisions for the judge.
+Backend option values are omitted from the compact summary; the original manifest
+remains the reference for the complete dataset configuration.</p>
+<p>Every record is checked even when only one page is returned. <code>page.finding_total</code>
+and <code>page.candidate_total</code> report separate totals. <code>offset</code>/<code>limit</code> page both lists;
+<code>has_more</code> and <code>candidates_have_more</code> identify which list continues. Fetch details
+with the existing experiment and history tools.</p>
+<p>Pass the first response's <code>manifest_hash</code> as <code>expected_manifest_hash</code> on subsequent
+calls, or supply <code>--expected-manifest-hash</code> offline. A different snapshot produces
+<code>EXPECTED_MANIFEST_MISMATCH</code>, preventing a judge from silently combining revisions.
+The hashes detect content changes; they do not authenticate an author. Replay,
+market-data authenticity/coverage, out-of-sample validity and goal achievement need
+their own evidence. The report leaves those judgments explicit in <code>assessment</code>.</p>
+<p>Related: <a href="/doc/guide/agent-research">agent research</a>, <a href="/doc/guide/mcp-server">MCP</a>,
+<a href="/doc/guide/deployment">deployment</a>.</p>

@@ -48,7 +48,7 @@ def test_public_contract_auth_origin_host_alias_and_cors(production):
     with TestClient(create_app(), base_url='https://assay.qfinverse.com') as c:
         discovery=c.get('/.well-known/assay.json').json()
         assert discovery['mcp']['url']=='https://assay.qfinverse.com/mcp/'
-        assert discovery['mcp']['tool_count']==39 and discovery['authentication']['required']
+        assert discovery['mcp']['tool_count']==40 and discovery['authentication']['required']
         assert not discovery['authentication']['oauth']
         assert discovery['research']['scope']=='shared-workspace'
         schema=c.get('/openapi.json').json()
@@ -150,7 +150,7 @@ def test_remote_mcp_client_and_readonly_acceptance(production,monkeypatch):
             async with connect_mcp(url=base+'/mcp/',api_key='test-deployment-key') as session:
                 result=await session.call_tool('assay_lint',{'expr':'ts_mean(close,5)'})
                 assert normalize_tool_result(result.model_dump(mode='json'))['ast'] is not None
-                assert len((await session.list_tools()).tools)==39
+                assert len((await session.list_tools()).tools)==40
             path=Path(__file__).resolve().parents[2]/'scripts/check_deployment.py'
             spec=importlib.util.spec_from_file_location('deployment_check',path)
             module=importlib.util.module_from_spec(spec)

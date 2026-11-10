@@ -3,6 +3,23 @@ from __future__ import annotations
 
 
 def register_research_tools(mcp, get_service):
+    from mcp.types import ToolAnnotations
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True,destructiveHint=False,
+                                         idempotentHint=True,openWorldHint=False))
+    def assay_research_audit(session_id: str, offset: int = 0, limit: int = 20,
+                             expected_manifest_hash: str | None = None) -> dict:
+        """Audit all saved session evidence for a human or agent judge, without execution.
+
+        Checks hashes, budgets, lineage/decisions, metric-series arithmetic, dates,
+        portfolio assumptions and local registry links. Failed experiments remain
+        in the counts. Findings and candidate evidence are paginated (limit 1–100);
+        overall errors cover the full snapshot. Pin expected_manifest_hash when
+        reading further pages. Does not prove authorship, replay or profitability.
+        """
+        return get_service().research.audit_session(session_id,offset=offset,limit=limit,
+                                                    expected_manifest_hash=expected_manifest_hash)
+
     @mcp.tool()
     def assay_research_import(manifest: dict) -> dict:
         """Import a hashed session manifest atomically, preserving IDs and spent budget.

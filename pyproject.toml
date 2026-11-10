@@ -50,6 +50,7 @@ all = [
 [project.scripts]
 assay = "assay.cli:main"
 assay-data = "assay.cli:main"
+assay-audit = "assay.audit:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

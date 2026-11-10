@@ -1,7 +1,9 @@
 # MCP Server
 
-服务现有 **39 个工具**，含 8 个 FactorDB 工具及 20 个后端发现、持久数据集、研究会话与实验工具。
+服务现有 **40 个工具**，含 8 个 FactorDB 工具及 21 个后端发现、持久数据集、研究会话与实验工具。
 使用流程与恢复语义见 [Agent 研究指南](agent-research.md)。
+
+`assay_research_audit` 向人或 Agent judge 返回只读的证据检查；范围、分页和版本锁定见[研究审计](research-audit.md)。
 
 MCP server 将 Assay 的 evaluate→library 循环暴露为 Model Context Protocol 工具，供 LLM
 agent 调用以驱动自主的 alpha 挖掘。基于高层的 **FastMCP** API 构建

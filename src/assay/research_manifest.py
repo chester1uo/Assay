@@ -4,7 +4,7 @@ import json
 from datetime import date, datetime
 
 
-def validate_state(state):
+def validate_state(state, *, allow_running=False):
     def require(ok, message):
         if not ok:
             raise ValueError(f"invalid session manifest: {message}")
@@ -105,9 +105,14 @@ def validate_state(state):
         require(attempt["id"] not in ids and attempt["request_id"] not in requests, "duplicate attempt identity")
         require(attempt["session_id"] == state["id"] and attempt["dataset_id"] == dataset["id"] and
                 attempt["spec_hash"] == dataset["spec_hash"], "attempt specification or session")
-        require(attempt["status"] in ("completed", "failed", "abandoned", "cancelled"), "running attempts cannot be imported; stop the worker and explicitly abandon first")
+        require(attempt["status"] in ("completed", "failed", "abandoned", "cancelled") or
+                (allow_running and attempt["status"] == "running"), "running attempts cannot be imported; stop the worker and explicitly abandon first")
         timestamp(attempt["started_at"])
-        timestamp(attempt["finished_at"])
+        if attempt['status'] == 'running':
+            require(attempt['finished_at'] is None and attempt['report'] is None and attempt['error'] is None,
+                    'running attempt cannot have terminal evidence')
+        else:
+            timestamp(attempt["finished_at"])
         for key in ("report", "error", "policy_check", "panel_report"):
             require(attempt.get(key) is None or isinstance(attempt[key], dict), f"{key} must be an object or null")
         require(attempt["status"] != "completed" or (isinstance(attempt["report"], dict) and

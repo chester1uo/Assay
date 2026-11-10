@@ -64,6 +64,18 @@ async def real_workflow(browser, base, output):
     assert [a['status'] for a in records]==['failed','completed']
     assert records[1]['parent_id']==records[0]['id']
     assert all(a['agent']=='human:webui' for a in records)
+    await page.get_by_role('button',name='Audit session',exact=True).click()
+    await page.get_by_text('Record consistency: passed',exact=False).wait_for()
+    async with page.expect_download() as audit_download:
+        await page.get_by_role('button',name='Download audit JSON',exact=True).click()
+    await (await audit_download.value).save_as(output/'browser-audit.json')
+    audit=json.loads((output/'browser-audit.json').read_text())
+    import hashlib
+    audit_payload={k:v for k,v in audit.items() if k!='audit_hash'}
+    assert hashlib.sha256(json.dumps(audit_payload,sort_keys=True,allow_nan=False).encode()).hexdigest()==audit['audit_hash']
+    assert audit['manifest_hash']==manifest['manifest_hash']
+    assert audit['summary']['attempts']['statuses']=={'failed':1,'completed':1}
+    assert audit['record_integrity']=='passed' and not audit['assessment']['execution_replayed']
     await page.reload()
     await page.get_by_label('Research session',exact=True).select_option(sid)
     await page.locator('.rw-attempt.completed').first.wait_for()
@@ -72,7 +84,8 @@ async def real_workflow(browser, base, output):
     assert not errors,errors
     await page.close()
     return {'session_id':sid,'statuses':[a['status'] for a in records], 'parent_link_verified':True,
-        'export_and_reload_verified':True,'manifest_integrity_and_import_verified':True,'page_errors':errors,'provider_calls':0,'execution_mode':'human browser actions on real synthetic evaluator'}
+        'export_and_reload_verified':True,'manifest_integrity_and_import_verified':True,'audit_download_hash_verified':True,
+        'audit_readonly_evidence_verified':True,'page_errors':errors,'provider_calls':0,'execution_mode':'human browser actions on real synthetic evaluator'}
 
 
 async def race_fixtures(browser, base):

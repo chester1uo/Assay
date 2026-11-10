@@ -102,6 +102,13 @@ def context(session_id: str, limit: int = Query(10, ge=1, le=50)):
     return invoke('research_context', session_id, limit=limit)
 
 
+@router.get('/sessions/{session_id}/audit')
+def audit(session_id: str, offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
+          expected_manifest_hash: str | None = Query(None, pattern=r'^[0-9a-fA-F]{64}$')):
+    return invoke('audit_session',session_id,offset=offset,limit=limit,
+                  expected_manifest_hash=expected_manifest_hash)
+
+
 @router.post('/sessions/{session_id}/experiments')
 def evaluate(session_id: str, req: ExperimentRequest):
     # Sync route runs in FastAPI's thread pool; reads remain available during evaluation.

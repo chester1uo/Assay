@@ -38,6 +38,7 @@ import pytest
 # both directions (none missing, none extra) so adding/removing a tool without
 # updating this list fails loudly.
 EXPECTED_TOOLS = {
+    'assay_research_audit',
     'assay_candidate_decide', 'assay_candidate_list', 'assay_factor_history',
     "fdb_submit", "fdb_job", "fdb_query", "fdb_factor",
     "fdb_novelty", "fdb_values", "fdb_operators", "fdb_budget",
