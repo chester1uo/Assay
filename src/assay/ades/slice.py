@@ -55,6 +55,7 @@ class SpecData:
     engine: FactorEngine
     fwd: dict
     loaded_s: float
+    version: str | None = None
 
 
 def load_spec(store, spec: dict) -> SpecData:
@@ -67,13 +68,14 @@ def load_spec(store, spec: dict) -> SpecData:
     end = spec["end"]
     if specpack.pack_root() is not None and getattr(store, "snapshot_id", None):
         pack = specpack.open_or_build(store, spec["universe"], spec["start"], end, fields=FIELDS)
-        return SpecData(spec["key"], pack.engine(), pack.fwd(spec["horizons"], spec["execution"]),
-                        time.perf_counter() - t0)
+        engine = pack.engine()
+        return SpecData(spec["key"], engine, pack.fwd(spec["horizons"], spec["execution"]),
+                        time.perf_counter() - t0, engine.snapshot)
     eng = FactorEngine.from_store(store, spec["universe"], (spec["start"], end), end, fields=FIELDS, adj="total")
     _, _, px = store.get_matrices(["close", "open"], list(eng.symbols), spec["start"], end, end, "total")
     fwd = evaluator.forward_returns(np.asarray(px["close"], float), np.asarray(px["open"], float),
                                     list(spec["horizons"]), spec["execution"])
-    return SpecData(spec["key"], eng, fwd, time.perf_counter() - t0)
+    return SpecData(spec["key"], eng, fwd, time.perf_counter() - t0, eng.snapshot)
 
 
 def fingerprint(values: np.ndarray) -> np.ndarray:

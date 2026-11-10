@@ -31,6 +31,7 @@ class FactorDBResearchBackend:
     def probe(self):
         svc=self._service()
         return {'status':'available','data_version':svc.db.qfv.snapshot_id,
+                'data_versions':svc.stores.versions(),
                 'owner':self.owner,'budget':svc.budget(self.owner),
                 'scope':'Logical panel version; physical content is not authenticated.'}
 
@@ -70,7 +71,7 @@ class FactorDBResearchBackend:
                     raise ResearchError('REQUEST_CONFLICT','Execution identity belongs to different inputs.')
                 receipt=json.loads(previous['receipt'])
             else:
-                version=svc.db.qfv.snapshot_id
+                version=svc.stores.for_universe(dataset['universe']).snapshot_id
                 if version!=dataset['snapshot_id']:
                     raise ResearchError('DATA_VERSION_MISMATCH','Controller data version differs from dataset snapshot.',action='inspect_data_version')
                 if svc.over_budget(self.owner):
@@ -92,9 +93,9 @@ class FactorDBResearchBackend:
                           (fid,str(cn.canonicalize(node)),expr,self.owner,time.time()))
                 known=c.execute('SELECT metrics FROM scores WHERE factor_id=? AND spec=? AND version=?',(fid,spec,version)).fetchone()
                 failed=bool(known and json.loads(known[0]).get('error'))
-                c.execute('INSERT INTO jobs (id,owner,spec,status,total,done,failed,created,finished,factor_ids,exprs,label) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                c.execute('INSERT INTO jobs (id,owner,spec,status,total,done,failed,created,finished,factor_ids,exprs,label,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                     (jid,self.owner,spec,'done' if known else 'queued',1,int(bool(known) and not failed),int(failed),
-                     time.time(),time.time() if known else None,_json([fid]),_json([expr]),'research:'+request_id))
+                     time.time(),time.time() if known else None,_json([fid]),_json([expr]),'research:'+request_id,version))
                 receipt={'backend':'factordb_ades','request_id':request_id,'job_id':jid,'factor_id':fid,
                          'spec':spec,'data_version':version,'owner':self.owner,'cached':bool(known)}
                 c.execute('INSERT INTO research_submissions VALUES (?,?,?)',(request_id,inputs,_json(receipt)))

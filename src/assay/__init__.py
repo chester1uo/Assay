@@ -152,7 +152,14 @@ def backtest_portfolio(expr, config=None, **config_kwargs):
     run_keys = ("as_of", "groups", "tradable_mask", "prev_close", "adv", "benchmark")
     run_kw = {k: config_kwargs.pop(k) for k in list(config_kwargs) if k in run_keys}
     if config is None:
-        config = PortfolioBacktestConfig(**config_kwargs)
+        from assay.data.markets import UNIVERSE_MARKETS
+
+        market = config_kwargs.pop("market", None)
+        if market is None:
+            market = UNIVERSE_MARKETS.get(str(config_kwargs.get("universe", "")).upper(), "US")
+        market = {"CN": "A"}.get(str(market).upper(), str(market).upper())
+        config = (PortfolioBacktestConfig(market="US", **config_kwargs) if market == "US"
+                  else PortfolioBacktestConfig.preset(market, **config_kwargs))
     elif config_kwargs:
         raise TypeError(
             "pass either a PortfolioBacktestConfig or config keyword fields, not both"

@@ -19,15 +19,16 @@ Constraints, in the order they bind (each can trim or block a name's trade):
    ceiling/floor come from explicit per-name ``limit_up``/``limit_down`` bands
    (real 涨停价/跌停价, honouring 10/20/30%/ST boards) when supplied, else from a
    flat ``prev_close * (1 ± price_limit_pct)``. Neither input (US) => no limit logic.
-3. **T+1 settlement** (2.6.1, A-share) — with ``t_plus_1`` and ``market == 'A'`` a
-   name whose lot was *acquired today* (this step) cannot be reduced; the sell is
-   deferred (``'t_plus_1'``, a forced hold). The acquired-step is tracked at the
-   weight level by the caller-supplied ``acquired_step`` map (symbol-index ->
-   step) and updated in place on fills.
+3. **T+1 settlement** — newly bought quantities are locked on the trading date;
+   previously settled inventory remains sellable. ``acquired_units`` records
+   normalized share quantities and dates, using execution prices and NAV. The
+   legacy ``acquired_step`` flags remain a conservative fallback.
 4. **ADV capacity** (2.7) — ``|Δweight| <= max_adv_fraction`` of ADV. The excess
    is handled per ``partial_fill_handling``: ``'defer'`` returns the unfilled
    residual, ``'cancel'`` drops it, ``'force'`` ignores the cap. No ADV data
    (``adv_fraction is None``) => no capacity cap.
+5. **A-share cash** — completed sales and existing cash fund buys, with fees
+   reserved. A blocked sale never creates spendable proceeds or implicit leverage.
 
 All vectors are 1-D float64 over the *same symbol axis* as the weights; missing
 entries (NaN price / NaN weight) are treated as untradable for that name so one
@@ -46,8 +47,8 @@ from assay.portfolio.report import Trade
 
 # Tolerances mirroring the design-doc apply_price_limit (2.6.2): a bar is "at the
 # limit" within these factors of the theoretical limit price.
-_LIMIT_UP_TOL = 0.9999
-_LIMIT_DOWN_TOL = 1.0001
+_LIMIT_UP_TOL = 0.999999
+_LIMIT_DOWN_TOL = 1.000001
 # Weight changes below this magnitude are treated as no-trade (dust / float noise).
 _TRADE_EPS = 1e-12
 
@@ -68,12 +69,14 @@ class ExecutionSimulator:
     """Apply 2.6/2.7 execution constraints to one rebalance step.
 
     Wraps the ``config`` and a :class:`TransactionCostModel`. The simulator is
-    otherwise stateless — T+1 inventory lives in the caller-owned ``acquired_step``
-    map passed to :meth:`execute`, so the accountant controls the date axis.
+    accountant supplies a per-run ``acquired_units`` book; direct callers can use
+    the simulator's internal book. ISO trading dates, rather than rebalance counts,
+    determine whether inventory has settled.
     """
 
     config: PortfolioBacktestConfig
     cost_model: TransactionCostModel = field(default=None)  # type: ignore[assignment]
+    _acquired_units: dict = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.cost_model is None:
@@ -92,6 +95,8 @@ class ExecutionSimulator:
         adv_fraction: np.ndarray | None = None,
         tradable_mask: np.ndarray | None = None,
         acquired_step: dict[int, int] | None = None,
+        acquired_units: dict | None = None,
+        portfolio_value: float = 1.0,
         step: int = 0,
         symbols: list[str] | None = None,
         date: str = "",
@@ -116,7 +121,7 @@ class ExecutionSimulator:
             as ``exec_price``** (A-share 涨停价/跌停价, rebased to the panel's
             adjustment). When given they override the ``prev_close * (1 ± pct)``
             bands, so real per-board limits (10/20/30%, ST 5%) are honoured instead
-            of one flat percentage. NaN for a name => no limit constraint there.
+            of one flat percentage. NaN for an A-share name blocks its orders.
             A missing side is treated as no bound (``+inf`` ceiling / ``-inf`` floor).
         adv_fraction:
             ``(N,)`` participation = ``|Δnotional| / ADV`` *at full target trade*,
@@ -127,9 +132,9 @@ class ExecutionSimulator:
             ``(N,)`` bool; ``False`` => untradable (ST/suspended). ``None`` => all
             tradable.
         acquired_step:
-            caller-owned ``{symbol_index: step_acquired}`` for T+1. Updated in place
-            when a name is newly bought. ``None`` => T+1 disabled regardless of
-            config (no inventory to consult).
+            legacy caller-owned ``{symbol_index: step_acquired}`` for T+1.
+            ``acquired_units`` tracks the new share quantities by trading date;
+            when omitted, the simulator retains its own inventory across calls.
         step:
             monotonically increasing rebalance-step counter; a name with
             ``acquired_step[i] == step`` was bought *this* step and is T+1-locked.
@@ -155,6 +160,10 @@ class ExecutionSimulator:
 
         # NaN target => hold current (no opinion); NaN price => untradable.
         tgt = np.where(np.isfinite(tgt), tgt, cur)
+        if self.config.market == "A" and (np.any(cur < -_TRADE_EPS) or np.any(tgt < -_TRADE_EPS)):
+            raise ValueError("A-share cash equity execution cannot open short positions")
+        if not np.isfinite(portfolio_value) or portfolio_value <= 0:
+            raise ValueError("portfolio_value must be positive")
         desired_delta = tgt - cur  # signed weight change we want this step
 
         executed = cur.copy()
@@ -167,13 +176,18 @@ class ExecutionSimulator:
             "blocked_suspended": 0.0,
             "blocked_adv": 0.0,
             "n_trades": 0.0,
+            "blocked_cash": 0.0,
+            "blocked_limit_data": 0.0,
+            "n_orders": 0.0,
         }
 
         cfg = self.config
-        t_plus_1_on = bool(cfg.t_plus_1) and cfg.market == "A" and acquired_step is not None
+        t_plus_1_on = bool(cfg.t_plus_1) and cfg.market == "A"
+        inventory = acquired_units if acquired_units is not None else self._acquired_units
+        day_key = str(date)[:10] if date else step
         explicit_limits = limit_up is not None or limit_down is not None
         limits_on = bool(cfg.enforce_limit_price) and (
-            explicit_limits or (cfg.price_limit_pct is not None and prev_close is not None)
+            cfg.market == "A" or explicit_limits or (cfg.price_limit_pct is not None and prev_close is not None)
         )
         if limits_on:
             if explicit_limits:
@@ -189,51 +203,92 @@ class ExecutionSimulator:
                     if limit_down is not None
                     else np.full(n, -np.inf)
                 )
-            else:
+            elif cfg.price_limit_pct is not None and prev_close is not None:
                 prev = np.asarray(prev_close, dtype=np.float64)
                 lim = float(cfg.price_limit_pct)
                 lim_up = prev * (1.0 + lim)
                 lim_down = prev * (1.0 - lim)
+            else:
+                lim_up, lim_down = np.full(n, np.nan), np.full(n, np.nan)
         cap_on = adv_fraction is not None
 
-        # Every name is decided at once, in the order the constraints bind: a name
-        # with a wanted trade (``active``) ends in exactly one of untradable / limit
-        # up / limit down / T+1 hold / capacity-cancelled / traded. The arithmetic
-        # is the per-name arithmetic, element by element, and the cost total is
-        # summed in symbol order, so results match a name-by-name walk bit for bit.
+        # Apply local constraints in parallel, then couple buys through the actual
+        # cash account. Partial settlement/capacity fills retain their residuals.
         with np.errstate(invalid="ignore", divide="ignore"):
             active = np.isfinite(desired_delta) & (np.abs(desired_delta) >= _TRADE_EPS)
             buy = desired_delta > 0
-            untradable = active & ~np.isfinite(price)
+            untradable = active & (~np.isfinite(price) | (price <= 0.0))
             if tradable_mask is not None:
                 untradable |= active & ~np.asarray(tradable_mask, dtype=bool)
             live = active & ~untradable
 
             up_hit = np.zeros(n, dtype=bool)
             down_hit = np.zeros(n, dtype=bool)
+            missing_limits = np.zeros(n, dtype=bool)
             if limits_on:
+                if cfg.market == "A":
+                    missing_limits = live & np.where(buy, np.isnan(lim_up) | (np.isfinite(lim_up) & (lim_up <= 0)),
+                                                    np.isnan(lim_down) | (np.isfinite(lim_down) & (lim_down <= 0)))
+                    live &= ~missing_limits
                 up_hit = live & buy & np.isfinite(lim_up) & (price >= lim_up * _LIMIT_UP_TOL)
                 down_hit = live & ~buy & np.isfinite(lim_down) & (price <= lim_down * _LIMIT_DOWN_TOL)
                 live &= ~(up_hit | down_hit)
 
             held = np.zeros(n, dtype=bool)
-            if t_plus_1_on and acquired_step:
-                today = np.zeros(n, dtype=bool)
-                today[[i for i, st in acquired_step.items() if st == step and 0 <= i < n]] = True
-                held = live & ~buy & today
-                live &= ~held
-
             fill = desired_delta.copy()
+            if t_plus_1_on:
+                locked = np.zeros(n)
+                for i, (day, units) in inventory.items():
+                    if day == day_key and 0 <= i < n:
+                        locked[i] = units * price[i] / portfolio_value
+                # Legacy callers can supply today's acquisition flags without lot
+                # quantities. Preserve their conservative whole-position lock.
+                for i, acquired in (acquired_step or {}).items():
+                    if acquired == step and 0 <= i < n and (i not in inventory or inventory[i][0] != day_key):
+                        locked[i] = max(0.0, cur[i])
+                sellable = np.maximum(0.0, cur - locked)
+                held = live & ~buy & (-fill > sellable + _TRADE_EPS)
+                fill = np.where(held, -sellable, fill)
             capped = np.zeros(n, dtype=bool)
             advf = np.asarray(adv_fraction, dtype=np.float64) if cap_on else None
             if cap_on and cfg.partial_fill_handling != "force":
                 # participation scales linearly with the traded fraction; cap the
                 # trade so participation <= max_adv_fraction.
                 ratio = cfg.max_adv_fraction / advf
-                capped = live & np.isfinite(advf) & (advf > 0.0) & (ratio < 1.0)
-                fill = np.where(capped, desired_delta * ratio, desired_delta)
+                allowed = np.abs(desired_delta * ratio)
+                capped = live & np.isfinite(advf) & (advf > 0.0) & (np.abs(fill) > allowed)
+                fill = np.where(capped, np.sign(fill) * allowed, fill)
 
-            cancelled = live & (np.abs(fill) < _TRADE_EPS)   # capacity cancelled the whole trade
+            cash_limited = np.zeros(n, dtype=bool)
+            if cfg.market == "A":
+                # Only completed sells fund buys. Blocked limit-down/T+1 sells
+                # cannot turn into implicit borrowing from the cash account.
+                sells = live & ~buy & (np.abs(fill) >= _TRADE_EPS)
+                sell_adv = None if advf is None else advf * np.divide(np.abs(fill), np.abs(desired_delta),
+                    out=np.zeros(n), where=np.abs(desired_delta) > 0)
+                sell_rates = self.cost_model.trade_costs(np.ones(n, dtype=bool), np.abs(fill), sell_adv)
+                cash = max(0.0, 1.0 - float(cur.sum())) + float((-fill[sells] * (1 - sell_rates[sells])).sum())
+                buys = live & buy & (fill >= _TRADE_EPS)
+                rates = self.cost_model.trade_costs(np.zeros(n, dtype=bool), np.abs(fill), sell_adv)
+                required = float((fill[buys] * (1 + rates[buys])).sum())
+                if required > cash + _TRADE_EPS:
+                    cash_limited = buys.copy()
+                    original = fill.copy()
+                    lo, hi = 0.0, 1.0
+                    for _ in range(45):
+                        mid = (lo + hi) / 2
+                        trial = np.where(buys, original * mid, 0.0)
+                        participation = None if advf is None else advf * np.divide(np.abs(trial), np.abs(desired_delta),
+                            out=np.zeros(n), where=np.abs(desired_delta) > 0)
+                        rates = self.cost_model.trade_costs(np.zeros(n, dtype=bool), trial, participation)
+                        need = float((trial[buys] * (1 + rates[buys])).sum())
+                        if need <= cash:
+                            lo = mid
+                        else:
+                            hi = mid
+                    fill[buys] = original[buys] * lo
+
+            cancelled = live & (np.abs(fill) < _TRADE_EPS)
             traded = live & ~cancelled
 
             # realised participation for the *filled* notional, for slippage (NaN = none)
@@ -255,31 +310,45 @@ class ExecutionSimulator:
         # T+1 inventory: a buy (or any increase) marks the name acquired now.
         if t_plus_1_on:
             for i in np.flatnonzero(traded & (fill > 0.0)).tolist():
-                acquired_step[i] = step
+                old = inventory.get(i)
+                units = old[1] if old is not None and old[0] == day_key else 0.0
+                inventory[i] = (day_key, units + fill[i] * portfolio_value / price[i])
+                if acquired_step is not None:
+                    acquired_step[i] = step
 
         # residual: blocked names (and capacity cuts with 'defer') still want their
         # target next step. A partial fill counts in ``n_trades`` only, never also as
         # ``blocked_adv`` (fully blocked orders), so the §4.4 attempt denominator
         # never double-counts it.
         defer = cfg.partial_fill_handling == "defer"
-        want = untradable | up_hit | down_hit | held | (cancelled & defer) | (traded & capped & defer)
+        delayed_sales = ~buy & (untradable | down_hit | missing_limits | held | (capped & defer))
+        cash_deferred = cash_limited & bool(delayed_sales.any())
+        # Fees-only cash scaling is a completed feasible allocation, not an order
+        # to borrow the fee back tomorrow. Retry cash buys when pending sales can
+        # actually release funds on a later session.
+        want = untradable | up_hit | down_hit | missing_limits | held | cash_deferred | (cancelled & ~cash_limited & defer) | (traded & capped & defer)
         residual[want] = tgt[want]
-        filled = traded & ~(capped & defer)
+        filled = traded & ~(held | cash_deferred | (capped & defer))
         residual[filled] = new_w[filled]
 
         diag["blocked_suspended"] = float(untradable.sum())
         diag["limit_hit_count"] = float(up_hit.sum() + down_hit.sum())
         diag["forced_hold_count"] = float(held.sum())
-        diag["blocked_adv"] = float(cancelled.sum())
+        diag["blocked_adv"] = float((cancelled & ~held & ~cash_limited).sum())
+        diag["blocked_cash"] = float(cash_limited.sum())
+        diag["blocked_limit_data"] = float(missing_limits.sum())
         diag["n_trades"] = float(traded.sum())
+        diag["n_orders"] = float(active.sum())
 
         if not record_trades:
             return ExecutionResult(executed_weights=executed, trades=trades, total_cost=float(total_cost),
                                    residual_targets=residual, diag=diag)
         kind = np.zeros(n, dtype=np.int8)
-        for code, mask in enumerate((untradable, up_hit, down_hit, held, cancelled), start=1):
+        for code, mask in enumerate((untradable, up_hit, down_hit, held & cancelled,
+                                     cancelled & ~held & ~cash_limited, missing_limits,
+                                     cash_limited & cancelled), start=1):
             kind[mask] = code
-        reasons = (None, "suspended", "limit_up", "limit_down", "t_plus_1", "adv_cap")
+        reasons = (None, "suspended", "limit_up", "limit_down", "t_plus_1", "adv_cap", "limit_data_missing", "cash")
         cur_l, tgt_l, px_l, new_l, fill_l, cost_l = (v.tolist() for v in (cur, tgt, price, new_w, fill, cost))
         kind_l, buy_l = kind.tolist(), buy.tolist()
         for i in np.flatnonzero(active).tolist():
@@ -298,6 +367,7 @@ class ExecutionSimulator:
                     qty_frac=float(fill_l[i]),
                     cost=float(cost_l[i]),
                     blocked_reason=None,
+                    deferred_reason="t_plus_1" if held[i] else "cash" if cash_deferred[i] else None,
                 )
             )
 

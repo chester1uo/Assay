@@ -220,18 +220,34 @@ class PortfolioBacktester:
         adv_mat = self._as_tn(adv, T, N)
         mask_mat = self._as_tn_bool(tradable_mask, T, N)
         pre_returns, post_returns = None, None
-        if config.execution_price == 'next_open':
+        if config.execution_price == 'next_open' or (config.market == 'A' and config.execution_price == 'arrival'):
             previous = np.vstack([marked_close[:1], marked_close[:-1]])
             valid = np.isfinite(open_) & (open_ > 0) & np.isfinite(marked_close) & (marked_close > 0) & (previous > 0)
             with np.errstate(divide='ignore', invalid='ignore'):
                 pre_returns = np.where(valid, open_ / previous - 1.0, 0.0)
                 post_returns = np.where(valid, marked_close / open_ - 1.0, daily_ret)
+        if config.market == "A":
+            if tradable_mask is not None and np.shape(tradable_mask) not in ((N,), (T, N)):
+                raise ValueError("A-share tradability mask must match the PIT date/security grid")
+            volume = np.asarray(engine.field_matrix("volume"), dtype=float) if "volume" in engine._field_cols else None
+            bar_tradable = np.isfinite(exec_prices) & (exec_prices > 0)
+            if volume is not None:
+                bar_tradable &= np.isfinite(volume) & (volume > 0)
+            mask_mat = bar_tradable if mask_mat is None else mask_mat & bar_tradable
         # Real per-board A-share price-limit bands, auto-loaded from the store's
         # trade_status and rebased into the panel's adjustment basis (no-op for US
         # / offline-engine runs). ``close`` is the engine's *adjusted* close.
         # (``cutoff`` computed in step 3.)
         cn_up, cn_dn = self._cn_limit_matrices(config, close, dates, symbols, cutoff)
 
+        if config.market == "A" and config.enforce_limit_price and cn_up is None and cn_dn is None:
+            warnings.append("Official A-share price-limit data unavailable; trades without known limits are blocked.")
+            cn_up = np.full((T, N), np.nan)
+            cn_dn = np.full((T, N), np.nan)
+        if config.market == "A" and not config.t_plus_1:
+            raise ValueError("A-share equity backtests require t_plus_1=True")
+        if config.market == "A" and not config.enforce_limit_price:
+            raise ValueError("A-share equity backtests require enforce_limit_price=True")
         # --- 8. accountant walk (ExecutionSimulator + PortfolioAccountant) ------
         cost_model = TransactionCostModel(config)
         accountant = PortfolioAccountant(
@@ -258,6 +274,9 @@ class PortfolioBacktester:
         missing_marks = int(np.sum((~np.isfinite(close) | (close <= 0)) & (np.abs(acct.weights) > 1e-12)))
         if missing_marks:
             warnings.append(f'{missing_marks} held security-days lack a closing quote; marked at the latest available open/close. No delisting recovery is inferred.')
+
+        if acct.diag.get("blocked_limit_data", 0):
+            warnings.append(f"{int(acct.diag['blocked_limit_data'])} orders blocked: missing A-share price-limit data.")
 
         # --- 9. benchmark series ------------------------------------------------
         # The equal-weight index proxy must be *factor-independent* — keyed off
@@ -802,7 +821,7 @@ class PortfolioBacktester:
             monthly_returns=m.get("monthly_returns", {}),
             trade_log=trade_log,
             position_log=position_log,
-            attribution=None,
+            attribution={"execution_diagnostics": acct.diag},
             a_share_metrics=a_share,
             warnings=list(warnings or []),
             lineage=PortfolioLineage(
@@ -904,6 +923,7 @@ class PortfolioBacktester:
             + diag.get("blocked_suspended", 0.0)
             + diag.get("blocked_adv", 0.0)
         )
+        attempts = diag.get("n_orders", attempts)
         denom = attempts if attempts > 0 else float("nan")
         return {
             "limit_hit_rate": float(diag.get("limit_hit_count", 0.0) / denom)
@@ -916,6 +936,8 @@ class PortfolioBacktester:
             "n_forced_holds": int(diag.get("forced_hold_count", 0.0)),
             "n_blocked_suspended": int(diag.get("blocked_suspended", 0.0)),
             "n_blocked_adv": int(diag.get("blocked_adv", 0.0)),
+            "n_blocked_cash": int(diag.get("blocked_cash", 0.0)),
+            "n_blocked_limit_data": int(diag.get("blocked_limit_data", 0.0)),
             # data-dependent (no ST/suspension/index/flow data) -> not fabricated:
             "suspension_impact": None,
             "st_exposure_days": None,

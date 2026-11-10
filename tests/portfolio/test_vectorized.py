@@ -146,7 +146,10 @@ def test_execute_matches_the_name_by_name_walk(case):
     np.testing.assert_array_equal(got.executed_weights, want[0])
     assert got.total_cost == want[1]
     np.testing.assert_array_equal(got.residual_targets, want[2])
-    assert got.diag == want[3] and _rows(got.trades) == _rows(want[4]) and acq == acq_ref
+    assert {k:got.diag[k] for k in want[3]} == want[3]
+    assert got.diag['blocked_cash'] == got.diag['blocked_limit_data'] == 0
+    assert got.diag['n_orders'] == sum(abs(d) >= _TRADE_EPS for d in np.where(np.isfinite(tgt),tgt,cur)-cur)
+    assert _rows(got.trades) == _rows(want[4]) and acq == acq_ref
 
 
 def _rows(trades):

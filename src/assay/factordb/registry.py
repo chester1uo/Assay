@@ -72,6 +72,8 @@ class Registry:
         self._lock = threading.RLock()
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            if "version" not in {r[1] for r in c.execute("PRAGMA table_info(jobs)")}:
+                c.execute("ALTER TABLE jobs ADD COLUMN version TEXT")
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, timeout=30)
@@ -180,11 +182,11 @@ class Registry:
             return int(c.execute("SELECT count(*) FROM factors").fetchone()[0])
 
     # ── jobs ─────────────────────────────────────────────────────────────────
-    def create_job(self, jid: str, owner: str | None, spec: str, exprs: list[str], label: str = "") -> None:
+    def create_job(self, jid: str, owner: str | None, spec: str, exprs: list[str], label: str = "", version=None) -> None:
         with self._lock, self._conn() as c:
-            c.execute("INSERT INTO jobs (id, owner, spec, status, total, created, exprs, label) "
-                      "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)",
-                      (jid, owner, spec, len(exprs), time.time(), json.dumps(exprs), label[:120]))
+            c.execute("INSERT INTO jobs (id, owner, spec, status, total, created, exprs, label, version) "
+                      "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
+                      (jid, owner, spec, len(exprs), time.time(), json.dumps(exprs), label[:120], version))
 
     def update_job(self, jid: str, **fields) -> None:
         if not fields:

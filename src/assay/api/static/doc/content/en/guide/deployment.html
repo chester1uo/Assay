@@ -84,6 +84,13 @@ panel sessions and cache counters are process-local. The in-process data schedul
 also runs per process. Stateless MCP HTTP does not make these components distributed.
 For FactorDB/ADES, additionally configure its writable registry/queue directory,
 the read-only QFV panel and worker-only keys; the base template does not enable it.</p>
+<p>For existing multi-market deployments, retain <code>ASSAY_DATA_DIR_CN</code> and
+<code>ASSAY_DATA_DIR_HK</code> with their <code>SNAPSHOT.json</code>, and verify per-market versions at
+<code>/v1/fdb/markets</code>. Updated workers advertise all available panels and
+<code>info.lease_token_supported=true</code>. During a rolling upgrade, legacy workers can
+continue ordinary compute jobs; token-fenced research tasks are leased only to
+workers supporting that protocol. Upgrade the controller first, followed by at
+least one worker supporting the target market.</p>
 <h2 id="reverse-proxy-and-transport">Reverse proxy and transport</h2>
 <p>Preserve the external <code>Host</code>, <code>Authorization</code>, <code>X-API-Key</code>, <code>Accept</code> and MCP protocol
 headers. Disable response buffering for <code>/mcp/</code> and evaluation streams. Caddy's

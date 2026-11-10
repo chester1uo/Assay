@@ -46,6 +46,7 @@ def get() -> FactorService:
 
             from assay.factordb.db import FactorDB
             from assay.factordb.registry import Registry
+            from assay.data.markets import MarketStores
 
             root = Path(os.environ["ASSAY_FACTORDB_DIR"]).expanduser()
             workers = int(os.environ.get("ASSAY_FACTORDB_WORKERS") or 0) or None
@@ -60,5 +61,5 @@ def get() -> FactorService:
                 ades = TaskQueue(root / "ades.sqlite3", lease_s=float(os.environ.get("ASSAY_ADES_LEASE_S", "120")))
             _service = FactorService(db, Registry(root / "registry.sqlite3"),
                                      daily_budget_s=float(os.environ.get("ASSAY_FACTORDB_BUDGET_S") or 0),
-                                     ades=ades)
+                                     ades=ades, stores=MarketStores.from_env(us=db.qfv))
         return _service

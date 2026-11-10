@@ -71,6 +71,14 @@ also runs per process. Stateless MCP HTTP does not make these components distrib
 For FactorDB/ADES, additionally configure its writable registry/queue directory,
 the read-only QFV panel and worker-only keys; the base template does not enable it.
 
+For existing multi-market deployments, retain `ASSAY_DATA_DIR_CN` and
+`ASSAY_DATA_DIR_HK` with their `SNAPSHOT.json`, and verify per-market versions at
+`/v1/fdb/markets`. Updated workers advertise all available panels and
+`info.lease_token_supported=true`. During a rolling upgrade, legacy workers can
+continue ordinary compute jobs; token-fenced research tasks are leased only to
+workers supporting that protocol. Upgrade the controller first, followed by at
+least one worker supporting the target market.
+
 ## Reverse proxy and transport
 
 Preserve the external `Host`, `Authorization`, `X-API-Key`, `Accept` and MCP protocol

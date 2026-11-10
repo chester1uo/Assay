@@ -140,14 +140,20 @@ class TaskQueue:
             c.execute("DELETE FROM tasks WHERE job_id=? AND status='queued'", (job_id,))
 
     # ── worker side (through the controller's routes) ────────────────────────
-    def lease(self, worker: str, version: str, info: dict | None = None) -> dict | None:
+    def lease(self, worker: str, version: str | list[str], info: dict | None = None,
+              *, supports_research_leases: bool = True) -> dict | None:
+        versions = list(dict.fromkeys([version] if isinstance(version, str) else version))
+        if not versions or len(versions) > 8 or any(not isinstance(v,str) or not v for v in versions):
+            raise ValueError('workers must advertise between one and eight panel versions')
         with self._lock, self._conn() as c:
             c.execute("BEGIN IMMEDIATE")
             now = time.time()
-            self._seen(c, worker, version, info, now)
+            self._seen(c, worker, versions[0], {**(info or {}), 'panels':versions}, now)
             r = c.execute(
                 "SELECT t.* FROM tasks t JOIN owners o ON o.owner = t.owner"
-                " WHERE t.status='queued' AND t.version=? ORDER BY o.served, t.created LIMIT 1", (version,)).fetchone()
+                " WHERE t.status='queued' AND t.version IN (" + ','.join('?' for _ in versions) + ')'
+                + ('' if supports_research_leases else " AND substr(t.id,1,5) != 'rtsk_'")
+                + " ORDER BY o.served, t.created LIMIT 1", versions).fetchone()
             if r is None:
                 c.execute("COMMIT")
                 return None
@@ -159,6 +165,22 @@ class TaskQueue:
         return {"task_id": r["id"], "job_id": r["job_id"], "owner": r["owner"], "spec": r["spec"],
                 "version": r["version"], "items": json.loads(r["items"]), "lease_s": self.lease_s,
                 "attempt": r["attempts"] + 1, "lease_token":token}
+
+    def retire_versions(self, current: list[str]) -> list[dict]:
+        """Retain durable failure receipts for queued work on retired snapshots."""
+        if not current:
+            return []
+        error = 'data snapshot retired; resubmit against the current snapshot'
+        now = time.time()
+        with self._lock, self._conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            rows = c.execute("SELECT * FROM tasks WHERE status='queued' AND version NOT IN ("
+                             + ','.join('?' for _ in current) + ')',current).fetchall()
+            for row in rows:
+                c.execute("UPDATE tasks SET status='failed',error=?,updated=? WHERE id=?",(error,now,row['id']))
+                results = [dict(factor_id=fid,metrics=None,error=error) for fid,_ in json.loads(row['items'])]
+                c.execute('INSERT OR IGNORE INTO task_results VALUES (?,?,?)',(row['id'],json.dumps(results),0.0))
+        return [dict(row,error=error,updated=now) for row in rows]
 
     def heartbeat(self, task_id: str, worker: str, lease_token: str | None = None) -> bool:
         if task_id.startswith("rtsk_") and not lease_token:

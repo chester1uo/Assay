@@ -48,6 +48,8 @@ ASSAY_DATA_DIR_US=/srv/assay/market/us
 
 首版使用一个 API worker。研究 SQLite 状态持久化，临时行情 session 与缓存计数仍在进程内，数据更新调度器也按进程运行。MCP HTTP 的无状态传输不代表这些组件已分布式化。需要 FactorDB／ADES 时，还要配置可写的 registry／queue 目录、只读 QFV panel 和专用 worker key；基础模板不启用它们。
 
+已有多市场部署还应保留 `ASSAY_DATA_DIR_CN`／`ASSAY_DATA_DIR_HK` 及其 `SNAPSHOT.json`，通过 `/v1/fdb/markets` 检查各市场的数据版本。新版 worker 会声明全部可用 panel，以及 `info.lease_token_supported=true`。滚动升级期间，旧 worker 可以继续处理普通计算任务；带租约令牌保护的研究任务只分配给支持该协议的 worker。先更新控制器，再更新至少一个支持目标市场的 worker。
+
 ## 反向代理与传输
 
 保留外部 `Host`、`Authorization`、`X-API-Key`、`Accept` 和 MCP 协议头。`/mcp/` 与评估流应关闭响应缓冲。Caddy 模板已立即刷新；nginx 应配置 `proxy_buffering off`、HTTP/1.1 和足够覆盖一次实验的读取超时。只信任实际代理来源的 forwarded headers；systemd 模板限定为 loopback。

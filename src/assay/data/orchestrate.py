@@ -76,7 +76,11 @@ def _parse_loose_date(s: str) -> dt.date | None:
 
 
 def _cn_raw_latest(raw_tushare: str) -> dt.date | None:
-    """Latest date downloaded into the Tushare mirror (from its run manifest)."""
+    """Latest date in the CN shards; use the manifest for legacy symbol mirrors."""
+    dates = [_parse_loose_date(p.stem) for p in (Path(raw_tushare) / "cn" / "daily").glob("*/*.parquet")]
+    dates = [d for d in dates if d is not None]
+    if dates:
+        return max(dates)
     man = Path(raw_tushare) / "_manifest.json"
     if not man.exists():
         return None

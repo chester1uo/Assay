@@ -27,6 +27,18 @@ def _owner(request: Request) -> str:
     return user.username if user is not None else "anonymous"
 
 
+def _call(function, *args, **kwargs):
+    try:
+        return function(*args, **kwargs)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.get("/markets")
+def markets(_k=Depends(get_api_key)):
+    return _svc().markets()
+
+
 @router.post("/submit")
 def submit(request: Request, body: dict = Body(...), _k=Depends(get_api_key)):
     """Score many expressions on one spec. Known factors answer at once; the rest become a job."""
@@ -40,7 +52,7 @@ def submit(request: Request, body: dict = Body(...), _k=Depends(get_api_key)):
         raise HTTPException(429, "daily compute budget used up; already-scored factors stay queryable")
     if not body.get("universe") or not body.get("start"):
         raise HTTPException(422, "universe and start are required")
-    return svc.submit(owner, exprs, universe=body["universe"], start=body["start"], end=body.get("end"),
+    return _call(svc.submit, owner, exprs, universe=body["universe"], start=body["start"], end=body.get("end"),
                       horizons=body.get("horizons") or (1, 5, 10, 20), execution=body.get("execution", "next_open"),
                       tags=body.get("tags") or (), parents=body.get("parents") or (), label=str(body.get("label", "")))
 
@@ -75,7 +87,7 @@ def factor(factor_id: str, _k=Depends(get_api_key)):
 def novelty(body: dict = Body(...), _k=Depends(get_api_key)):
     if not body.get("expr") or not body.get("universe") or not body.get("start"):
         raise HTTPException(422, "expr, universe and start are required")
-    return _svc().novelty(body["expr"], universe=body["universe"], start=body["start"], end=body.get("end"),
+    return _call(_svc().novelty, body["expr"], universe=body["universe"], start=body["start"], end=body.get("end"),
                           horizons=body.get("horizons") or (1, 5, 10, 20), execution=body.get("execution", "next_open"),
                           top=int(body.get("top", 5)))
 
@@ -83,7 +95,7 @@ def novelty(body: dict = Body(...), _k=Depends(get_api_key)):
 @router.get("/values")
 def values(expr: str, universe: str, date: str | None = None, top: int = Query(10, ge=1, le=100),
            _k=Depends(get_api_key)):
-    return _svc().values(expr, universe=universe, date=date, top=top)
+    return _call(_svc().values, expr, universe=universe, date=date, top=top)
 
 
 @router.get("/operators")

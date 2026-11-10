@@ -286,8 +286,10 @@ class AssayService:
                 store = QFVPanelStore(qfv_dir, self._config_for_market(market))
             else:
                 from assay.data.store import DataStore
+                from assay.data.store.canonical import CanonicalPanelStore
 
-                store = DataStore(self._config_for_market(market))
+                store_type = CanonicalPanelStore if market in {'CN','HK'} else DataStore
+                store = store_type(self._config_for_market(market))
             self._stores[market] = store
         elif hasattr(store, "refresh"):
             store.refresh()
@@ -1128,6 +1130,13 @@ class AssayService:
         """
         from assay.portfolio import PortfolioBacktester
 
+        expected = {"CN": "A"}.get(self._market_for(config.universe), self._market_for(config.universe))
+        if config.market != expected:
+            raise ValueError(f"universe {config.universe} requires market={expected!r}, got {config.market!r}")
+        if expected == "A" and not config.t_plus_1:
+            raise ValueError("A-share equity backtests require t_plus_1=True")
+        if expected == "A" and not config.enforce_limit_price:
+            raise ValueError("A-share equity backtests require enforce_limit_price=True")
         store = self.store_for_universe(getattr(config, "universe", None))
         report = PortfolioBacktester(store=store).run(
             expr, config, as_of=as_of, **kw

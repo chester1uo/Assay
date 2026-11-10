@@ -119,14 +119,29 @@ def universe_symbols(tdir: Path) -> list[str]:
 # --------------------------------------------------------------------------- #
 # price_raw
 # --------------------------------------------------------------------------- #
+def cn_daily_files(tdir: Path, symbols: list[str], start: dt.date, end: dt.date) -> list[str]:
+    """Read the daily market mirror, retaining support for legacy symbol files."""
+    root = tdir / "cn" / "daily"
+    dated = sorted(root.glob("[0-9][0-9][0-9][0-9]/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].parquet"))
+    if dated:
+        if any(root.glob("*.parquet")):
+            raise ValueError(f"mixed per-date and per-symbol daily layout: {root}")
+        lo, hi = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+        return [str(p) for p in dated if lo <= p.stem <= hi]
+    return _existing([root / f"{s}.parquet" for s in symbols])
+
+
 def ingest_cn_prices(
     tdir: Path, data_dir: Path, symbols: list[str], start: dt.date, end: dt.date
 ) -> dict:
     """``cn/daily`` raw OHLCV -> month-partitioned ``price_raw`` (market=CN)."""
-    files = _existing([tdir / "cn" / "daily" / f"{s}.parquet" for s in symbols])
+    files = cn_daily_files(tdir, symbols, start, end)
     if not files:
         return {"rows": 0, "partitions": 0, "note": "no cn/daily files"}
-    raw = pl.scan_parquet(files).collect()
+    raw = pl.concat([
+        pl.scan_parquet(p).select("trade_date", "ts_code", "open", "high", "low", "close", "vol")
+        for p in files
+    ], how="vertical_relaxed").filter(pl.col("ts_code").is_in(symbols)).collect()
     if raw.is_empty():
         return {"rows": 0, "partitions": 0}
     px = (
@@ -274,9 +289,11 @@ def ingest_cn_trade_status(
 ) -> dict:
     """``cn/stk_limit`` (+ daily high/low/close) -> ``trade_status`` (market=CN)."""
     lim_files = _existing([tdir / "cn" / "stk_limit" / f"{s}.parquet" for s in symbols])
-    day_files = _existing([tdir / "cn" / "daily" / f"{s}.parquet" for s in symbols])
+    day_files = cn_daily_files(tdir, symbols, start, end)
     if not lim_files:
         return {"rows": 0, "note": "no cn/stk_limit files — run the cn_limit download"}
+    if not day_files:
+        return {"rows": 0, "note": "no cn/daily files in requested date range"}
     lim = (
         pl.scan_parquet(lim_files)
         .select(
@@ -288,7 +305,11 @@ def ingest_cn_trade_status(
         .collect()
     )
     day = (
-        pl.scan_parquet(day_files)
+        pl.concat([
+            pl.scan_parquet(p).select("trade_date", "ts_code", "high", "low", "close")
+            for p in day_files
+        ], how="vertical_relaxed")
+        .filter(pl.col("ts_code").is_in(symbols))
         .select(
             _ymd("trade_date").alias("date"),
             pl.col("ts_code").alias("symbol").cast(pl.Utf8),

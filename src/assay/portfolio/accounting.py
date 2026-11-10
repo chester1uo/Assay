@@ -150,6 +150,8 @@ class PortfolioAccountant:
 
         cur_w = np.zeros(N, dtype=np.float64)  # current book; starts in cash
         acquired_step: dict[int, int] = {}     # T+1 inventory (symbol_idx -> step)
+        acquired_units: dict = {}
+        pending = None
         nav_val = 1.0
         gross_val = 1.0
 
@@ -157,7 +159,8 @@ class PortfolioAccountant:
         turnover_per_rebalance: list[float] = []
         rebalance_idx: list[int] = []
         diag = {"limit_hit_count": 0.0, "forced_hold_count": 0.0,
-                "blocked_suspended": 0.0, "blocked_adv": 0.0, "n_trades": 0.0}
+                "blocked_suspended": 0.0, "blocked_adv": 0.0, "n_trades": 0.0,
+                "blocked_cash": 0.0, "blocked_limit_data": 0.0, "n_orders": 0.0}
 
         step = 0
         for t in range(T):
@@ -184,9 +187,11 @@ class PortfolioAccountant:
             #    see the real current position rather than a stale prior target. A
             #    callable returning ``None`` means "do not trade this date" (e.g. a
             #    threshold candidate whose drift did not breach the gate).
-            if t in schedule:
-                sched_val = schedule[t]
-                target = sched_val(cur_w) if callable(sched_val) else sched_val
+            if t in schedule or pending is not None:
+                sched_val = schedule.get(t)
+                target = (sched_val(cur_w) if callable(sched_val) else sched_val) if t in schedule else None
+                if target is None:
+                    target = pending
                 if target is not None:
                     target = np.asarray(target, dtype=np.float64)
                     px = exec_prices[t] if exec_prices is not None else np.ones(N)
@@ -207,7 +212,9 @@ class PortfolioAccountant:
                         adv_fraction=advf,
                         tradable_mask=mask,
                         acquired_step=acquired_step,
-                        step=step,
+                        acquired_units=acquired_units,
+                        portfolio_value=nav_val,
+                        step=t,
                         symbols=symbols,
                         date=d_lbl,
                         record_trades=record_trades,
@@ -220,6 +227,16 @@ class PortfolioAccountant:
                     # Cost is a one-off NAV haircut on the *net* path only.
                     nav_val *= 1.0 - res.total_cost
                     cur_w = res.executed_weights
+                    if self.config.market == "A":
+                        cur_w = cur_w / (1 - res.total_cost)
+                        if self.config.partial_fill_handling == "defer":
+                            # Keep only unfilled names. Already-filled positions
+                            # drift naturally instead of being repeatedly reset.
+                            wanted = ((np.abs(res.residual_targets - res.executed_weights) > 1e-10)
+                                      & (np.abs(res.residual_targets - cur_w) > 1e-10))
+                            pending = np.where(wanted, res.residual_targets, np.nan) if wanted.any() else None
+                        else:
+                            pending = None
                     trades.extend(res.trades)
                     for k in diag:
                         diag[k] += res.diag.get(k, 0.0)

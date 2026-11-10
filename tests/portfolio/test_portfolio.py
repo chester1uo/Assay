@@ -497,6 +497,7 @@ def test_adv_cap_defers_excess():
         np.zeros(3),
         exec_price=np.array([100.0, 100.0, 100.0]),
         adv_fraction=adv,
+        prev_close=np.array([100.0,100.0,100.0]),
         acquired_step={},
         step=0,
         symbols=["A", "B", "C"],
@@ -515,13 +516,13 @@ def test_t_plus_1_defers_same_name_sell_when_market_A():
     # step 0: buy name 0
     r0 = sim.execute(
         np.array([0.30, 0.0, 0.0]), np.zeros(3),
-        exec_price=px, acquired_step=acq, step=0, symbols=["A", "B", "C"], date="d0",
+        exec_price=px, prev_close=px, acquired_step=acq, step=0, symbols=["A", "B", "C"], date="d0",
     )
     assert r0.executed_weights[0] == pytest.approx(0.30)
     # same step: try to sell name 0 -> T+1 forbids selling a same-step acquisition
     r1 = sim.execute(
         np.zeros(3), r0.executed_weights,
-        exec_price=px, acquired_step=acq, step=0, symbols=["A", "B", "C"], date="d0",
+        exec_price=px, prev_close=px, acquired_step=acq, step=0, symbols=["A", "B", "C"], date="d0",
     )
     assert r1.diag["forced_hold_count"] == 1.0
     assert {t.symbol: t.blocked_reason for t in r1.trades if t.blocked_reason}.get("A") == "t_plus_1"

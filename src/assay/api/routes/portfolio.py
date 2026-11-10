@@ -131,7 +131,7 @@ def backtest_portfolio(
         # The section-2 validator raises ValueError on an out-of-range / missing field;
         # that is a client error (422), not a 500 — map it into the §4.6 envelope.
         config = req.build_config()
+        report = svc.backtest_portfolio(req.expr, config, as_of=req.as_of)
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    report = svc.backtest_portfolio(req.expr, config, as_of=req.as_of)
     return report.to_dict()

@@ -61,6 +61,7 @@ ASSAY_DATA_DIR_US=/srv/assay/market/us
 <p>生产模式要求 HTTPS 公开地址、有效的鉴权配置和可用的 MCP HTTP 模块；缺失时拒绝启动。<code>ASSAY_PUBLIC_URL</code> 只填写 origin，不附带路径、查询参数或凭证。发现文档与 OpenAPI 使用此地址，不会被请求中的代理 Host 替换。</p>
 <p>全新安装启用账户后，访问 <code>/login</code>，使用 <code>ASSAY_STATE_DIR/setup_token</code> 中的一次性初始化 token 创建管理员。升级现有站点应保留账户库和签名 secret。研究员通过邀请加入，在 Account 页面创建个人 API key。Assay 服务端不需要 LLM key，外部 Agent 自行连接模型。</p>
 <p>首版使用一个 API worker。研究 SQLite 状态持久化，临时行情 session 与缓存计数仍在进程内，数据更新调度器也按进程运行。MCP HTTP 的无状态传输不代表这些组件已分布式化。需要 FactorDB／ADES 时，还要配置可写的 registry／queue 目录、只读 QFV panel 和专用 worker key；基础模板不启用它们。</p>
+<p>已有多市场部署还应保留 <code>ASSAY_DATA_DIR_CN</code>／<code>ASSAY_DATA_DIR_HK</code> 及其 <code>SNAPSHOT.json</code>，通过 <code>/v1/fdb/markets</code> 检查各市场的数据版本。新版 worker 会声明全部可用 panel，以及 <code>info.lease_token_supported=true</code>。滚动升级期间，旧 worker 可以继续处理普通计算任务；带租约令牌保护的研究任务只分配给支持该协议的 worker。先更新控制器，再更新至少一个支持目标市场的 worker。</p>
 <h2 id="反向代理与传输">反向代理与传输</h2>
 <p>保留外部 <code>Host</code>、<code>Authorization</code>、<code>X-API-Key</code>、<code>Accept</code> 和 MCP 协议头。<code>/mcp/</code> 与评估流应关闭响应缓冲。Caddy 模板已立即刷新；nginx 应配置 <code>proxy_buffering off</code>、HTTP/1.1 和足够覆盖一次实验的读取超时。只信任实际代理来源的 forwarded headers；systemd 模板限定为 loopback。</p>
 <p>客户端统一使用 <code>/mcp/</code>，<code>/mcp</code> 返回相对路径的 308 跳转。MCP 校验 Host／Origin，包括显式默认端口的等价形式；CORS 暴露 MCP session／protocol 响应头。旧 SSE 仅供本地使用，公开入口使用 Streamable HTTP，并由已安装的 SDK 协商协议版本。</p>

@@ -53,14 +53,16 @@ class Worker:
         self.data_version = None
 
     def _info(self) -> dict:
-        return {"host": socket.gethostname(), "pid": os.getpid(), "cpus": os.cpu_count()}
+        return {"host": socket.gethostname(), "pid": os.getpid(), "cpus": os.cpu_count(),
+                "lease_token_supported": True}
 
     def run_once(self) -> bool:
         """Lease and finish one task; ``False`` when there was nothing to do."""
         if hasattr(self.store, "refresh"):
             self.store.refresh()
+        versions = list(self.store.versions().values()) if hasattr(self.store, 'versions') else [self.store.snapshot_id]
         status, task = self.t.post("/v1/ades/lease", {"worker": self.name, "panel": self.store.snapshot_id,
-                                                      "info": self._info()})
+                                                      "panels":versions, "info": self._info()})
         if status != 200 or not task:
             return False
         stop = threading.Event()
@@ -70,13 +72,20 @@ class Worker:
         finished = False
         try:
             spec = task["spec"]
+            store = self.store.for_universe(spec['universe']) if hasattr(self.store,'for_universe') else self.store
+            if store.snapshot_id != task['version']:
+                self.t.post('/v1/ades/release',dict(task_id=task['task_id'],worker=self.name,lease_token=task.get('lease_token')))
+                finished = True
+                return True
             if self.data is None or self.data.key != spec["key"] or self.data_version != task["version"]:
                 self.data = None                       # drop the old panel before loading the next
-                if self.store.snapshot_id != task["version"]:
-                    raise ValueError("worker panel does not match task version")
-                self.data = sl.load_spec(self.store, spec)
-                self.data_version = task["version"]
+                self.data = sl.load_spec(store, spec)
+                self.data_version = self.data.version
                 log.info("loaded spec %s in %.1fs", spec["key"], self.data.loaded_s)
+            if self.data_version != task['version']:
+                self.t.post('/v1/ades/release',dict(task_id=task['task_id'],worker=self.name,lease_token=task.get('lease_token')))
+                finished = True
+                return True
             results = sl.score_items(self.data, task["items"])
             self.t.post("/v1/ades/complete", {"task_id": task["task_id"], "lease_token":task.get("lease_token"), "worker": self.name,
                                               "seconds": round(time.perf_counter() - t0, 3), "results": results})
@@ -127,7 +136,8 @@ def main(argv=None) -> None:
     signal.signal(signal.SIGTERM, _stop)
     key = open(a.key_file).read().strip()
     name = a.name or f"{socket.gethostname()}-{os.getpid()}"
-    Worker(HttpTransport(a.controller, key), QFVPanelStore(a.panel), name).serve()
+    from assay.data.markets import MarketStores
+    Worker(HttpTransport(a.controller, key), MarketStores.from_env(us=QFVPanelStore(a.panel)), name).serve()
 
 
 if __name__ == "__main__":

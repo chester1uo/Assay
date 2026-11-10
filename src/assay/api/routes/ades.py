@@ -48,7 +48,15 @@ def _name(body: dict) -> str:
 
 @router.post("/lease", dependencies=[Depends(require_worker)])
 def lease(body: dict = Body(...)):
-    task = _svc().lease(_name(body), str(body.get("panel") or ""), body.get("info") or {})
+    panels = body.get('panels', body.get('panel'))
+    info = body.get('info') or {}
+    if (not isinstance(info,dict) or not isinstance(panels,(str,list))
+            or (isinstance(panels,list) and (not panels or len(panels)>8 or any(not isinstance(p,str) or not p for p in panels)))):
+        raise HTTPException(422,'valid panel versions and worker info are required')
+    try:
+        task = _svc().lease(_name(body),panels,info)
+    except ValueError as exc:
+        raise HTTPException(422,str(exc)) from exc
     return task if task is not None else Response(status_code=204)
 
 
