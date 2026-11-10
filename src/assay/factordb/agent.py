@@ -144,8 +144,11 @@ class FactorService:
             self.reg.create_job(job_id, owner, spec, [e for _, e, _ in accepted], label, version=version)
             self.reg.update_job(job_id, factor_ids=[f for f, _, _ in accepted])
             if self.ades is not None:
+                # Legacy workers only implement the unchanged next_open labels.
+                # Fenced task IDs keep the other modes on upgraded workers.
                 self.ades.enqueue(job_id, owner or "anonymous", spec, version,
-                                  [[fid, e] for fid, e, _ in accepted], CHUNK)
+                                  [[fid, e] for fid, e, _ in accepted], CHUNK,
+                                  idempotent=execution in {'next_close','close'})
             else:
                 with self._lock:
                     q = self._queues.setdefault(owner or "anonymous", deque())

@@ -91,6 +91,9 @@ the read-only QFV panel and worker-only keys; the base template does not enable 
 continue ordinary compute jobs; token-fenced research tasks are leased only to
 workers supporting that protocol. Upgrade the controller first, followed by at
 least one worker supporting the target market.</p>
+<p>Corrected <code>next_close</code> and newly supported <code>close</code> jobs also require upgraded
+workers; legacy workers continue ordinary <code>next_open</code> jobs. The <code>next_close</code>
+forward-return cache uses a separate v2 filename so pre-upgrade labels cannot be reused.</p>
 <h2 id="reverse-proxy-and-transport">Reverse proxy and transport</h2>
 <p>Preserve the external <code>Host</code>, <code>Authorization</code>, <code>X-API-Key</code>, <code>Accept</code> and MCP protocol
 headers. Disable response buffering for <code>/mcp/</code> and evaluation streams. Caddy's

@@ -86,3 +86,18 @@ def test_no_pack_dir_means_no_packs(panel, monkeypatch):
     assert specpack.pack_root() is None
     with pytest.raises(ValueError):
         specpack.open_or_build(QFVPanelStore(panel), "TOP500", "2024-12-02", "2025-01-24", fields=["close"])
+
+
+def test_next_close_does_not_reuse_signal_close_labels(panel,tmp_path):
+    pack=specpack.open_or_build(QFVPanelStore(panel),'TOP500','2024-12-02','2025-01-24',
+                               fields=sl.FIELDS,root=tmp_path/'packs')
+    # Simulate the persistent file produced by the pre-upgrade implementation.
+    legacy=pack.path/'fwd-next_close-1.npy'
+    np.save(legacy,np.full(pack.fields['close'].shape,99.))
+    result=pack.fwd([1],'next_close')[1]
+    close=pack.fields['close']
+    want=np.full(close.shape,np.nan)
+    want[:-2]=close[2:]/close[1:-1]-1
+    np.testing.assert_allclose(result,want,equal_nan=True)
+    assert (pack.path/'fwd-next_close-v2-1.npy').exists()
+    assert np.all(np.load(legacy)==99.)

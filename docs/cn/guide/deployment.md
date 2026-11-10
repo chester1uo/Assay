@@ -50,6 +50,8 @@ ASSAY_DATA_DIR_US=/srv/assay/market/us
 
 已有多市场部署还应保留 `ASSAY_DATA_DIR_CN`／`ASSAY_DATA_DIR_HK` 及其 `SNAPSHOT.json`，通过 `/v1/fdb/markets` 检查各市场的数据版本。新版 worker 会声明全部可用 panel，以及 `info.lease_token_supported=true`。滚动升级期间，旧 worker 可以继续处理普通计算任务；带租约令牌保护的研究任务只分配给支持该协议的 worker。先更新控制器，再更新至少一个支持目标市场的 worker。
 
+修正后的 `next_close` 和新增的 `close` 任务同样只交给新版 worker；旧 worker 继续处理普通 `next_open` 任务。`next_close` 的 forward-return 缓存使用独立的 v2 文件名，避免重用旧标签。
+
 ## 反向代理与传输
 
 保留外部 `Host`、`Authorization`、`X-API-Key`、`Accept` 和 MCP 协议头。`/mcp/` 与评估流应关闭响应缓冲。Caddy 模板已立即刷新；nginx 应配置 `proxy_buffering off`、HTTP/1.1 和足够覆盖一次实验的读取超时。只信任实际代理来源的 forwarded headers；systemd 模板限定为 loopback。

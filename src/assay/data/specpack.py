@@ -98,7 +98,10 @@ class SpecPack:
         """Forward returns per horizon (unmasked, as the evaluator expects), computing and
         storing the horizons this pack does not have yet."""
         horizons = sorted({int(h) for h in horizons})
-        files = {h: self.path / f"fwd-{_safe(execution)}-{h}.npy" for h in horizons}
+        # Earlier next_close packs used signal-day close, before daily-v2 moved
+        # entry to next-day close. Those persistent labels cannot be reused.
+        execution_key = 'next_close-v2' if execution == 'next_close' else execution
+        files = {h: self.path / f"fwd-{_safe(execution_key)}-{h}.npy" for h in horizons}
         missing = [h for h in horizons if not files[h].exists()]
         if missing:
             open_ = self.fields.get("open")

@@ -79,6 +79,10 @@ continue ordinary compute jobs; token-fenced research tasks are leased only to
 workers supporting that protocol. Upgrade the controller first, followed by at
 least one worker supporting the target market.
 
+Corrected `next_close` and newly supported `close` jobs also require upgraded
+workers; legacy workers continue ordinary `next_open` jobs. The `next_close`
+forward-return cache uses a separate v2 filename so pre-upgrade labels cannot be reused.
+
 ## Reverse proxy and transport
 
 Preserve the external `Host`, `Authorization`, `X-API-Key`, `Accept` and MCP protocol

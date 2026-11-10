@@ -1,5 +1,6 @@
 """Rolling upgrades must not lease token-fenced research work to old workers."""
 from assay.ades.tasks import TaskQueue
+import pytest
 from assay.factordb import service
 from tests.ades.test_ades import controller
 
@@ -35,3 +36,19 @@ def test_retired_snapshots_leave_recoverable_failure_receipts(tmp_path):
     assert {r['factor_id'] for r in results}=={'f1','f2'}
     assert all(r['metrics'] is None and 'retired' in r['error'] for r in results)
     assert q.retire_versions(['current'])==[]
+
+
+@pytest.mark.parametrize('execution',['next_close','close'])
+def test_new_execution_modes_require_upgraded_workers(controller,execution):
+    from assay.ades.worker import Worker
+    from assay.data.store import QFVPanelStore
+    from tests.ades.test_ades import _ClientTransport
+    client,panel=controller
+    svc=service.get()
+    job=svc.submit('owner',['ts_delta(close,2)'],universe='TOP500',start='2024-12-02',horizons=[1],execution=execution)
+    response=client.post('/v1/ades/lease',headers={'Authorization':'Bearer wk-1'},
+        json={'worker':'legacy','panel':svc.db.qfv.snapshot_id,'info':{}})
+    assert response.status_code==204
+    worker=Worker(_ClientTransport(client,'wk-1'),QFVPanelStore(panel),'upgraded')
+    assert worker.run_once()
+    assert svc.job(job['job_id'])['status']=='done'
