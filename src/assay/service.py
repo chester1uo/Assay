@@ -169,11 +169,12 @@ class AssayService:
     def research(self):
         """Durable agent research workspace, separate from in-memory panel sessions."""
         from assay.research import AssayBackend, ResearchWorkspace
+        from assay.integrations.factordb import FactorDBResearchBackend
 
         if not hasattr(self, "_research"):
             self._research = ResearchWorkspace(
                 self.config.data_dir / "research" / "workspace.sqlite3",
-                {"assay": AssayBackend(self)},
+                {"assay": AssayBackend(self), "factordb_ades": FactorDBResearchBackend()},
             )
         return self._research
 

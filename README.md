@@ -27,7 +27,8 @@ authentication, QFinVerse-panel ingestion, and optional native kernels. See the
 - **Datasets:** fix data-read/scoring windows, trading dates, execution settings and expression contracts.
 - **Persistent sessions:** retain goals, notes, attempts and evaluation budgets in SQLite.
 - **Experiments:** preserve successful and failed attempts, link revisions and compare settings.
-- **MCP:** 34 tools, including 8 FactorDB tools and 15 backend/dataset/session/experiment tools, share state with the SDK.
+- **MCP:** 39 tools, including 8 FactorDB tools and 20 backend/dataset/session/experiment tools, share state with the SDK.
+- **Public endpoint:** `https://assay.qfinverse.com/mcp/` (Streamable HTTP with Bearer/API-key authentication). See the [deployment guide](docs/en/guide/deployment.md) for configuration and release checks.
 - **Backend boundary:** connect other evaluators through a Python protocol, independently of the LLM.
 
 See the [agent research guide](docs/en/guide/agent-research.md) for examples and recovery
@@ -116,6 +117,7 @@ There are two ways to populate RAW:
 | `ASSAY_SECRET_KEY` / `ASSAY_SESSION_DAYS` | session signing secret (default: generated into the state dir) / sign-in lifetime (default 7) |
 | `ASSAY_API_KEYS` / `ASSAY_ADMIN_KEYS` | keys for the API; admin keys alone may use `/admin` and `/v1/admin/*` (service keys; they keep working next to accounts) |
 | `ASSAY_CORS_ORIGINS` | origins allowed to call the API from a browser (default any, without credentials) |
+| `ASSAY_PUBLIC_URL` / `ASSAY_DEPLOYMENT` | public origin for discovery/OpenAPI / `production` enforces HTTPS, auth and MCP; templates in `deploy/` |
 
 ### US data from QFinVerse
 

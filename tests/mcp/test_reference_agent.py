@@ -8,6 +8,17 @@ import pytest
 from assay.agent import run_agent, ChatModel
 
 
+def test_compact_feedback_keeps_net_portfolio_metrics_without_trade_arrays():
+    from assay.agent import model_tool_result
+    value=model_tool_result('assay_experiment_run',dict(id='exp_a',status='completed',report=dict(rank_ic=.1,
+        portfolio=dict(status='completed',total_return=.02,sharpe=.5,cost_drag=.001,
+                       warnings=['missing quote'],nav_series=[1.,1.02],trade_log=[{'symbol':'A'}]))))
+    assert value['report']['portfolio']['total_return']==.02
+    assert value['report']['portfolio']['cost_drag']==.001
+    assert value['report']['portfolio']['warnings']==['missing quote']
+    assert 'trade_log' not in value['report']['portfolio'] and 'nav_series' not in value['report']['portfolio']
+
+
 class Session:
     def __init__(self):
         self.calls = []
@@ -175,7 +186,7 @@ def test_compact_feedback_preserves_metrics_scope_and_failure_without_series():
     assert compact['report']['score_period'] == original['report']['score_period']
     assert compact['report']['failure_mode'] == 'INCOMPLETE_SCORE_COVERAGE'
     assert 'rank_ic_series' not in compact['report'] and 'panel_report' not in compact
-    assert model_tool_result('assay_experiment_get', original) == original
+    assert model_tool_result('assay_experiment_get', original) == compact
     assert len(original['report']['rank_ic_series']) == 100
 
 
@@ -187,11 +198,28 @@ def test_text_json_results_normalize_without_losing_other_content():
     assert compact['id'] == 'exp' and compact['report']['rank_ic'] == .2
     assert 'ic_series' not in compact['report'] and 'panel_report' not in compact
     assert normalize_tool_result(wrapped) == record
-    assert model_tool_result('assay_experiment_get', wrapped) == record
+    assert model_tool_result('assay_experiment_get', wrapped) == compact
     for other in ({'content': [{'type': 'text', 'text': 'plain'}]},
                   {'content': [{'type': 'text', 'text': '{}'}, {'type': 'image', 'data': 'x'}]},
                   {'content': [None]}):
         assert normalize_tool_result(other) == other
+
+
+def test_explicit_experiment_page_is_preserved_in_model_feedback():
+    from assay.agent import model_tool_result
+    page=dict(id='exp',status='completed',section='trades',offset=0,limit=1,total=2,
+              next_offset=1,has_more=True,items=[dict(symbol='S1',price=12.)])
+    assert model_tool_result('assay_experiment_get',page)==page
+
+
+def test_reference_client_compacts_legacy_factor_history_and_keeps_pages():
+    from assay.agent import model_tool_result
+    history=dict(factor_id='factor',experiments=[dict(id='exp',status='completed',
+        report={'rank_ic':.1,'portfolio':{'trade_log':[dict(symbol='S1')]*5000}})]*100,decisions=[])
+    page=model_tool_result('assay_factor_history',history)
+    assert len(page['experiments'])==20 and page['history_page']['has_more']
+    assert 'trade_log' not in json.dumps(page)
+    assert model_tool_result('assay_factor_history',page)==page
 
 
 def test_reference_client_normalizes_live_research_mcp_transport(tmp_path):

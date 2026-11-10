@@ -27,7 +27,7 @@ def register_research_tools(mcp, get_service):
     def assay_research_context(session_id: str, limit: int = 10) -> dict:
         """Read compact handoff context: budget, failures, candidates, repeats and notes.
 
-        Each list is limited to 1–50 rows; full time series remain in experiment_get.
+        Each list is limited to 1–50 rows; inspect time series with experiment_get pages.
         Candidate ranking is descriptive, and expression repeats are syntactic.
         """
         return get_service().research.research_context(session_id, limit=limit)
@@ -63,6 +63,7 @@ def register_research_tools(mcp, get_service):
         backend_options: dict | None = None,
         score_period: list[str] | None = None, score_dates: list[str] | None = None,
         expression_policy: dict | None = None,
+        portfolio: dict | None = None,
     ) -> dict:
         """Register a fixed daily evaluation dataset specification, without downloading data.
 
@@ -75,6 +76,7 @@ def register_research_tools(mcp, get_service):
             execution=execution, adj=adj, snapshot_id=snapshot_id, description=description,
             backend_options=backend_options,
             score_period=score_period, score_dates=score_dates, expression_policy=expression_policy,
+            portfolio=portfolio,
         )
 
     @mcp.tool()
@@ -131,9 +133,46 @@ def register_research_tools(mcp, get_service):
         )
 
     @mcp.tool()
-    def assay_experiment_get(experiment_id: str) -> dict:
-        """Inspect a saved attempt, including its hypothesis, full report, diagnostics and error."""
-        return get_service().research.get_experiment(experiment_id)
+    def assay_experiment_reconcile(experiment_id: str) -> dict:
+        """Poll/recover the same asynchronous job, retaining budget and request identity.
+
+        Reconcile after a timeout or restart instead of starting a new attempt.
+        This does not retry a terminal failure or cancel a live worker.
+        """
+        from assay.research_errors import ResearchError
+        try:
+            return get_service().research.reconcile_experiment(experiment_id)
+        except ResearchError as exc:
+            return {"error":exc.to_dict()}
+
+    @mcp.tool()
+    def assay_experiment_cancel(experiment_id: str, reason: str) -> dict:
+        """Durably request async cancellation, retaining the attempt budget charge.
+
+        Queued tasks are stopped and leases fenced; remote computation already
+        running may finish, but late results are rejected. Accepted completion
+        wins a race with cancellation. Reconcile a pending cancellation after
+        a timeout or backend outage. Repeated requests retain the first reason.
+        """
+        from assay.research_errors import ResearchError
+        try:
+            return get_service().research.cancel_experiment(experiment_id, reason)
+        except ResearchError as exc:
+            return {"error": exc.to_dict()}
+
+    @mcp.tool()
+    def assay_experiment_get(
+        experiment_id: str, section: str = "summary", offset: int = 0, limit: int = 20,
+    ) -> dict:
+        """Inspect a saved attempt with compact metrics, costs, diagnostics and error.
+
+        Default summary omits arrays and trade details. Use section trades,
+        positions, nav, ic or diagnostics for pages (offset >= 0, limit 1–100).
+        Full original evidence remains in the research store and session export.
+        """
+        from assay.research_inspection import inspect_experiment
+        return inspect_experiment(get_service().research.get_experiment(experiment_id),
+                                  section=section, offset=offset, limit=limit)
 
     @mcp.tool()
     def assay_experiment_compare(experiment_ids: list[str]) -> dict:
@@ -152,3 +191,32 @@ def register_research_tools(mcp, get_service):
         as parent_id. This changes the record; it does not cancel a running backend.
         """
         return get_service().research.abandon_experiment(experiment_id, reason)
+
+    @mcp.tool()
+    def assay_candidate_decide(experiment_id: str, decision: str, reason: str,
+                               request_id: str, agent: str = 'unspecified') -> dict:
+        """Accept, reject, archive or reopen a candidate using a saved experiment as evidence.
+
+        Decisions are per session and append-only. Only completed experiments can
+        support acceptance. Reuse request_id after a timeout; this spends no experiment budget.
+        """
+        return get_service().research.decide_candidate(experiment_id, decision, reason,
+                                                       request_id=request_id, agent=agent)
+
+    @mcp.tool()
+    def assay_candidate_list(session_id: str) -> dict:
+        """List canonical factors, latest session decisions and supporting attempt IDs."""
+        return {'candidates': get_service().research.list_candidates(session_id)}
+
+    @mcp.tool()
+    def assay_factor_history(
+        factor_id: str, session_id: str | None = None, offset: int = 0, limit: int = 20,
+    ) -> dict:
+        """Page a factor's attempt summaries and decisions in chronological order.
+
+        Both lists use offset/limit (1–100); history_page reports separate totals
+        and the next offset. Use experiment_get for detailed evidence pages.
+        """
+        from assay.research_inspection import inspect_factor_history
+        return inspect_factor_history(get_service().research.factor_history(factor_id, session_id=session_id),
+                                      offset=offset, limit=limit)

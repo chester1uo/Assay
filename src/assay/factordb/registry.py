@@ -23,6 +23,10 @@ from pathlib import Path
 __all__ = ["Registry", "spec_key"]
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS research_submissions (
+    request_id TEXT PRIMARY KEY, inputs TEXT NOT NULL, receipt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS applied_tasks (task_id TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS factors (
     id TEXT PRIMARY KEY, canonical TEXT NOT NULL, expr TEXT NOT NULL, owner TEXT,
     created REAL NOT NULL, tags TEXT NOT NULL DEFAULT '[]', parents TEXT NOT NULL DEFAULT '[]',
@@ -56,6 +60,8 @@ _METRIC_COLS = ("rank_ic", "rank_icir", "ic", "icir", "turnover", "coverage", "l
 
 def spec_key(universe: str, start: str, end: str, horizons, execution: str) -> str:
     raw = json.dumps([universe, str(start), str(end), sorted(int(h) for h in horizons), execution])
+    if execution == 'next_close':
+        raw += '|next-day-close-v2'
     return hashlib.blake2b(raw.encode(), digest_size=8).hexdigest()
 
 
@@ -156,7 +162,7 @@ class Registry:
         if tag:
             where.append("f.tags LIKE ?"); args.append(f'%"{tag}"%')
         order = f"s.{sort_by}" if sort_by != "created" else "s.created"
-        sql = ("SELECT f.id, f.expr, f.owner, f.tags, s.spec, s.version, " + ", ".join(f"s.{k}" for k in _METRIC_COLS)
+        sql = ("SELECT f.id, f.expr, f.owner, f.tags, s.spec, s.version, s.created, " + ", ".join(f"s.{k}" for k in _METRIC_COLS)
                + " FROM scores s JOIN factors f ON f.id = s.factor_id"
                + (" WHERE " + " AND ".join(where) if where else "")
                + f" ORDER BY {order} IS NULL, {'abs(' + order + ')' if sort_by in ('rank_ic', 'rank_icir', 'ic', 'icir') else order} "
@@ -164,7 +170,8 @@ class Registry:
         with self._conn() as c:
             rows = c.execute(sql, (*args, int(limit), int(offset))).fetchall()
         return [{"id": r["id"], "expr": r["expr"], "owner": r["owner"], "tags": json.loads(r["tags"]),
-                 "spec": r["spec"], **{k: _round(r[k]) for k in _METRIC_COLS}} for r in rows]
+                 "spec": r["spec"], 'version': r['version'], 'created': r['created'],
+                 **{k: _round(r[k]) for k in _METRIC_COLS}} for r in rows]
 
     def count(self, spec: str | None = None) -> int:
         with self._conn() as c:
@@ -203,6 +210,40 @@ class Registry:
                              "FROM jobs" + (" WHERE owner = ?" if owner else "") + " ORDER BY created DESC LIMIT ?",
                              ((owner, limit) if owner else (limit,))).fetchall()
         return [dict(r) for r in rows]
+
+    def apply_task_results(self, task, results, seconds):
+        """Atomically retain scores, progress and usage once per durable task receipt."""
+        done = sum(r.get("metrics") is not None for r in results)
+        failed = len(results) - done
+        now = time.time()
+        day = time.strftime("%Y-%m-%d", time.gmtime(task.get("updated", now)))
+        with self._lock, self._conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            if not c.execute("INSERT OR IGNORE INTO applied_tasks VALUES (?)", (task["id"],)).rowcount:
+                return False
+            for r in results:
+                metrics = r["metrics"] if r.get("metrics") is not None else {"error":r.get("error")}
+                vals = [metrics.get(k) for k in _METRIC_COLS]
+                c.execute("INSERT OR REPLACE INTO scores (factor_id,spec,version,owner,"
+                          + ",".join(_METRIC_COLS) + ",metrics,created) VALUES ("
+                          + ",".join("?" * (6 + len(_METRIC_COLS))) + ")",
+                          (r["factor_id"], task["spec"], task["version"], task["owner"],
+                           *vals, json.dumps(metrics, allow_nan=False), now))
+            c.execute("UPDATE jobs SET done=done+?, failed=failed+?,"
+                      " started=COALESCE(started,?), status=CASE WHEN done+failed+? >= total THEN 'done' ELSE 'running' END,"
+                      " finished=CASE WHEN done+failed+? >= total THEN ? ELSE finished END WHERE id=?",
+                      (done, failed, now, done+failed, done+failed, now, task["job_id"]))
+            c.execute("INSERT INTO usage VALUES (?,?,?,?) ON CONFLICT(owner,day) DO UPDATE SET"
+                      " seconds=seconds+excluded.seconds, factors=factors+excluded.factors",
+                      (task["owner"] or "anonymous", day, seconds, done))
+        return True
+
+    def apply_cancellation(self, receipt):
+        """Recover queue cancellation without creating a factor score or usage."""
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE jobs SET status='cancelled', finished=?, error=?"
+                      " WHERE id=? AND status IN ('queued','running')",
+                      (receipt["created"], receipt["reason"], receipt["job_id"]))
 
     # ── usage ────────────────────────────────────────────────────────────────
     def add_usage(self, owner: str | None, seconds: float, factors: int) -> None:

@@ -1,15 +1,44 @@
 <h1 class="doc-title">MCP Server</h1>
-<p>The server now has <strong>34 tools</strong>, including eight FactorDB tools and 15 durable backend/dataset/session/experiment
+<p>The server now has <strong>39 tools</strong>, including eight FactorDB tools and 20 durable backend/dataset/session/experiment
 tools. See the <a href="/doc/guide/agent-research">agent research guide</a> for their workflow and recovery semantics.</p>
 <p>The MCP server exposes Assay's evaluate→library loop as Model Context Protocol tools that LLM
 agents call to drive autonomous alpha mining. Built on the high-level <strong>FastMCP</strong> API
 (<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/mcp/server.py" target="_blank" rel="noopener noreferrer"><code>src/assay/mcp/server.py</code></a>).</p>
-<h2 id="run">Run</h2>
-<pre><code class="language-bash">python -m assay.mcp.server                          # stdio (Claude Desktop / local agents)
-python -m assay.cli serve-mcp --transport sse --port 8001   # SSE/HTTP (remote agents)
+<h2 id="public-endpoint">Public endpoint</h2>
+<p>Connect remote agents to <strong><code>https://assay.qfinverse.com/mcp/</code></strong> using Streamable HTTP.
+Send a personal/service key as <code>Authorization: Bearer …</code> or <code>X-API-Key</code>. The model
+provider key and Assay's access key are separate credentials. This deployment does
+not implement OAuth; the client must support sending these headers.</p>
+<p>Connection metadata is available at
+<a href="https://assay.qfinverse.com/.well-known/assay.json" target="_blank" rel="noopener noreferrer"><code>/.well-known/assay.json</code></a>.
+It reports the deployed tool count and schema digest. Research sessions persist
+in the server database; MCP transport sessions themselves are stateless.</p>
+<pre><code class="language-python">import asyncio
+import os
+from assay.mcp.client import connect_mcp
+
+async def main():
+    async with connect_mcp(url=&quot;https://assay.qfinverse.com/mcp/&quot;,
+                           api_key=os.environ[&quot;ASSAY_MCP_API_KEY&quot;]) as session:
+        tools = await session.list_tools()
+        print([tool.name for tool in tools.tools])
+        print(await session.call_tool(&quot;assay_backend_list&quot;, {&quot;probe&quot;: True}))
+
+asyncio.run(main())
 </code></pre>
-<p>The module imports with no credentials; the data store under the service is built lazily, so
-only tools that touch price data need MASSIVE creds.</p>
+<p>For research, use dataset → research session → experiment → inspection/decision.
+<code>assay_experiment_run</code> uses default panel/factor reuse and records each attempt.
+Use compact context and paginated experiment/history reads for routine inspection.
+The immediate run/replay result still includes the full saved attempt for compatibility.
+Authenticated researchers currently share one workspace.</p>
+<p>Deployment and post-release checks: <a href="/doc/guide/deployment">deployment guide</a>.</p>
+<h2 id="local-execution">Local execution</h2>
+<pre><code class="language-bash">python -m assay.mcp.server                          # stdio (Claude Desktop / local agents)
+python -m assay.cli serve-mcp --transport http --port 8001 # shared authenticated HTTP app
+</code></pre>
+<p>Install <code>.[api,mcp]</code> for HTTP mode. Stdio remains available with the MCP extra alone.
+Prepared local market data requires no vendor credentials. Legacy <code>--transport sse</code>
+is restricted to loopback development; public deployments use the shared HTTP app.</p>
 <h2 id="evaluation-and-library-tools-11">Evaluation and library tools (11)</h2>
 <div class="table-wrap"><table class="doc-table">
 <thead>

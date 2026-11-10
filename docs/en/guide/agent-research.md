@@ -42,6 +42,66 @@ State lives at `<data_dir>/research/workspace.sqlite3`. After restarting, use
 all attempts and remaining budget. Every new request has its own experiment ID,
 even when the expression is identical to an earlier attempt.
 
+## Factor selection and portfolio evidence
+
+New built-in `assay` datasets with next-day execution run both factor diagnostics
+and a portfolio backtest. `report.portfolio` contains cost-adjusted NAV, return,
+Sharpe, drawdown, trading turnover and cost drag. Portfolio settings are frozen in
+the dataset hash. For example, pass `portfolio={"rebalance_type": "weekly"}` when
+registering a dataset. `portfolio={"enabled": False}` selects diagnostics only;
+explicit IC scoring windows and same-day `close` diagnostics use this mode by
+default. Existing saved dataset specifications retain their original settings.
+Reports record absent impact/capital inputs and held positions with missing quotes.
+
+Every parseable attempt registers its canonical factor in the workspace's
+FactorDB registry in the same SQLite transaction. A factor can have many attempts
+and many sessions; the complete reports remain in the experiment history. The
+registry's latest score is a discovery view, not the experimental history.
+
+```python
+decision = ws.decide_candidate(
+    second["id"], "accepted", "Keep the shorter lookback for further research",
+    request_id="select-reversal-3d", agent="agent-b",
+)
+print(ws.list_candidates(session["id"]))
+print(ws.factor_history(second["factor_id"]))
+```
+
+Decisions are append-only and scoped to a factor within one session. Supported
+states are `candidate`, `accepted`, `rejected` and `archived`. Each decision points
+to an experiment and records its reason, author and retry identity. Acceptance
+requires a completed experiment. Decisions do not consume experiment budget and
+survive restart, export and import. Handoff context omits rejected and archived
+factors from its active candidate ranking.
+
+`assay_candidate_decide`, `assay_candidate_list` and `assay_factor_history` expose
+these operations over MCP. The workbench displays portfolio metrics and records
+human selection decisions through the same REST workspace. `fdb_query` and
+`fdb_factor` discover both the research registry and the optional compute registry
+with `source="all"` (default), `"research"` or `"compute"`. Compute submission and
+node-value storage still require the configured FactorDB/ADES backend; discovery
+does not copy nodes or merge the two physical databases.
+
+`next_open` executes after the signal date and attributes overnight returns to the
+old book and intraday returns to the executed book. `next_close` enters at the next
+day's close, including in IC labels. Corrected daily evaluation settings carry
+`evaluation_protocol="assay-daily-v2"`; old `next_close` datasets must be registered
+again. Their stored reports remain readable. Compute score keys also version this
+execution convention, so old labels cannot satisfy new requests from cache.
+
+Observed panel hashes include prices, membership and group labels. Precomputed
+subtrees retain pre-admission rolling history, and membership is applied when
+computing cross-sectional operators and final outputs. Matching replay hashes
+verify the observed input content; they do not create a physical market-data archive.
+
+Run `scripts/validate_research_loop.py --data-root PREPARED_STORE --output NEW_DIR`
+to check the loop against real prepared data. Outputs include session manifests,
+source and implementation hashes, cash/share accounting reconciliation, and
+separate timings for complete research attempts, fresh factor matrices, shared
+panel/CSE matrix batches and exact result-cache hits. Matrix throughput is not
+end-to-end backtest throughput. The independent ledger checks NAV using recorded
+fills; portfolio selection and vendor data completeness need separate validation.
+
 ## Scoring windows and expression contracts
 
 `period` is the data-read interval, including warmup and forward-label buffers.
@@ -79,7 +139,7 @@ or download extra history automatically.
 
 ## MCP workflow
 
-Start `assay serve-mcp`. Fifteen research tools complement the existing eleven evaluation/library tools:
+Start `assay serve-mcp`. Twenty research tools complement the existing eleven evaluation/library tools:
 
 | Tool | Purpose |
 |---|---|
@@ -95,28 +155,43 @@ Start `assay serve-mcp`. Fifteen research tools complement the existing eleven e
 | `assay_research_session_get` | Recover context, notes and attempts |
 | `assay_research_note` | Record decisions and handoff instructions |
 | `assay_experiment_run` | Evaluate and persist a hypothesis and expression |
-| `assay_experiment_get` | Inspect the complete report, diagnostics and error |
+| `assay_experiment_get` | Read compact metrics, costs and failures; page through detailed evidence |
 | `assay_experiment_compare` | Compare metrics and specification compatibility |
-| `assay_experiment_abandon` | Explicitly close an interrupted attempt |
+| `assay_experiment_abandon` | Explicitly close an interrupted synchronous attempt |
+| `assay_candidate_decide` | Append an evidence-linked acceptance, rejection, archive or reopening |
+| `assay_candidate_list` | List canonical candidates and their current session decisions |
+| `assay_factor_history` | Page a factor's attempt summaries and decision history |
+| `assay_experiment_reconcile` | Recover/poll a durable asynchronous attempt |
+| `assay_experiment_cancel` | Persist a reason and cancel asynchronous task acceptance |
 
 An agent discovers live universes, registers a dataset, starts or resumes a session,
 reads prior attempts, lints candidates, executes an experiment, inspects evidence,
 and records its next decision. It can then revise, call the existing portfolio
 tools, or stop. There is no provider call or fixed search algorithm in the workspace.
 
+`assay_experiment_get(id)` now returns a compact summary by default. Request
+`section="trades"`, `"positions"`, `"nav"`, `"ic"` or `"diagnostics"` with
+`offset` and `limit` (1–100) to inspect details. Pages include `total` and
+`next_offset`. This keeps large backtests within model context limits. The Python
+workspace and REST experiment endpoint retain full reports. For long sessions,
+use `assay_research_context` for model input; session export and the complete
+session tool return bulk evidence for storage and analysis.
+`assay_factor_history` also accepts `offset` and `limit`, paging both chronological
+lists. Its `history_page` reports separate experiment and decision totals.
+
 ## Retry, failure and recovery
 
 An attempt transitions from `running` to `completed` or `failed`; explicit recovery
-may change `running` to `abandoned`. Completed means the evaluator returned without
+may change synchronous `running` to `abandoned`, or asynchronous `running` to `cancelled`. Completed means the evaluator returned without
 a failure mode, not that the factor is profitable or statistically validated.
 
 Use a stable `request_id` per attempt. Retrying it returns saved state without
 executing again, including when still running. Different inputs under the same
 request ID are rejected. SQLite reservations enforce budgets across processes;
-failed and abandoned attempts consume budget. Terminal experiments are not
+Failed, abandoned and cancelled attempts consume budget. Terminal experiments are not
 overwritten by subsequent runs, and notes are appended through the API.
 
-A worker interruption leaves a running record. Confirm the worker has stopped,
+A synchronous worker interruption leaves a running record. Confirm the worker has stopped,
 abandon the attempt with a reason, then retry with a new request ID. Abandoning a
 record does not cancel a live backend. Backend exceptions and diagnostic failures
 are retained for the next agent to inspect.
@@ -195,8 +270,9 @@ records, including a session that has advanced since export, are rejected withou
 overwriting or merging. Backends need not be registered to read imported records;
 register the matching backend and make its data available before evaluating again.
 
-Running attempts cannot be migrated: confirm their worker stopped, explicitly abandon
-them, and export again. External `replay_of` references are retained as provenance;
+Running attempts cannot be migrated. Reconcile or cancel asynchronous attempts;
+for synchronous attempts, confirm the worker stopped and explicitly abandon them.
+Export after the records reach terminal states. External `replay_of` references are retained as provenance;
 the source session is not automatically imported. When the source is available,
 its status, expression, hypothesis and specification must match, in either import order. A missing external source must be
 imported separately if it needs to be inspected. Hashes do not authenticate historical
@@ -205,3 +281,69 @@ reports. Importing records does not transfer a running agent, its search tree or
 Import does not disable the source workspace. Budgets apply within each workspace;
 choose where to continue after migration. This is snapshot copying, not distributed
 worker coordination or a global budget service.
+
+## Durable asynchronous research
+
+Configure the FactorDB controller with `ASSAY_FACTORDB_DIR`,
+`ASSAY_QFV_PANEL_DIR`, `ASSAY_ADES=1`, and separate worker credentials
+(`ASSAY_WORKER_KEYS`). Run an ADES worker against the same panel version.
+Probe `assay_backend_list(probe=true)` and copy its `factordb_ades` data version
+into `snapshot_id` when registering the dataset. The SDK equivalent is:
+
+```python
+ws = service.research
+version = ws.backends["factordb_ades"].probe()["data_version"]
+dataset = ws.register_dataset(
+    "panel-reversal", "TOP500", ["2024-12-02", "2025-01-24"],
+    backend="factordb_ades", snapshot_id=version, adj="total", horizons=[1],
+)
+session = ws.create_session(dataset["id"], "Test short-term reversal", max_experiments=6)
+attempt = ws.evaluate(session["id"], "-ts_delta(close, 2)",
+                      "Recent moves may reverse", request_id="candidate-1")
+# Later, including after constructing a new service/workspace process:
+attempt = ws.reconcile_experiment(attempt["id"])
+```
+
+Use dates/universe supported by your own panel. This backend requires total
+adjustment and `as_of=end`, and rejects score windows and custom backend options.
+It pins the logical panel version, without hashing or freezing physical files.
+Results contain aggregate FactorDB diagnostics, not the full synchronous report.
+A changed controller version rejects a new submission; an already submitted
+attempt keeps its original result version.
+
+The MCP operation is `assay_experiment_reconcile(experiment_id)`; REST exposes
+`POST /v1/research/experiments/{id}/reconcile`. The workbench offers
+**Reconcile asynchronous jobs**. Reconciliation is explicit: reads do not poll the
+backend. A transient error retains a running attempt and includes `code`,
+`retryable`, and `recommended_action`. Correct deterministic input failures in a
+new attempt, linking the failed attempt as its parent. Active asynchronous jobs
+cannot be abandoned; use tracked cancellation instead. Keep registry, queue and research databases
+when restarting; exporting a completed manifest preserves records, not worker
+processes or physical market data.
+
+## Cancel asynchronous research
+
+```python
+result = ws.cancel_experiment(attempt["id"], "Research direction changed")
+# After an outage/restart, reconciliation resumes the saved cancellation intent.
+result = ws.reconcile_experiment(attempt["id"])
+```
+
+MCP exposes `assay_experiment_cancel(experiment_id, reason)`. REST exposes
+`POST /v1/research/experiments/{id}/cancel` with `{"reason": "..."}`. In the
+workbench, select a running experiment, expand **Cancel an asynchronous experiment**,
+enter its reason and click **Cancel selected asynchronous experiment**.
+
+The first reason is retained across retries. The adapter publishes
+`supports_cancellation=true`. Cancellation stops queued work and revokes leases,
+including a dispatch delayed until after cancellation. Remote native computation
+already running may finish; its results are rejected. A completion accepted first
+remains completed. Temporary failures keep the cancellation intent in a running
+record; reconcile it instead of submitting a replacement under the same request.
+
+A cancelled attempt is terminal and exportable, retains its attempt-budget charge,
+and can be the parent of a new revision. Cancellation creates no factor score and
+does not cache a failed evaluation. Daily compute usage counts accepted result
+receipts; discarded in-flight computation is not metered. Synchronous backends
+return `CANCELLATION_UNSUPPORTED`; inspect the worker before explicitly abandoning
+an interrupted synchronous record.

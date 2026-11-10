@@ -6,9 +6,32 @@
 python -m assay.cli serve-api --port 8000      # or: uvicorn assay.api.app:app --port 8000
 ```
 
-- 基址：`http://localhost:8000` · 所有数据路由位于 `/v1` 之下
+- 公开基址：`https://assay.qfinverse.com`；本地基址：`http://localhost:8000`
 - 交互式文档（Swagger）：`http://localhost:8000/docs`
 - WebUI 服务于 `/`（参见 [WebUI 指南](webui.md)）。
+
+生产配置、代理、readiness 和发布检查见[部署指南](deployment.md)。MCP 共用此应用的 `/mcp/`。
+
+## 持久研究接口
+
+以下路由与 MCP 共用研究工作区，并使用相同的 API 鉴权。
+
+| 方法 | `/v1/research` 下的路径 | 用途 |
+|---|---|---|
+| GET | `/backends` | 后端声明；可选只读 `probe=true` |
+| GET / POST | `/datasets` | 列出／注册评估规格 |
+| GET / POST | `/sessions` | 发现／创建研究会话 |
+| POST | `/sessions/import` | 导入已校验的 session manifest |
+| GET | `/sessions/{id}` · `/manifest` · `/context` | 完整状态、导出和紧凑 context |
+| POST | `/sessions/{id}/experiments` · `/notes` | 执行实验／追加笔记 |
+| GET | `/experiments/{id}` | 摘要，或用 `section`、`offset`、`limit` 分页 |
+| POST | `/experiments/compare` | 比较至少两次实验 |
+| POST | `/experiments/{id}/replay` · `/reconcile` · `/cancel` · `/abandon` | 显式恢复与管理实验 |
+| POST | `/experiments/{id}/decisions` | 记录候选决策 |
+| GET | `/sessions/{id}/candidates` | 候选状态 |
+| GET | `/factors/{id}/history` | 用 `offset`／`limit` 分页读取生命周期历史 |
+
+完整请求 schema 见 OpenAPI。实验必须提供 request ID，超时后重复使用同一 ID 可取得原实验，避免再次消耗预算。已认证研究员共享研究记录。
 
 ## 鉴权
 

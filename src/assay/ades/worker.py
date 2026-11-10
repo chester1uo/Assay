@@ -50,6 +50,7 @@ class Worker:
     def __init__(self, transport, store, name: str):
         self.t, self.store, self.name = transport, store, name
         self.data: sl.SpecData | None = None
+        self.data_version = None
 
     def _info(self) -> dict:
         return {"host": socket.gethostname(), "pid": os.getpid(), "cpus": os.cpu_count()}
@@ -69,28 +70,31 @@ class Worker:
         finished = False
         try:
             spec = task["spec"]
-            if self.data is None or self.data.key != spec["key"]:
+            if self.data is None or self.data.key != spec["key"] or self.data_version != task["version"]:
                 self.data = None                       # drop the old panel before loading the next
+                if self.store.snapshot_id != task["version"]:
+                    raise ValueError("worker panel does not match task version")
                 self.data = sl.load_spec(self.store, spec)
+                self.data_version = task["version"]
                 log.info("loaded spec %s in %.1fs", spec["key"], self.data.loaded_s)
             results = sl.score_items(self.data, task["items"])
-            self.t.post("/v1/ades/complete", {"task_id": task["task_id"], "worker": self.name,
+            self.t.post("/v1/ades/complete", {"task_id": task["task_id"], "lease_token":task.get("lease_token"), "worker": self.name,
                                               "seconds": round(time.perf_counter() - t0, 3), "results": results})
             finished = True
         except Exception as exc:  # noqa: BLE001 — report and keep serving
             log.exception("task %s failed", task.get("task_id"))
-            self.t.post("/v1/ades/fail", {"task_id": task["task_id"], "worker": self.name, "error": str(exc)[:500]})
+            self.t.post("/v1/ades/fail", {"task_id": task["task_id"], "lease_token":task.get("lease_token"), "worker": self.name, "error": str(exc)[:500]})
             finished = True
         finally:
             stop.set()
             if not finished:     # stopped mid-task (SIGTERM on a deploy): hand it back
-                self.t.post("/v1/ades/release", {"task_id": task["task_id"], "worker": self.name})
+                self.t.post("/v1/ades/release", {"task_id": task["task_id"], "lease_token":task.get("lease_token"), "worker": self.name})
         return True
 
     def _beat(self, task: dict, stop: threading.Event) -> None:
         every = max(5.0, float(task.get("lease_s", 120)) / 3)
         while not stop.wait(every):
-            self.t.post("/v1/ades/heartbeat", {"task_id": task["task_id"], "worker": self.name})
+            self.t.post("/v1/ades/heartbeat", {"task_id": task["task_id"], "lease_token":task.get("lease_token"), "worker": self.name})
 
     def serve(self, idle_max: float = 15.0) -> None:
         idle = 1.0

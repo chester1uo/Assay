@@ -6,9 +6,35 @@ FastAPI app exposing `AssayService` over HTTP, with SSE streaming for evaluation
 python -m assay.cli serve-api --port 8000      # or: uvicorn assay.api.app:app --port 8000
 ```
 
-- Base: `http://localhost:8000` · all data routes under `/v1`
+- Public base: `https://assay.qfinverse.com` · local base: `http://localhost:8000`
 - Interactive docs (Swagger): `http://localhost:8000/docs`
 - The WebUI is served at `/` (see the [WebUI guide](webui.md)).
+
+Production configuration, proxying, readiness and release checks:
+[deployment](deployment.md). MCP shares this app at `/mcp/`.
+
+## Durable research endpoints
+
+All routes below use the same workspace as MCP and require the configured API credentials.
+
+| Method | Path under `/v1/research` | Purpose |
+|---|---|---|
+| GET | `/backends` | Declared backends; optional read-only `probe=true` |
+| GET / POST | `/datasets` | List / register evaluation specifications |
+| GET / POST | `/sessions` | Discover / create research sessions |
+| POST | `/sessions/import` | Import a verified session manifest |
+| GET | `/sessions/{id}` · `/manifest` · `/context` | State, export and compact context |
+| POST | `/sessions/{id}/experiments` · `/notes` | Evaluate an attempt / append a note |
+| GET | `/experiments/{id}` | Summary or paginated `section`, `offset`, `limit` |
+| POST | `/experiments/compare` | Compare at least two attempts |
+| POST | `/experiments/{id}/replay` · `/reconcile` · `/cancel` · `/abandon` | Explicit execution recovery |
+| POST | `/experiments/{id}/decisions` | Record a candidate decision |
+| GET | `/sessions/{id}/candidates` | Candidate states |
+| GET | `/factors/{id}/history` | Paginated lifecycle history, `offset` / `limit` |
+
+OpenAPI contains the full request schemas. Experiment request IDs are required;
+repeat them after a timeout to retrieve the same attempt without spending another
+budget unit. Research records are shared among authenticated researchers.
 
 ## Auth
 

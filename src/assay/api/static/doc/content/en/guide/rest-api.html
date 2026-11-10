@@ -3,10 +3,88 @@
 <pre><code class="language-bash">python -m assay.cli serve-api --port 8000      # or: uvicorn assay.api.app:app --port 8000
 </code></pre>
 <ul>
-<li>Base: <code>http://localhost:8000</code> · all data routes under <code>/v1</code></li>
+<li>Public base: <code>https://assay.qfinverse.com</code> · local base: <code>http://localhost:8000</code></li>
 <li>Interactive docs (Swagger): <code>http://localhost:8000/docs</code></li>
 <li>The WebUI is served at <code>/</code> (see the <a href="/doc/guide/webui">WebUI guide</a>).</li>
 </ul>
+<p>Production configuration, proxying, readiness and release checks:
+<a href="/doc/guide/deployment">deployment</a>. MCP shares this app at <code>/mcp/</code>.</p>
+<h2 id="durable-research-endpoints">Durable research endpoints</h2>
+<p>All routes below use the same workspace as MCP and require the configured API credentials.</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Method</th>
+<th>Path under <code>/v1/research</code></th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/backends</code></td>
+<td>Declared backends; optional read-only <code>probe=true</code></td>
+</tr>
+<tr>
+<td>GET / POST</td>
+<td><code>/datasets</code></td>
+<td>List / register evaluation specifications</td>
+</tr>
+<tr>
+<td>GET / POST</td>
+<td><code>/sessions</code></td>
+<td>Discover / create research sessions</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/sessions/import</code></td>
+<td>Import a verified session manifest</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/sessions/{id}</code> · <code>/manifest</code> · <code>/context</code></td>
+<td>State, export and compact context</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/sessions/{id}/experiments</code> · <code>/notes</code></td>
+<td>Evaluate an attempt / append a note</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/experiments/{id}</code></td>
+<td>Summary or paginated <code>section</code>, <code>offset</code>, <code>limit</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/experiments/compare</code></td>
+<td>Compare at least two attempts</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/experiments/{id}/replay</code> · <code>/reconcile</code> · <code>/cancel</code> · <code>/abandon</code></td>
+<td>Explicit execution recovery</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/experiments/{id}/decisions</code></td>
+<td>Record a candidate decision</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/sessions/{id}/candidates</code></td>
+<td>Candidate states</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/factors/{id}/history</code></td>
+<td>Paginated lifecycle history, <code>offset</code> / <code>limit</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>OpenAPI contains the full request schemas. Experiment request IDs are required;
+repeat them after a timeout to retrieve the same attempt without spending another
+budget unit. Research records are shared among authenticated researchers.</p>
 <h2 id="auth">Auth</h2>
 <p>A server runs in one of three modes:</p>
 <div class="table-wrap"><table class="doc-table">

@@ -197,10 +197,25 @@ def test_sdk_mcp_and_real_evaluator_persist_failed_and_successful_reports(tmp_pa
     success = tools["assay_experiment_run"](sid, "cs_rank(ts_returns(close,5))", "momentum", "one")
     assert success["status"] == "completed"
     assert success["report"]["rank_ic"] is not None
+    portfolio = success['report']['portfolio']
+    assert portfolio['status'] == 'completed' and portfolio['nav_series']
+    assert portfolio['config']['adjustment'] == dataset['adj']
+    assert portfolio['spec_hash'] == dataset['spec_hash']
+    assert success['report']['universe_as_of'] == dataset['as_of']
+    assert success['report']['data_as_of'] == dataset['as_of']
+    assert success['report']['universe_symbols_hash']
+    assert success['report']['universe_axis'] == 'historical_membership_union'
+    decision = tools['assay_candidate_decide'](success['id'], 'accepted', 'reviewed backtest', 'select-one')
+    assert tools['assay_factor_history'](success['factor_id'])['decisions'] == [decision]
     failed = tools["assay_experiment_run"](sid, "no_such_op(close)", "failure", "two")
     assert failed["status"] == "failed"
     assert failed["report"]["diagnostics"]
-    assert tools["assay_experiment_get"](failed["id"]) == failed
+    from assay.research_inspection import summarize_attempt
+    assert tools["assay_experiment_get"](failed["id"]) == summarize_attempt(failed)
+    detail = tools['assay_experiment_get'](success['id'], section='nav', limit=2)
+    assert detail['items'] == [dict(date=d, nav=v) for d,v in
+                              zip(portfolio['nav_dates'][:2], portfolio['nav_series'][:2])]
+    assert detail['total'] == len(portfolio['nav_series'])
     assert tools["assay_experiment_compare"]([success["id"], failed["id"]])["comparable"]
     assert assay.research_workspace().get_session(sid)["experiments"] == [success, failed]
     fresh_service = AssayService(AssayConfig.for_tests(tmp_path))

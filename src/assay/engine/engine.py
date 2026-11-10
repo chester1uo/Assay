@@ -121,6 +121,7 @@ class FactorEngine:
         self._groups = self._build_groups(group_data or {})
         self.membership: np.ndarray | None = None   # (T, N) bool: point-in-time universe membership
         self.snapshot: str | None = None            # data version the panel was read from
+        self.value_cache = None  # optional, bounded research execution cache
 
     @classmethod
     def from_matrices(
@@ -233,7 +234,8 @@ class FactorEngine:
         matrices = {f: self._matrix(f) for f in iter_fields(node)}
         ctx = EvalContext(self.dates.tolist(), self.symbols.tolist(), matrices, self._groups)
 
-        values = self._eval(node, ctx)
+        cache = getattr(self, 'value_cache', None)
+        values = cache.evaluate(self, node, ctx) if cache is not None else self._eval(node, ctx)
         if np.isscalar(values) or np.ndim(values) == 0:  # a constant factor
             values = np.full(self._shape, float(values), dtype=np.float64)
         values = self._members_only(np.asarray(values, dtype=np.float64))
@@ -247,6 +249,7 @@ class FactorEngine:
         if isinstance(node, OpNode):
             spec = operators.get(node.op)
             args = [self._eval(child, ctx) for child in node.children]
+            args = self._cross_section_args(spec, args)
             try:
                 return spec.fn(*args, ctx=ctx) if spec.needs_ctx else spec.fn(*args)
             except EvaluationError:
@@ -284,6 +287,7 @@ class FactorEngine:
 
         spec = operators.get(node.op)
         args = [self._eval_cse(child, ctx, memo, hashes, refs) for child in node.children]
+        args = self._cross_section_args(spec, args)
         try:
             val = spec.fn(*args, ctx=ctx) if spec.needs_ctx else spec.fn(*args)
         except EvaluationError:
@@ -301,6 +305,14 @@ class FactorEngine:
                 if isinstance(child, OpNode):
                     self._release(hashes[id(child)], memo, refs)
         return val
+
+    def _cross_section_args(self, spec, args):
+        # Historical rolling inputs remain available before index admission;
+        # cross-sectional statistics only include that day's actual members.
+        if self.membership is None or spec.schema.get('category') != 'cross-sectional':
+            return args
+        return [np.where(self.membership, arg, np.nan) if isinstance(arg, np.ndarray) and arg.shape == self._shape
+                else arg for arg in args]
 
     @staticmethod
     def _release(h: str, memo: dict, refs: dict) -> None:
@@ -331,12 +343,14 @@ class FactorEngine:
                 _walk(nd)
         return refs
 
-    def evaluate_many(self, exprs, *, precompute=None, precompute_min_nodes: int = 3) -> list[FactorResult]:
+    def evaluate_many(self, exprs, *, precompute=None, precompute_min_nodes: int = 3,
+                      mask_output: bool = True) -> list[FactorResult]:
         """All results of :meth:`evaluate_iter` as a list (see there)."""
-        return list(self.evaluate_iter(exprs, precompute=precompute, precompute_min_nodes=precompute_min_nodes))
+        return list(self.evaluate_iter(exprs, precompute=precompute, precompute_min_nodes=precompute_min_nodes,
+                                       mask_output=mask_output))
 
     def evaluate_iter(self, exprs, *, precompute=None, precompute_min_nodes: int = 3, release: bool = True,
-                      errors: str = "raise"):
+                      errors: str = "raise", mask_output: bool = True):
         """Evaluate many expressions over one shared panel with CSE (engineering §4.3).
 
         Builds the field matrices once and threads a single structural-hash memo
@@ -390,7 +404,8 @@ class FactorEngine:
                 self._release(hashes[id(nd)], memo, refs)
             if np.isscalar(values) or np.ndim(values) == 0:
                 values = np.full(self._shape, float(values), dtype=np.float64)
-            yield FactorResult(expr_str, self._members_only(np.asarray(values, dtype=np.float64)),
+            values = np.asarray(values, dtype=np.float64)
+            yield FactorResult(expr_str, self._members_only(values) if mask_output else values,
                                ctx.dates, ctx.symbols)
             del values
 
@@ -422,14 +437,10 @@ class FactorEngine:
                     memo[h] = mat
 
     def panel_fingerprint(self) -> str:
-        """Stable digest of *this panel's identity* — dates × symbols × fields.
+        """Cache identity of the observed values, axes, membership and group labels.
 
-        Two engines built over the same universe/period/as-of/adjustment produce the
-        same fingerprint; **growing the history (new dates) changes it**, so a
-        precompute store keyed by the fingerprint refreshes automatically as data is
-        ingested (it simply misses the stale key and recomputes). Cheap: hashes the
-        first/last date, the date count, and a digest of the sorted symbol + field
-        axes — not the matrix contents.
+        Restatements and changes in research context invalidate stored subtrees,
+        even when the date and symbol axes remain identical.
         """
         import hashlib
 
@@ -445,7 +456,26 @@ class FactorEngine:
         preimage = f"{first}|{last}|{int(d.size)}|{int(self._shape[1])}|{sym_digest}|{fld_digest}"
         if self.snapshot:  # a new data version (restated history) must not reuse cached matrices
             preimage += f"|{self.snapshot}"
+        preimage += '|' + self.content_fingerprint()
         return hashlib.blake2b(preimage.encode(), digest_size=16).hexdigest()
+
+    def content_fingerprint(self) -> str:
+        """Hash the observed panel, including values and historical membership."""
+        import hashlib
+        digest = hashlib.sha256()
+        digest.update(str(self.dates.astype('datetime64[D]').tolist()).encode())
+        digest.update(str(self.symbols.tolist()).encode())
+        for field in sorted(self._field_cols):
+            values = np.array(self.field_matrix(field), dtype='<f8', order='C', copy=True)
+            values[np.isnan(values)] = np.nan
+            digest.update(field.encode())
+            digest.update(values.tobytes())
+        if self.membership is not None:
+            digest.update(np.asarray(self.membership, dtype=bool).tobytes())
+        import json
+        for key, values in sorted(self._groups.items()):
+            digest.update(json.dumps([key, values.tolist()], sort_keys=True, default=str).encode())
+        return digest.hexdigest()
 
     # -- diagnostics ----------------------------------------------------------
     def diagnose(

@@ -114,7 +114,12 @@ def status():
     """Which mode the server runs in, and whether the first admin still has to be created."""
     if not accounts_enabled():
         return {"accounts": False, "setup_required": False, "registration": "closed"}
-    return {"accounts": True, "setup_required": account_store().count_users() == 0,
+    setup_required = account_store().count_users() == 0
+    if setup_required:
+        # Materialize the operator-only token before the browser asks for it.
+        # Its value is never returned by this public endpoint.
+        ensure_setup_token()
+    return {"accounts": True, "setup_required": setup_required,
             "registration": "invite_only"}
 
 

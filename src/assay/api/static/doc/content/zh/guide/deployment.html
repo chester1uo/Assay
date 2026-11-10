@@ -1,0 +1,80 @@
+<h1 class="doc-title">部署 Assay</h1>
+<p>公开入口为 <strong>https://assay.qfinverse.com</strong>。REST 与 MCP 在同一个 API 进程中运行，共用鉴权与持久研究状态。</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>接口</th>
+<th>公开地址</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>研究工作台</td>
+<td><code>https://assay.qfinverse.com/</code></td>
+</tr>
+<tr>
+<td>Streamable HTTP MCP</td>
+<td><code>https://assay.qfinverse.com/mcp/</code></td>
+</tr>
+<tr>
+<td>研究 REST</td>
+<td><code>https://assay.qfinverse.com/v1/research</code></td>
+</tr>
+<tr>
+<td>OpenAPI／交互式 API</td>
+<td><code>https://assay.qfinverse.com/openapi.json</code>／<code>/docs</code></td>
+</tr>
+<tr>
+<td>连接发现</td>
+<td><code>https://assay.qfinverse.com/.well-known/assay.json</code></td>
+</tr>
+<tr>
+<td>文档</td>
+<td><code>https://assay.qfinverse.com/doc/</code></td>
+</tr>
+<tr>
+<td>存活／鉴权后的就绪检查</td>
+<td><code>/health</code>／<code>/ready</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>连接发现文档是 Assay 自己的元数据，包含接口版本、实际工具数量／schema 摘要与鉴权方式，不是 OAuth 发现协议。远程客户端需要支持 Bearer 或 <code>X-API-Key</code>；仅支持 OAuth 服务端的客户端还需要额外适配。</p>
+<h2 id="安装与配置">安装与配置</h2>
+<p>部署验收使用 Python 3.12 和 <code>deploy/constraints.txt</code> 中的版本。在发布目录执行：</p>
+<pre><code class="language-bash">python3.12 -m venv .venv
+.venv/bin/python -m pip install -c deploy/constraints.txt '.[api,mcp,perf]'
+python scripts/build_doc_hub.py
+</code></pre>
+<p>文档构建应使用已安装 <code>markdown-it-py</code> 的开发解释器，也可直接发布已生成的静态文档；该包不是运行时依赖。</p>
+<p>部署模板包括<a href="https://github.com/QFinVerse/Assay/blob/main/deploy/assay.env.example" target="_blank" rel="noopener noreferrer">环境配置</a>、<a href="https://github.com/QFinVerse/Assay/blob/main/deploy/assay.service" target="_blank" rel="noopener noreferrer">systemd 服务</a>和 <a href="https://github.com/QFinVerse/Assay/blob/main/deploy/Caddyfile" target="_blank" rel="noopener noreferrer">Caddy 代理</a>。模板假设使用独立的 <code>assay</code> 用户，代码与虚拟环境位于 <code>/opt/assay</code>，配置文件为 <code>/etc/assay/assay.env</code>，可写状态目录为 <code>/var/lib/assay</code>，只读的 US 行情位于 <code>/srv/assay/market/us</code>。启动前需创建目录并将运行状态目录交给该用户；按目标主机调整路径。</p>
+<p>关键设置：</p>
+<pre><code class="language-dotenv">ASSAY_DEPLOYMENT=production
+ASSAY_PUBLIC_URL=https://assay.qfinverse.com
+ASSAY_MCP_HTTP=1
+ASSAY_ACCOUNTS=1
+ASSAY_CORS_ORIGINS=https://assay.qfinverse.com
+ASSAY_DATA_DIR=/var/lib/assay
+ASSAY_STATE_DIR=/var/lib/assay/accounts
+ASSAY_CONFIG_FILE=/var/lib/assay/config.json
+ASSAY_DATA_DIR_US=/srv/assay/market/us
+</code></pre>
+<p>生产模式要求 HTTPS 公开地址、有效的鉴权配置和可用的 MCP HTTP 模块；缺失时拒绝启动。<code>ASSAY_PUBLIC_URL</code> 只填写 origin，不附带路径、查询参数或凭证。发现文档与 OpenAPI 使用此地址，不会被请求中的代理 Host 替换。</p>
+<p>全新安装启用账户后，访问 <code>/login</code>，使用 <code>ASSAY_STATE_DIR/setup_token</code> 中的一次性初始化 token 创建管理员。升级现有站点应保留账户库和签名 secret。研究员通过邀请加入，在 Account 页面创建个人 API key。Assay 服务端不需要 LLM key，外部 Agent 自行连接模型。</p>
+<p>首版使用一个 API worker。研究 SQLite 状态持久化，临时行情 session 与缓存计数仍在进程内，数据更新调度器也按进程运行。MCP HTTP 的无状态传输不代表这些组件已分布式化。需要 FactorDB／ADES 时，还要配置可写的 registry／queue 目录、只读 QFV panel 和专用 worker key；基础模板不启用它们。</p>
+<h2 id="反向代理与传输">反向代理与传输</h2>
+<p>保留外部 <code>Host</code>、<code>Authorization</code>、<code>X-API-Key</code>、<code>Accept</code> 和 MCP 协议头。<code>/mcp/</code> 与评估流应关闭响应缓冲。Caddy 模板已立即刷新；nginx 应配置 <code>proxy_buffering off</code>、HTTP/1.1 和足够覆盖一次实验的读取超时。只信任实际代理来源的 forwarded headers；systemd 模板限定为 loopback。</p>
+<p>客户端统一使用 <code>/mcp/</code>，<code>/mcp</code> 返回相对路径的 308 跳转。MCP 校验 Host／Origin，包括显式默认端口的等价形式；CORS 暴露 MCP session／protocol 响应头。旧 SSE 仅供本地使用，公开入口使用 Streamable HTTP，并由已安装的 SDK 协商协议版本。</p>
+<h2 id="发布验收">发布验收</h2>
+<p>通过密钥管理或 shell 设置 <code>ASSAY_MCP_API_KEY</code> 后运行：</p>
+<pre><code class="language-bash">PYTHONPATH=src .venv/bin/python scripts/check_deployment.py \
+  --base-url https://assay.qfinverse.com \
+  --output artifacts/deployment-release/check.json
+</code></pre>
+<p>脚本读取 health、发现文档和 OpenAPI，验证无凭证请求被拒绝，再检查带凭证的 readiness、数据集读取，以及真实 MCP 初始化、工具发现、lint 和数据集列表。它不创建数据集、session 或实验，不调用模型，也不把 key 写入报告。未提供 key 时，结果为 incomplete，退出码为 2，不会判为验收通过。</p>
+<p><code>/health</code> 只检查进程存活。<code>/ready</code> 检查研究数据库能否进入写事务及 MCP 是否可用，需要与 REST 相同的凭证；它不证明行情覆盖充分。接入 mining job 前，应单独检查后端、目标时间窗口的数据／日历，并用一条获准的小因子实验验证实际执行。lint 不会测试因子计算和组合记账。</p>
+<p>切换流量前运行回归测试，并用 MCP／REST 验证新建研究 session。保存 request ID，在重启后确认仍返回同一实验。<code>tests/api/test_deployment.py</code> 使用真实 TCP MCP 连接；已有研究传输测试覆盖重启、预算与迁移。</p>
+<h2 id="持久状态与部署范围">持久状态与部署范围</h2>
+<p>备份 <code>/var/lib/assay</code>，包括研究库、账户库、<code>auth_secret</code>、配置和因子库；缓存可重建。数据库使用 SQLite backup API 或停服后复制，直接复制正在写入的主库文件不能保证一致。升级前保留受保护的快照，跨 schema 回滚时配合旧版本恢复。</p>
+<p>当前部署面向<strong>可信团队的共享研究工作区</strong>。账户控制入口与管理员权限，已认证研究员之间共享研究 session 和因子历史。需要机构间私有研究记录时，应使用独立实例或增加 ownership／authorization 层。</p>
+<p>计算复用对只读行情／原子发布的要求见<a href="/doc/guide/performance">性能指南</a>。完整实验结果可能较大，Agent 日常读取应使用紧凑 context，以及实验／历史的分页接口。</p>
+<p>连接示例：<a href="/doc/guide/mcp-server">MCP</a>、<a href="/doc/guide/reference-agent">参考 Agent</a>、<a href="/doc/guide/rest-api">REST</a>。</p>

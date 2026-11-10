@@ -3,10 +3,85 @@
 <pre><code class="language-bash">python -m assay.cli serve-api --port 8000      # or: uvicorn assay.api.app:app --port 8000
 </code></pre>
 <ul>
-<li>基址：<code>http://localhost:8000</code> · 所有数据路由位于 <code>/v1</code> 之下</li>
+<li>公开基址：<code>https://assay.qfinverse.com</code>；本地基址：<code>http://localhost:8000</code></li>
 <li>交互式文档（Swagger）：<code>http://localhost:8000/docs</code></li>
 <li>WebUI 服务于 <code>/</code>（参见 <a href="/doc/guide/webui">WebUI 指南</a>）。</li>
 </ul>
+<p>生产配置、代理、readiness 和发布检查见<a href="/doc/guide/deployment">部署指南</a>。MCP 共用此应用的 <code>/mcp/</code>。</p>
+<h2 id="持久研究接口">持久研究接口</h2>
+<p>以下路由与 MCP 共用研究工作区，并使用相同的 API 鉴权。</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>方法</th>
+<th><code>/v1/research</code> 下的路径</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/backends</code></td>
+<td>后端声明；可选只读 <code>probe=true</code></td>
+</tr>
+<tr>
+<td>GET / POST</td>
+<td><code>/datasets</code></td>
+<td>列出／注册评估规格</td>
+</tr>
+<tr>
+<td>GET / POST</td>
+<td><code>/sessions</code></td>
+<td>发现／创建研究会话</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/sessions/import</code></td>
+<td>导入已校验的 session manifest</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/sessions/{id}</code> · <code>/manifest</code> · <code>/context</code></td>
+<td>完整状态、导出和紧凑 context</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/sessions/{id}/experiments</code> · <code>/notes</code></td>
+<td>执行实验／追加笔记</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/experiments/{id}</code></td>
+<td>摘要，或用 <code>section</code>、<code>offset</code>、<code>limit</code> 分页</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/experiments/compare</code></td>
+<td>比较至少两次实验</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/experiments/{id}/replay</code> · <code>/reconcile</code> · <code>/cancel</code> · <code>/abandon</code></td>
+<td>显式恢复与管理实验</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/experiments/{id}/decisions</code></td>
+<td>记录候选决策</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/sessions/{id}/candidates</code></td>
+<td>候选状态</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/factors/{id}/history</code></td>
+<td>用 <code>offset</code>／<code>limit</code> 分页读取生命周期历史</td>
+</tr>
+</tbody>
+</table></div>
+<p>完整请求 schema 见 OpenAPI。实验必须提供 request ID，超时后重复使用同一 ID 可取得原实验，避免再次消耗预算。已认证研究员共享研究记录。</p>
 <h2 id="鉴权">鉴权</h2>
 <p>服务器有三种模式：</p>
 <div class="table-wrap"><table class="doc-table">

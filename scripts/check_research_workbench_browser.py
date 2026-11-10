@@ -18,6 +18,7 @@ async def real_workflow(browser, base, output):
     await page.goto(base+'/#/research')
     await page.get_by_label('Dataset',exact=True).locator('option').first.wait_for(state='attached')
     await page.get_by_text('Start a new session',exact=True).click()
+    await page.get_by_label('Dataset',exact=True).select_option(label='synthetic-demo')
     goal='Synthetic reversal review '+uuid.uuid4().hex[:8]
     await page.get_by_label('Research goal',exact=True).fill(goal)
     await page.get_by_role('button',name='Create research session',exact=True).click()
@@ -35,6 +36,11 @@ async def real_workflow(browser, base, output):
     await page.get_by_label('Factor expression',exact=True).fill('-cs_rank(ts_returns(close,5))')
     await page.get_by_role('button',name='Evaluate candidate · human action',exact=True).click()
     await page.locator('.rw-attempt.completed').first.wait_for()
+    await page.get_by_text('Candidate decisions',exact=True).click()
+    await page.get_by_label('Candidate decision',exact=True).select_option('accepted')
+    await page.get_by_label('Decision reason',exact=True).fill('Retain this synthetic candidate for further research')
+    await page.get_by_role('button',name='Save candidate decision',exact=True).click()
+    await page.wait_for_function("document.querySelector('[aria-label=\"Decision reason\"]').value === ''")
     await page.get_by_label('Handoff note',exact=True).fill('The invalid expression failed; the revised factor executed. This synthetic test does not establish profitability.')
     await page.get_by_role('button',name='Save handoff note',exact=True).click()
     await page.get_by_label('Handoff note',exact=True).wait_for()
@@ -52,6 +58,9 @@ async def real_workflow(browser, base, output):
         imported.import_session(manifest)
         assert imported.get_session(sid)['experiments'] == manifest['state']['experiments']
     records=manifest['state']['experiments']
+    assert manifest['state']['decisions'][0]['decision']=='accepted'
+    assert manifest['state']['decisions'][0]['experiment_id']==records[1]['id']
+    assert records[1]['report']['portfolio']['status']=='completed'
     assert [a['status'] for a in records]==['failed','completed']
     assert records[1]['parent_id']==records[0]['id']
     assert all(a['agent']=='human:webui' for a in records)

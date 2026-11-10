@@ -54,7 +54,7 @@ def lease(body: dict = Body(...)):
 
 @router.post("/heartbeat", dependencies=[Depends(require_worker)])
 def heartbeat(body: dict = Body(...)):
-    ok = _svc().ades.heartbeat(str(body.get("task_id")), _name(body))
+    ok = _svc().ades.heartbeat(str(body.get("task_id")), _name(body), body.get("lease_token"))
     if not ok:
         raise HTTPException(409, "lease lost")
     return {"ok": True}
@@ -65,8 +65,12 @@ def complete(body: dict = Body(...)):
     svc, worker = _svc(), _name(body)
     results = body.get("results") or []
     done = sum(1 for r in results if r.get("metrics") is not None)
-    task = svc.ades.complete(str(body.get("task_id")), worker, done, len(results) - done,
-                             float(body.get("seconds") or 0))
+    try:
+        task = svc.ades.complete(str(body.get("task_id")), worker, done, len(results) - done,
+                                float(body.get("seconds") or 0),
+                                lease_token=body.get("lease_token"), results=results)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     if task is None:          # lease expired and the task moved on: drop, never double count
         raise HTTPException(409, "lease lost")
     return svc.apply_results(task, results, float(body.get("seconds") or 0))
@@ -75,14 +79,14 @@ def complete(body: dict = Body(...)):
 @router.post("/fail", dependencies=[Depends(require_worker)])
 def fail(body: dict = Body(...)):
     svc = _svc()
-    for t in svc.ades.fail(str(body.get("task_id")), _name(body), str(body.get("error") or "")):
-        svc._progress(t["job_id"], t["owner"], 0, t["n"], 0.0)
+    svc.ades.fail(str(body.get("task_id")), _name(body), str(body.get("error") or ""), body.get("lease_token"))
+    svc.recover_results()
     return {"ok": True}
 
 
 @router.post("/release", dependencies=[Depends(require_worker)])
 def release(body: dict = Body(...)):
-    return {"ok": _svc().ades.release(str(body.get("task_id")), _name(body))}
+    return {"ok": _svc().ades.release(str(body.get("task_id")), _name(body), body.get("lease_token"))}
 
 
 @router.get("/status", dependencies=[Depends(require_admin)])

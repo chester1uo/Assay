@@ -122,6 +122,8 @@ def test_external_replay_sources_are_validated_in_both_import_orders(migration):
     assert target.import_session(other_manifest) == source.get_session(other_sid)
     corrupted = copy.deepcopy(other_manifest)
     corrupted['state']['experiments'][0]['expr'] = 'open'
+    from assay.research_lifecycle import identity
+    corrupted['state']['experiments'][0]['factor_id'] = identity('open')[0]
     isolated = ResearchWorkspace(target.path.parent / 'external.sqlite3')
     isolated.import_session(manifest)
     with pytest.raises(ValueError, match='replay source conflicts'):

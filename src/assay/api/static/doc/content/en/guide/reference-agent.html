@@ -1,7 +1,21 @@
 <h1 class="doc-title">Reference agent and offline demo</h1>
 <p>Assay's server exposes tools and persists research records. The optional reference
 client in <code>assay.agent</code> lets a Chat Completions-compatible model choose tools through
-real stdio MCP. It is replaceable: other MCP clients can use the same research state.</p>
+real stdio or authenticated HTTP MCP. It is replaceable: other MCP clients can use
+the same research state.</p>
+<h2 id="connect-to-the-public-server">Connect to the public server</h2>
+<p>Set the model's <code>ASSAY_AGENT_API_KEY</code> and Assay's separate <code>ASSAY_MCP_API_KEY</code> through
+your secret manager. <code>MODEL_BASE_URL</code> and <code>MODEL_NAME</code> select your model provider:</p>
+<pre><code class="language-bash">python -m assay.agent \
+  --base-url &quot;$MODEL_BASE_URL&quot; --model &quot;$MODEL_NAME&quot; \
+  --task-file task.txt --output ./remote-agent-run \
+  --mcp-url https://assay.qfinverse.com/mcp/ \
+  --mcp-api-key-env ASSAY_MCP_API_KEY --mcp-timeout 300
+</code></pre>
+<p>Choose either <code>--mcp-url</code> or <code>--server-command</code>. Plain HTTP is accepted only for
+loopback testing. The server owns datasets, budgets, attempts and handoff notes;
+the local client retains the model conversation and receipts. Before model calls,
+check the endpoint with the read-only <a href="/doc/guide/deployment">deployment checker</a>.</p>
 <h2 id="run-the-offline-demo">Run the offline demo</h2>
 <pre><code class="language-bash">pip install '.[mcp]'
 python -m assay.demo --output ./demo-workspace

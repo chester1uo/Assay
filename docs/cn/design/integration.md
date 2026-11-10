@@ -3,6 +3,30 @@
 整合后的 Assay 同时保留上游因子计算平台与本地新增的持久研究工作区。
 这些组件都属于 Assay；QFinVerse 是可选的数据生产方，离线研究流程不要求安装 QFinVerse。
 
+## 完整能力与入口
+
+1. **数据与计算**：本地准备好的美股、A 股、港股数据，以及可选 QFinVerse 日频面板；
+   Python/qlib 双语法 DSL、公共 AST、因子评分、诊断、组合和组合回测。
+2. **共享因子基础设施**：FactorDB 的标准化身份、去重、结果存储、相似度查询和批量任务；
+   ADES 可将 FactorDB 计算切片分配给 worker，通过租约和心跳管理任务。
+3. **持续研究**：固定数据集配置、目标、尝试预算、成功/失败记录、修订关系、笔记、上下文、
+   显式重放与带完整性校验的导出/导入。
+4. **Agent 接入**：36 个 MCP 工具、可替换模型的参考客户端、调用/工具预算、原始回执，
+   以及 SDK/REST；Agent 决定研究策略，环境执行并记录。
+5. **研究员入口**：新版侧栏中的四区工作台、账户与 key、Doc Hub、因子与组合页面。
+
+| 使用目标 | 主要入口 | 结果记录 |
+| --- | --- | --- |
+| 单个因子求值/诊断 | `assay_evaluate`、`assay_lint`；`/v1/factor/*` | FactorReport 与原有 factor library |
+| 持续提出、检验和修订假设 | `assay_research_*`、`assay_experiment_*`；`/v1/research/*` | 研究 session、独立 experiment、note 与 manifest |
+| 共享因子批量计算 | `fdb_submit`、`fdb_job`、`fdb_query`；`/v1/fdb/*` | FactorDB factor、spec 和 job |
+| 分布式执行 FactorDB 任务 | `/v1/ades/*` 和 worker 进程 | 带租约的任务切片和计算结果 |
+| 人工审查与介入 | `/#/research`、其他控制台页面、`/doc/` | 与 SDK/MCP 相同的研究记录 |
+
+典型的单 session 流程是注册 dataset、创建 session、读取上下文、执行候选、检查失败、
+提交关联修订、添加笔记和导出记录。批量研究走 FactorDB 的 submit/job/query 流程，
+可选用 ADES。选择 `factordb_ades` 研究后端后，session 内的实验会关联持久 FactorDB job 与版本化结果回执。
+
 ## 组件分工
 
 | 组件 | 负责什么 | 保留的能力 |
@@ -11,10 +35,10 @@
 | FactorDB | 共享因子身份、结果存储、相似度查询、异步计算 | 上游实现及 8 个 MCP 工具 |
 | ADES | 将因子计算切片通过租约分配给 worker | 上游 controller、worker、心跳和任务队列 |
 | 持久研究工作区 | 数据集配置、研究目标、尝试预算、假设、失败、修订关系、笔记与导出记录 | 本地 SQLite 研究层和后端接口 |
-| Agent 与人工入口 | 选择研究动作、检查结果、接续研究 | 参考 Agent、15 个研究 MCP 工具、SDK/REST 和工作台 |
+| Agent 与人工入口 | 选择研究动作、检查结果、接续研究 | 参考 Agent、17 个研究 MCP 工具、SDK/REST 和工作台 |
 | 应用外壳 | 登录、权限、导航和文档 | 上游账户与侧栏，加上研究工作台入口 |
 
-MCP 共 34 个工具：11 个原有评估/因子库工具、8 个 FactorDB 工具和 15 个研究工具。
+MCP 共 36 个工具：11 个原有评估/因子库工具、8 个 FactorDB 工具和 17 个研究工具。
 HTTP MCP 使用 `/mcp/`，每个 API 实例有独立的 HTTP 生命周期；本地仍可使用 stdio。
 
 ## 记录和预算的边界
@@ -23,12 +47,19 @@ FactorDB 的 factor 是可共享、可去重的表达式及其计算结果；研
 需要保留失败、假设和父子关系。同一表达式的多次尝试仍分别保存，已有 factor library 也继续保留。
 本次整合不合并这些数据库结构，也不删除历史记录。
 
-默认研究后端调用进程内评估器，不会自动将实验转成 FactorDB job 或交给 ADES。
-Agent 可以使用两组工具，但 job ID 与 experiment ID 不相同。FactorDB 的每日计算预算仅约束
-其任务；研究工作区另外约束每个 session 的尝试次数，两者都不是跨所有后端的全局预算管理器。
+默认研究后端仍调用进程内评估器。显式选择 `factordb_ades` 后端，实验会提交给 FactorDB/ADES，
+持久保存 job、factor、spec、owner 和逻辑数据版本。超时或重启后调用
+`assay_experiment_reconcile`，沿用原始提交身份，不额外消耗尝试预算。
+任务完成与重试耗尽均保存持久回执；跨库写入中断后可恢复，进度和计算用量按 task 幂等计入。
 
-持久研究 session 也不同于计算引擎的临时 panel session。客户端重启后可以检查研究记录，
-但不会恢复对话或 worker；中断实验需要检查后显式放弃。ADES 的任务租约不会自动恢复研究实验。
+研究工作区约束 session 的尝试次数；FactorDB 每日计算用量归属于后端配置的 owner（默认 `research`），
+按回执完成时的 UTC 日期记账。这是共享 owner 预算，不是每用户隔离或未来计算资源预留。
+
+研究 session 不同于引擎的临时 panel session。协调操作恢复异步执行证据，不会启动 worker 或恢复模型对话。
+同步中断实验仍需检查后显式放弃；仍被跟踪的异步实验使用 `assay_experiment_cancel` 取消，并保存原因。
+取消撤销租约、阻止延迟派发、拒绝迟到结果；不会立即中断远端已运行的原生计算。
+若完成回执先被接受，则保留完成结果。取消不退回尝试预算。
+使用方法见[Agent 研究](../guide/agent-research.md)。
 
 ## 权限与数据
 
@@ -48,3 +79,21 @@ Agent 可以使用两组工具，但 job ID 与 experiment ID 不相同。Factor
 旧模型实验的源码快照、计划和回执保持原样，结果不重算，也不代表已经评估了 FactorDB、ADES
 或新的 HTTP 接口。后续模型实验应基于整合源码重新冻结新 inventory。
 整合检查与独立审计保存在 `artifacts/upstream-integration-20261108/`。
+
+## 已有验证与论文边界
+
+- 整合版本的完整测试为 **1146 通过、3 跳过、0 失败**。跳过的是两个未构建的可选 Rust
+  测试模块和一个缺少 scikit-learn 的可选测试；未报告原生内核吞吐量或生产性能提升。
+- 真实浏览器验证失败—修订—笔记—原始 manifest 下载—新库导入—刷新，另有延迟响应竞态测试。
+  安装包在源码目录外验证资源、研究/账户接口与真实 HTTP MCP tools/list。
+- 原有模型实验为 **24 个任务、4 个模型配置、3 个模型家族**；全部完成两次新评估。
+  这些任务使用各自较早的冻结源码，未评估新增 FactorDB、ADES 或整合后的 HTTP 端点。
+- 论文按系统应用组织：解释组件边界、展示可检查的研究流程并报告工程及模型交互证据。
+  真实任务收益、用户节时、生产部署和与其他框架的收益对比仍缺证据。进一步状态消融是可选
+  分析，不作为系统论文的默认前置条件。
+
+后续异步研究桥版本全量测试 **1160 通过、3 项可选跳过**；真实 worker 与故障注入证据见
+`artifacts/async-research-20261108/`。
+
+取消扩展的完整测试为 **1177 通过、3 项可选跳过**；证据位于
+`artifacts/research-cancellation-20261108/`。已经运行但被丢弃的 worker 计算时间尚不纳入结果回执用量。

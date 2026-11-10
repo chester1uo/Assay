@@ -54,6 +54,29 @@ class DataStore:
     def __init__(self, config: AssayConfig | None = None):
         self.config = config or AssayConfig.from_env()
 
+    def cache_token(self, period):
+        """Local file revision for panel reuse; this does not freeze vendor data.
+
+        Includes missing partitions so adding data invalidates an existing panel.
+        ctime/inode also catch replacement with preserved modification times.
+        """
+        from pathlib import Path
+        start = _as_date(period[0]) - dt.timedelta(days=_DIV_LOOKBACK_DAYS)
+        end = _as_date(period[1])
+        root, market = Path(self.config.data_dir), self.config.market
+        paths = [price_partition_path(root, market, y, m) for y, m in _months_in_range(start, end)]
+        paths += [universe_snapshots_path(root, market), adj_events_path(root, market),
+                  security_groups_path(root, market), trade_status_path(root, market)]
+        rows = []
+        for path in paths:
+            try:
+                stat = path.stat()
+                revision = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino)
+            except FileNotFoundError:
+                revision = None
+            rows.append((str(path.resolve()), revision))
+        return (market, tuple(rows))
+
     # -- universe -------------------------------------------------------------
     def get_universe(self, index_id: str, date, as_of_date) -> list[str]:
         """Constituents of ``index_id`` effective on ``date``, known by ``as_of_date``."""
@@ -79,6 +102,37 @@ class DataStore:
         return list(snap["symbols"][0])
 
     # -- raw reads ------------------------------------------------------------
+    def _universe_changes(self, index_id, end, as_of_date):
+        path = universe_snapshots_path(self.config.data_dir, self.config.market)
+        return (pl.read_parquet(path).filter((pl.col('index_id') == index_id.upper()) &
+                (pl.col('effective_date') <= _as_date(end)) &
+                (pl.col('as_of_date') <= _as_date(as_of_date)))
+                .sort(['effective_date', 'as_of_date']).unique(subset=['effective_date'], keep='last')
+                .sort('effective_date').to_dicts())
+
+    def universe_span(self, index_id, start, end, as_of_date):
+        """Union of members during the period, including securities removed later."""
+        changes = self._universe_changes(index_id, end, as_of_date)
+        initial = [r for r in changes if r['effective_date'] <= _as_date(start)]
+        relevant = initial[-1:] + [r for r in changes if r['effective_date'] > _as_date(start)]
+        return sorted({s for r in relevant for s in r['symbols']})
+
+    def get_membership(self, index_id, dates, symbols, as_of_date):
+        """Date-aligned membership under the requested knowledge cutoff."""
+        import numpy as np
+        days = np.asarray(dates).astype('datetime64[D]')
+        out = np.zeros((len(days), len(symbols)), dtype=bool)
+        if not len(days):
+            return out
+        changes = self._universe_changes(index_id, str(days[-1]), as_of_date)
+        for i, row in enumerate(changes):
+            rows = days >= np.datetime64(row['effective_date'])
+            if i + 1 < len(changes):
+                rows &= days < np.datetime64(changes[i+1]['effective_date'])
+            if rows.any():
+                out[rows] = np.isin(symbols, row['symbols'])
+        return out
+
     def _read_prices(
         self, symbols, start: dt.date, end: dt.date, as_of_date: dt.date
     ) -> pl.DataFrame:

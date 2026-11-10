@@ -1,8 +1,8 @@
 """FastAPI application wiring (architecture §4.5).
 
-Builds the ``Assay API`` app: CORS allow-all, the four ``/v1`` routers
-(``factor`` / ``library`` / ``session`` / ``system``), a lazy :class:`AssayService`
-accessor, and the §4.6 error envelope for engine / validation / transport failures.
+Builds the REST/WebUI application and authenticated MCP transport with a public
+endpoint configuration, origin controls, a lazy :class:`AssayService` accessor,
+and the error envelope for engine / validation / transport failures.
 
 **Importing this module requires no credentials.** The service is *not* built at
 import; :func:`get_service` initialises it lazily on first request (from the env /
@@ -212,18 +212,28 @@ def create_app() -> FastAPI:
     except Exception:  # pragma: no cover
         pass
 
-    mcp_app, mcp_lifespan = _mcp_http()
-    app = FastAPI(title="Assay API", version=assay.__version__, lifespan=mcp_lifespan)
+    from assay.api.deployment import DeploymentSettings, INTERFACE_VERSION, install_endpoints
+
+    deployment = DeploymentSettings.from_env()
+    mcp_app, mcp_lifespan = _mcp_http(deployment)
+    app = FastAPI(title="Assay API", version=assay.__version__, lifespan=mcp_lifespan,
+                  servers=[{"url": deployment.public_url}] if deployment.public_url else None)
+    if deployment.public_url:
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+        from urllib.parse import urlsplit
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=[
+            urlsplit(deployment.public_url).hostname, "localhost", "127.0.0.1", "[::1]"])
 
     # ASSAY_CORS_ORIGINS: comma-separated origins allowed to call the API from a
     # browser (default: any origin, without credentials).
-    origins = [o.strip() for o in os.environ.get("ASSAY_CORS_ORIGINS", "").split(",") if o.strip()]
+    origins = list(deployment.cors_origins)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins or ["*"],
         allow_credentials=bool(origins),
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["Mcp-Session-Id", "MCP-Protocol-Version", "WWW-Authenticate"],
     )
 
     register_exception_handlers(app)
@@ -264,7 +274,10 @@ def create_app() -> FastAPI:
         """Liveness probe — always cheap, never touches data."""
         from assay.api.build import build_info
 
-        return {"status": "ok", "engine_version": assay.__version__, "build": build_info()}
+        return {"status": "ok", "engine_version": assay.__version__, "build": build_info(),
+                "interface_version": INTERFACE_VERSION}
+
+    install_endpoints(app, deployment, mcp_app, get_service)
 
     # WebUI: serve the zero-build static shell at "/". Mounted LAST so the explicit
     # ``/v1/*`` routers and ``/health`` still resolve first; ``html=True`` serves
@@ -274,6 +287,12 @@ def create_app() -> FastAPI:
     static_dir = Path(__file__).resolve().parent / "static"
     _mount_doc_hub(app, static_dir / "doc")
     if mcp_app is not None:
+        from fastapi.responses import RedirectResponse
+
+        @app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
+        async def mcp_root():
+            return RedirectResponse("/mcp/", status_code=308)
+
         app.mount("/mcp", _McpAuth(mcp_app))
 
     @app.get("/login", include_in_schema=False)
@@ -288,27 +307,27 @@ def create_app() -> FastAPI:
     return app
 
 
-def _mcp_http():
+def _mcp_http(deployment):
     """The MCP server as a streamable-HTTP ASGI app for ``/mcp/`` (or ``(None, None)``).
 
-    Stateless (no per-client session state), so any worker can answer any call. The
-    host check of the MCP SDK is off: the app sits behind the reverse proxy and every
-    call is authenticated by :class:`_McpAuth`. ``ASSAY_MCP_HTTP=0`` turns it off."""
+    Stateless transport; research sessions remain persistent in SQLite. Requests
+    have explicit Host/Origin checks and the same authentication as REST.
+    ``ASSAY_MCP_HTTP=0`` turns it off in development."""
     if os.environ.get("ASSAY_MCP_HTTP", "1") == "0":
         return None, None
     try:
         from contextlib import asynccontextmanager
 
-        from mcp.server.transport_security import TransportSecuritySettings
-
         from assay.mcp.server import mcp
     except Exception as exc:  # noqa: BLE001 — the API runs without the optional mcp extra
+        if deployment.production:
+            raise RuntimeError("production requires a working MCP extra; install assay[api,mcp]") from exc
         logger.info("MCP over HTTP is off (%s)", exc)
         return None, None
     with _mcp_app_lock:
         mcp.settings.streamable_http_path = "/"
         mcp.settings.stateless_http = True
-        mcp.settings.transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+        mcp.settings.transport_security = deployment.mcp_security()
         # FastMCP caches a one-shot HTTP manager on the shared tool server. Each
         # create_app() needs its own manager, including concurrent app instances.
         # Capture it here so later factories cannot replace a running app's lifespan.
@@ -340,8 +359,10 @@ class _McpAuth:
                 try:
                     user = resolve_user(request, _presented(request.headers.get("x-api-key"),
                                                             request.headers.get("authorization")))
-                except StarletteHTTPException:
-                    user = None
+                except StarletteHTTPException as exc:
+                    resp = JSONResponse({"error": str(exc.detail)}, status_code=exc.status_code)
+                    await resp(scope, receive, send)
+                    return
                 if user is None:
                     resp = JSONResponse({"error": "sign in or send an API key (X-API-Key or Bearer)"}, status_code=401,
                                         headers={"WWW-Authenticate": "Bearer"})

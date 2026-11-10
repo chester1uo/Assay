@@ -11,8 +11,8 @@ Execution conventions (§6.1, "Execution price conventions"):
 * ``next_open``  — enter at the T+1 open, hold ``h`` days, exit at the T+1+h open.
   ``fwd[t] = open[t+1+h] / open[t+1] - 1``. Avoids trading on the same close the
   signal is computed from; this is the default for most factor strategies.
-* ``next_close`` — enter/exit on the close: ``fwd[t] = close[t+h] / close[t] - 1``.
-  Suitable for MOC / index-tracking strategies.
+* ``next_close`` — enter at the T+1 close: ``fwd[t] = close[t+1+h] / close[t+1] - 1``.
+* ``close`` — same-day close diagnostic: ``fwd[t] = close[t+h] / close[t] - 1``.
 * ``vwap``       — unsupported: the MASSIVE source provides OHLCV + transactions
   only, with no VWAP / intraday data, so this raises :class:`ValueError`.
 
@@ -65,7 +65,7 @@ def forward_returns(
             "execution='vwap' is unsupported: the MASSIVE source provides OHLCV + "
             "transactions only (no VWAP / intraday data)"
         )
-    if execution not in ("next_open", "next_close"):
+    if execution not in ("next_open", "next_close", "close"):
         raise ValueError(
             f"unknown execution {execution!r}; expected 'next_open' or 'next_close'"
         )
@@ -90,7 +90,11 @@ def forward_returns(
                 entry = open_[1 : last + 2]  # open[t+1]     for t in [0, last]
                 exit_ = open_[1 + h : last + 2 + h]  # open[t+1+h]  for t in [0, last]
                 fwd[: last + 1] = _ratio(exit_, entry)
-        else:  # next_close
+        elif execution == 'next_close':
+            last = t_n - 2 - h
+            if last >= 0:
+                fwd[:last + 1] = _ratio(close[1+h:last+2+h], close[1:last+2])
+        else:  # explicit same-day close
             # fwd[t] = close[t+h] / close[t] - 1     (defined for t+h < T)
             last = t_n - 1 - h  # largest t with t+h <= T-1
             if last >= 0:

@@ -2,7 +2,26 @@
 
 Assay's server exposes tools and persists research records. The optional reference
 client in `assay.agent` lets a Chat Completions-compatible model choose tools through
-real stdio MCP. It is replaceable: other MCP clients can use the same research state.
+real stdio or authenticated HTTP MCP. It is replaceable: other MCP clients can use
+the same research state.
+
+## Connect to the public server
+
+Set the model's `ASSAY_AGENT_API_KEY` and Assay's separate `ASSAY_MCP_API_KEY` through
+your secret manager. `MODEL_BASE_URL` and `MODEL_NAME` select your model provider:
+
+```bash
+python -m assay.agent \
+  --base-url "$MODEL_BASE_URL" --model "$MODEL_NAME" \
+  --task-file task.txt --output ./remote-agent-run \
+  --mcp-url https://assay.qfinverse.com/mcp/ \
+  --mcp-api-key-env ASSAY_MCP_API_KEY --mcp-timeout 300
+```
+
+Choose either `--mcp-url` or `--server-command`. Plain HTTP is accepted only for
+loopback testing. The server owns datasets, budgets, attempts and handoff notes;
+the local client retains the model conversation and receipts. Before model calls,
+check the endpoint with the read-only [deployment checker](deployment.md).
 
 ## Run the offline demo
 

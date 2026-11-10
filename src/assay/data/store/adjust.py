@@ -131,8 +131,17 @@ def forward_adjust(prices: pl.DataFrame, events: pl.DataFrame, mode: str = "spli
             if cash is not None and cash > 0:
                 divs_by.setdefault(sym, []).append((ex_date, float(cash)))
 
-    out_frames: list[pl.DataFrame] = []
-    for (sym,), sym_prices in prices.sort(["symbol", "date"]).group_by(
+    ordered = prices.sort(["symbol", "date"]).with_columns(
+        [pl.col(c).cast(pl.Float64) for c in ('open','high','low','close','volume') if c in prices.columns])
+    affected = set(splits_by) | (set(divs_by) if apply_dividends else set())
+    if not affected:
+        return ordered
+    # Most names have no applicable event. Preserve those rows in one frame
+    # instead of constructing and copying every individual symbol's columns.
+    unchanged = ordered.filter(~pl.col('symbol').is_in(sorted(affected)))
+    changed = ordered.filter(pl.col('symbol').is_in(sorted(affected)))
+    out_frames: list[pl.DataFrame] = [unchanged] if not unchanged.is_empty() else []
+    for (sym,), sym_prices in changed.group_by(
         ["symbol"], maintain_order=True
     ):
         out_frames.append(
@@ -143,4 +152,4 @@ def forward_adjust(prices: pl.DataFrame, events: pl.DataFrame, mode: str = "spli
                 apply_dividends,
             )
         )
-    return pl.concat(out_frames, how="vertical") if out_frames else prices
+    return pl.concat(out_frames, how="vertical").sort(['symbol','date']) if out_frames else prices

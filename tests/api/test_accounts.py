@@ -67,6 +67,22 @@ def test_signed_out_callers_are_refused(accounts) -> None:
     assert c.get("/login").status_code == 200
 
 
+def test_first_setup_token_is_available_before_form_submission(accounts) -> None:
+    import stat
+    token_path=accounts/'setup_token'
+    c=_client()
+    response=c.get('/auth/status')
+    assert response.json()['setup_required']
+    token=token_path.read_text()
+    assert token and token not in response.text
+    assert stat.S_IMODE(token_path.stat().st_mode)==0o600
+    assert c.get('/auth/status').status_code==200 and token_path.read_text()==token
+    assert c.post('/auth/setup',json={'token':token,'username':'first','password':PASSWORD}).status_code==200
+    assert not token_path.exists()
+    assert not c.get('/auth/status').json()['setup_required']
+    assert not token_path.exists()
+
+
 def test_setup_then_session_reaches_the_api(accounts) -> None:
     admin = _admin(accounts)
     assert admin.post(LINT[0], json=LINT[1]).status_code == 200

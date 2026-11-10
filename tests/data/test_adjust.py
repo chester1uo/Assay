@@ -152,3 +152,15 @@ def test_empty_events_unchanged():
     out = forward_adjust(prices, events, mode="split")
     assert out["close"].to_list() == [100.0]
     assert out["volume"].to_list() == [50.0]
+
+
+def test_float32_panel_with_only_some_symbols_adjusted():
+    prices=_prices([
+        {'date':dt.date(2021,2,4),'symbol':'AAA','close':100.,'volume':50.},
+        {'date':dt.date(2021,2,4),'symbol':'BBB','close':80.,'volume':40.},
+    ]).with_columns(pl.col('close').cast(pl.Float32),pl.col('volume').cast(pl.Float32))
+    events=_events([{'symbol':'AAA','ex_date':dt.date(2021,2,5),'split_ratio':2.,'dividend_cash':0.}])
+    out=forward_adjust(prices,events,'split').sort('symbol')
+    assert out['close'].to_list()==[50.,80.]
+    assert out['volume'].to_list()==[100.,40.]
+    assert out.schema['close']==out.schema['volume']==pl.Float64

@@ -1,0 +1,23 @@
+[Unit]
+Description=Assay research API and MCP endpoint
+After=network.target
+
+[Service]
+Type=simple
+User=assay
+Group=assay
+WorkingDirectory=/opt/assay
+EnvironmentFile=/etc/assay/assay.env
+ExecStart=/opt/assay/.venv/bin/python -m uvicorn assay.api.app:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1,::1 --timeout-keep-alive 30 --timeout-graceful-shutdown 120
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=150
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/assay
+
+[Install]
+WantedBy=multi-user.target

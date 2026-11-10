@@ -1,7 +1,24 @@
 # 参考 Agent 与离线演示
 
-`assay.agent` 是可替换的参考客户端：从真实 stdio MCP 发现工具，由支持 Chat Completions
+`assay.agent` 是可替换的参考客户端：从真实 stdio 或鉴权 HTTP MCP 发现工具，由支持 Chat Completions
 工具调用协议的模型决定调用顺序。服务端保存研究状态，客户端保存对话、模型回执与用量。
+
+## 连接公开服务
+
+分别配置模型的 `ASSAY_AGENT_API_KEY` 与 Assay 的 `ASSAY_MCP_API_KEY`。
+`MODEL_BASE_URL` 和 `MODEL_NAME` 指定模型供应商：
+
+```bash
+python -m assay.agent \
+  --base-url "$MODEL_BASE_URL" --model "$MODEL_NAME" \
+  --task-file task.txt --output ./remote-agent-run \
+  --mcp-url https://assay.qfinverse.com/mcp/ \
+  --mcp-api-key-env ASSAY_MCP_API_KEY --mcp-timeout 300
+```
+
+`--mcp-url` 与 `--server-command` 二选一。明文 HTTP 只允许 loopback 测试。
+服务端保存数据集、预算、实验与交接笔记；本地客户端保存模型对话和回执。
+调用模型前可先运行只读的[部署验收脚本](deployment.md)。
 
 ## 离线运行
 

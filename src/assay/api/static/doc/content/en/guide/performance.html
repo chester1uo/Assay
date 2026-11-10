@@ -1,111 +1,147 @@
 <h1 class="doc-title">Performance &amp; Caching</h1>
-<p>The factor-evaluation hot path is benchmarked over the WorldQuant <strong>Alpha-101</strong> catalog,
-comparing <strong>cache vs no-cache</strong> regimes. The benchmark is
-<a href="https://github.com/QFinVerse/Assay/blob/main/scripts/bench_alpha101.py" target="_blank" rel="noopener noreferrer"><code>scripts/bench_alpha101.py</code></a>; a guard test lives at
-<a href="https://github.com/QFinVerse/Assay/blob/main/tests/performance/test_performance.py" target="_blank" rel="noopener noreferrer"><code>tests/performance/test_performance.py</code></a>.</p>
-<h2 id="caches">Caches</h2>
+<p>The default local-data research backend reuses market panels and factor values across
+experiments. Each experiment still runs its diagnostics and portfolio evaluation and
+writes its own persistent research record.</p>
+<h2 id="research-execution-reuse">Research execution reuse</h2>
 <div class="table-wrap"><table class="doc-table">
 <thead>
 <tr>
-<th>Cache</th>
-<th>What it reuses</th>
-<th>Where</th>
+<th>Layer</th>
+<th>Reused work</th>
+<th>Invalidation and limits</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><strong>warm engine / session</strong></td>
-<td>the loaded price panel + field-matrix pivots</td>
-<td>one <code>FactorEngine</code> reused across factors; <code>assay.Session</code>; <code>/v1/session/create</code></td>
+<td>Panel and engine pool</td>
+<td>Loaded prices, field matrices, membership, groups and forward returns</td>
+<td>Store, universe, period, as-of date, adjustment and source-file revision; up to 4 idle retained contexts and an estimated 256 MiB retained-memory budget</td>
 </tr>
 <tr>
-<td><strong>L2 disk cache</strong></td>
-<td>computed <code>(T, N)</code> factor-result matrices, keyed by (expr, universe, period, adj, market)</td>
-<td><code>assay.cache.L2FactorCache</code> under <code>&lt;data_dir&gt;/cache</code></td>
+<td>Subexpression memo</td>
+<td>Raw built-in operator results shared by factor expressions</td>
+<td>Per engine, bounded to 32 MiB; operator replacement clears the memo</td>
+</tr>
+<tr>
+<td>L2 factor values</td>
+<td>Computed factor matrices across process restarts</td>
+<td>Observed panel fingerprint, expression, operator signature and implementation digest; atomic disk publication</td>
 </tr>
 </tbody>
 </table></div>
-<h2 id="run-the-benchmark">Run the benchmark</h2>
-<pre><code class="language-bash"># synthetic panel (offline, deterministic, runs all 101 alphas)
-PYTHONPATH=src python scripts/bench_alpha101.py --synthetic --n 200 --t 504
+<p>The memory estimate includes panels, engine/session arrays, additional forward-return
+horizons and the reserved memo capacity. Active leases can temporarily exceed the
+retention budget; idle entries are evicted when a lease finishes. Calls sharing one
+engine are serialized, while different retained panels can be evaluated concurrently.</p>
+<p>Subexpressions are cached before output membership masking, so rolling operators retain
+history from before a security joined the universe. Custom or replaced operators bypass
+factor-value caching. Portfolio reports and research records are recomputed independently.
+New request IDs consume the research budget even when the expression is cached; retrying
+an existing request ID preserves the original attempt.</p>
+<p>This path applies to the native <code>DataStore</code> through the research backend, including its
+REST, MCP and SDK entry points. Custom stores and <code>QFVPanelStore</code> retain their existing
+execution behavior. A direct call to <code>AssayService.evaluate</code> does not acquire this pool;
+explicit sessions and the standalone L2 cache remain available separately.</p>
+<h3 id="source-updates">Source updates</h3>
+<p>Reuse supports read-only market data or the canonical ingester's atomic file replacement.
+File revision checks cover prices, membership, adjustments, groups and trade status and
+run again after loading or waiting for an engine. A change during these checks fails the
+attempt so it can be retried with a fresh panel.</p>
+<p>The revision token uses file metadata, not a content scan on every request. External
+writers that modify files in place while preserving metadata must disable panel reuse:</p>
+<pre><code class="language-python">from assay.research import AssayBackend
 
-# real ingested data (uses ASSAY_DATA_DIR; runs the alphas whose fields exist)
+service.research.backends[&quot;assay&quot;] = AssayBackend(service, reuse_panels=False)
+</code></pre>
+<p>The pool does not create a transactional snapshot of a dataset being updated concurrently.
+Use a stable published dataset revision for reproducible experiments.</p>
+<h3 id="inspect-reuse">Inspect reuse</h3>
+<pre><code class="language-python">backend = service.research.backends[&quot;assay&quot;]
+print(backend.execution_pool.stats())
+# panel_hits, panel_builds, evictions, entries, retained_bytes,
+# factor_computations, factor_disk_hits, subtree_hits
+</code></pre>
+<p>Hit and build counters span the pool lifetime. Factor counters describe currently
+retained entries and reset when those entries are evicted.</p>
+<h2 id="measured-workloads">Measured workloads</h2>
+<p>Three repetitions on a local NASDAQ-100 2023 daily panel gave these median times.
+The complete research task evaluates 24 fixed factors with diagnostics, weekly
+cost-adjusted portfolio reports and SQLite writes; model generation is excluded.</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Complete Assay research task</th>
+<th style="text-align:right">Before reuse</th>
+<th style="text-align:right">Current</th>
+<th style="text-align:right">Speedup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>24 new expressions</td>
+<td style="text-align:right">9.451 s</td>
+<td style="text-align:right">3.969 s</td>
+<td style="text-align:right">2.38×</td>
+</tr>
+<tr>
+<td>24 repeated expressions, new attempts</td>
+<td style="text-align:right">9.194 s</td>
+<td style="text-align:right">3.715 s</td>
+<td style="text-align:right">2.47×</td>
+</tr>
+</tbody>
+</table></div>
+<p>All 288 attempts completed. The 144 before/after pairs had identical IC, RankIC and NAV.
+Each current run built one panel for 48 attempts and computed each of the 24 expressions once.</p>
+<p>The separate factor-execution comparison uses 250 dates × 111 historical members,
+24 formulas, one thread, prepared data and matched float32-representable inputs:</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Native factor-execution path</th>
+<th style="text-align:right">24 new formulas</th>
+<th style="text-align:right">Same 24 formulas, cached</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Assay factor engine</td>
+<td style="text-align:right">0.0538 s</td>
+<td style="text-align:right">0.0122 s</td>
+</tr>
+<tr>
+<td>Qlib 0.9.7 <code>D.features</code></td>
+<td style="text-align:right">1.1887 s</td>
+<td style="text-align:right">0.4424 s</td>
+</tr>
+<tr>
+<td>RD-Agent <code>FactorFBWorkspace.execute</code></td>
+<td style="text-align:right">11.7185 s</td>
+<td style="text-align:right">0.0688 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>Qlib's native feature cache is expanded to 20,000 entries, sufficient for this workload;
+an external Redis disk cache is not configured. RD-Agent's native signed result cache is
+enabled and its repeated runs hit that cache. Preparation and process-wide imports are
+recorded separately. Full-window and historical-membership masks are applied to every
+implementation and included in timing. Values pass <code>rtol=3e-5, atol=3e-5</code>; raw masks are
+also retained because native missing-value conventions differ. These are component
+measurements, not complete Qlib or RD-Agent research-loop timings.</p>
+<p>A separate fixed daily execution replay uses 249 dates, 90 fully observed securities,
+whole-share target quantities and zero costs. Assay's accountant took 0.00914 s versus
+0.72349 s for Qlib's native simulator. Both matched an independent cash/share NAV ledger
+within <code>2.45e-15</code>. Qlib quote construction (0.29270 s) is excluded. The native paths produce
+different report structures; this replay measures the shared fixed execution workload.</p>
+<p>Reproduction commands and measurement boundaries:
+<a href="https://github.com/QFinVerse/Assay/blob/main/experiments/efficiency/README.md" target="_blank" rel="noopener noreferrer">efficiency benchmarks</a>.</p>
+<h2 id="alpha-101-cache-microbenchmark">Alpha-101 cache microbenchmark</h2>
+<p>The standalone Alpha-101 benchmark remains available for synthetic and real panels:</p>
+<pre><code class="language-bash">PYTHONPATH=src python scripts/bench_alpha101.py --synthetic --n 200 --t 504
 PYTHONPATH=src python scripts/bench_alpha101.py --real --start 2025-01-02 --end 2026-06-09
-
-# the guard test (prints the report; -s to see it)
 PYTHONPATH=src python -m pytest -m performance -s
 </code></pre>
-<p>Every regime is <strong>correctness-checked</strong>: it must produce identical factor matrices
-(<code>max|Δ| = 0</code>) — caching may never change a result.</p>
-<h2 id="representative-numbers">Representative numbers</h2>
-<p><strong>Synthetic, all 101 alphas (300 dates × 120 symbols):</strong></p>
-<div class="table-wrap"><table class="doc-table">
-<thead>
-<tr>
-<th>regime</th>
-<th>ms/factor</th>
-<th>factors/s</th>
-<th>speedup</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>no-cache (fresh engine/factor)</td>
-<td>91.2</td>
-<td>11</td>
-<td>base</td>
-</tr>
-<tr>
-<td>warm engine (panel/pivot cache)</td>
-<td>43.6</td>
-<td>23</td>
-<td><strong>2.1×</strong></td>
-</tr>
-<tr>
-<td>L2 warm (load from disk)</td>
-<td>0.13</td>
-<td>7,725</td>
-<td><strong>704×</strong></td>
-</tr>
-</tbody>
-</table></div>
-<p><strong>Real data — NASDAQ-100, 2025-01-02…2026-06-09 (359 × 101, 52 runnable alphas):</strong></p>
-<div class="table-wrap"><table class="doc-table">
-<thead>
-<tr>
-<th>regime</th>
-<th>ms/factor</th>
-<th>factors/s</th>
-<th>speedup</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>no-cache (<code>from_store</code> per factor)</td>
-<td>168</td>
-<td>6</td>
-<td>base</td>
-</tr>
-<tr>
-<td>warm engine (session cache)</td>
-<td>~36–49</td>
-<td>20–28</td>
-<td><strong>3.4–4.6×</strong></td>
-</tr>
-</tbody>
-</table></div>
-<p>Two stories: reusing a warm engine amortizes the ~200 ms parquet panel load (the
-engineering-doc §8.2 effect — strongest on real data), and the <strong>L2 result cache makes
-re-running an evaluated factor set ~700× faster</strong> (disk load vs recompute). Only 52 of 101
-alphas run on real data (no <code>vwap</code>/<code>market_cap</code>); all 101 run on the synthetic panel.</p>
-<h2 id="notes">Notes</h2>
-<ul>
-<li><code>cvxpy</code>/<code>scikit-learn</code> are not dependencies; the optimization paths use scipy + numpy.</li>
-<li>The performance test asserts only the timing-robust facts (correctness + the huge L2 margin);
-the warm-engine speedup is reported but not asserted (it's negligible on tiny panels and so
-would be timing-flaky — it shows clearly on real data via the script).</li>
-<li>The L2 cache is currently exercised by the benchmark and tests; wiring it into
-<code>AssayService.evaluate</code> (so real backtests get the result-cache win automatically) is a
-natural follow-up.</li>
-</ul>
-<p>Background: <a href="/doc/design/engineering">engineering.md</a> §5 (cache system) and §8 (performance).</p>
+<p>It checks cache/no-cache matrix equality. Its disk-hit timing excludes the diagnostics,
+portfolio construction and persistence included in a complete research attempt.</p>
+<p>Background: <a href="/doc/design/engineering">cache design</a> and
+<a href="/doc/guide/precompute-cse">precomputation and CSE</a>.</p>

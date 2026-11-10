@@ -1,63 +1,81 @@
 # 性能与缓存
 
-因子求值的热路径以 WorldQuant **Alpha-101** 目录为基准做了测评，
-对比**有缓存与无缓存**两种情形。基准脚本为
-[`scripts/bench_alpha101.py`](../../../scripts/bench_alpha101.py)；一个守卫测试位于
-[`tests/performance/test_performance.py`](../../../tests/performance/test_performance.py)。
+默认的本地数据研究后端会在实验之间复用行情面板与因子值。每次实验仍然独立执行诊断、组合回测，并写入持久化研究记录。
 
-## 缓存
+## 研究执行复用
 
-| Cache | What it reuses | Where |
+| 层级 | 复用内容 | 失效条件与容量 |
 |---|---|---|
-| **warm engine / session** | 已加载的价格面板 + 字段矩阵的透视 | 一个 `FactorEngine` 在多个因子间复用；`assay.Session`；`/v1/session/create` |
-| **L2 disk cache** | 已计算的 `(T, N)` 因子结果矩阵，以 (expr, universe, period, adj, market) 为键 | `assay.cache.L2FactorCache`，位于 `<data_dir>/cache` 下 |
+| 面板与引擎池 | 行情、字段矩阵、历史成员、分组与远期收益 | 数据源、股票池、时间段、as-of、复权方式和源文件版本；最多保留 4 个空闲上下文，估算保留内存预算为 256 MiB |
+| 公共子表达式缓存 | 不同表达式共用的内置算子计算结果 | 每个引擎最多 32 MiB；替换算子后清空 |
+| L2 因子值缓存 | 跨进程重启复用因子矩阵 | 观测面板指纹、表达式、算子签名和实现摘要；磁盘文件原子发布 |
 
-## 运行基准
+内存估算包含行情面板、引擎与 session 数组、额外的远期收益窗口，以及预留的子表达式缓存容量。活跃调用可以暂时超过保留预算，调用结束时淘汰空闲条目。同一引擎的使用会串行化，不同面板可以并发求值。
+
+子表达式在最终输出的成员掩码之前缓存，滚动算子因此可以使用证券加入股票池之前的历史。自定义或被替换的算子绕过因子值缓存。组合报告和研究记录独立重算：新的 request ID 仍占用实验预算；重复提交已有 request ID 则返回原实验。
+
+该路径作用于研究后端的原生 `DataStore`，覆盖其 REST、MCP 和 SDK 入口。自定义 store 与 `QFVPanelStore` 保持原有执行方式。直接调用 `AssayService.evaluate` 不会使用此复用池；显式 session 和独立的 L2 缓存仍可分别使用。
+
+### 数据更新
+
+复用支持只读行情，或由标准入库器原子替换文件的数据更新。文件版本检查覆盖价格、成员、复权、分组和交易状态；加载面板之后、等待引擎锁之后还会再次检查。检查期间发现数据变化会令该次实验失败，供调用方基于新面板重试。
+
+版本标记使用文件元数据，不会在每次请求时扫描全部文件内容。外部程序若原地改写文件并保留元数据，应关闭面板复用：
+
+```python
+from assay.research import AssayBackend
+
+service.research.backends["assay"] = AssayBackend(service, reuse_panels=False)
+```
+
+复用池不提供跨文件的事务快照。需要复现实验时，应使用已经发布且稳定的数据版本。
+
+### 查看复用情况
+
+```python
+backend = service.research.backends["assay"]
+print(backend.execution_pool.stats())
+# panel_hits, panel_builds, evictions, entries, retained_bytes,
+# factor_computations, factor_disk_hits, subtree_hits
+```
+
+面板命中和构建计数覆盖复用池的整个生命周期；因子计数只统计当前保留的条目，条目淘汰后相应计数也会移除。
+
+## 实测工作负载
+
+在本地 NASDAQ-100 的 2023 年日线数据上重复三轮，取中位耗时。完整研究任务包含 24 个固定因子的诊断、带成本的周频组合回测和 SQLite 写入，不包含模型生成。
+
+| 完整 Assay 研究任务 | 优化前 | 当前 | 提速 |
+|---|---:|---:|---:|
+| 24 个新表达式 | 9.451 s | 3.969 s | 2.38× |
+| 24 个重复表达式，独立新实验 | 9.194 s | 3.715 s | 2.47× |
+
+288 次实验全部完成，144 组优化前后实验的 IC、RankIC 和 NAV 完全一致。每轮当前实现对 48 次实验只构建一次面板，24 个表达式各计算一次。
+
+单独的因子执行对照使用 250 个交易日 × 111 个历史成员、24 个公式、单线程、预备好的数据，以及完全相同的 float32 可表示输入：
+
+| 原生因子执行路径 | 24 个新公式 | 同一批 24 个公式，缓存命中 |
+|---|---:|---:|
+| Assay 因子引擎 | 0.0538 s | 0.0122 s |
+| Qlib 0.9.7 `D.features` | 1.1887 s | 0.4424 s |
+| RD-Agent `FactorFBWorkspace.execute` | 11.7185 s | 0.0688 s |
+
+Qlib 原生特征缓存扩容至 20,000 条，足够容纳该工作负载；未配置外部 Redis 磁盘缓存。RD-Agent 原生签名结果缓存保持启用，重复运行确实命中缓存。数据准备和进程级导入单独记录。三者都应用相同的完整窗口与历史成员掩码，并将适配开销计入耗时。数值通过 `rtol=3e-5, atol=3e-5` 检查；同时保留原始掩码，因为原生缺失值规则存在差异。该结果对应执行组件，不是 Qlib 或 RD-Agent 完整研究循环的耗时。
+
+另一个固定日频执行回放使用 249 个交易日、90 只报价完整的证券、整股目标数量和零成本。Assay 记账器耗时 0.00914 s，Qlib 原生模拟器耗时 0.72349 s，两者相对独立现金／股数账本的 NAV 最大误差均不超过 `2.45e-15`。Qlib 报价构建耗时 0.29270 s，未计入执行时间。两条原生路径输出的报告结构不同，此回放只衡量共同的固定成交工作负载。
+
+复现命令与计时范围见[效率测试说明](../../../experiments/efficiency/README.md)。
+
+## Alpha-101 缓存微基准
+
+独立的 Alpha-101 脚本仍支持合成面板和实际行情：
 
 ```bash
-# synthetic panel (offline, deterministic, runs all 101 alphas)
 PYTHONPATH=src python scripts/bench_alpha101.py --synthetic --n 200 --t 504
-
-# real ingested data (uses ASSAY_DATA_DIR; runs the alphas whose fields exist)
 PYTHONPATH=src python scripts/bench_alpha101.py --real --start 2025-01-02 --end 2026-06-09
-
-# the guard test (prints the report; -s to see it)
 PYTHONPATH=src python -m pytest -m performance -s
 ```
 
-每种情形都经过**正确性校验**：它必须产生完全相同的因子矩阵
-（`max|Δ| = 0`）——缓存绝不能改变结果。
+脚本检查缓存前后的矩阵完全一致。其磁盘命中耗时不包含完整研究实验中的诊断、组合构建和持久化。
 
-## 代表性数值
-
-**合成面板，全部 101 个 alpha（300 个日期 × 120 个代码）：**
-
-| regime | ms/factor | factors/s | speedup |
-|---|---|---|---|
-| no-cache (fresh engine/factor) | 91.2 | 11 | base |
-| warm engine (panel/pivot cache) | 43.6 | 23 | **2.1×** |
-| L2 warm (load from disk) | 0.13 | 7,725 | **704×** |
-
-**真实数据——NASDAQ-100，2025-01-02…2026-06-09（359 × 101，52 个可运行的 alpha）：**
-
-| regime | ms/factor | factors/s | speedup |
-|---|---|---|---|
-| no-cache (`from_store` per factor) | 168 | 6 | base |
-| warm engine (session cache) | ~36–49 | 20–28 | **3.4–4.6×** |
-
-两个层面的故事：复用一个热引擎会摊薄约 200 ms 的 parquet 面板加载
-（engineering 文档 §8.2 的效应——在真实数据上最显著），而 **L2 结果缓存使
-重新运行一个已求值的因子集快约 700×**（磁盘加载 vs 重新计算）。真实数据上
-101 个 alpha 中只有 52 个可运行（没有 `vwap`/`market_cap`）；合成面板上全部 101 个都能运行。
-
-## 说明
-
-- `cvxpy`/`scikit-learn` 不是依赖项；优化路径使用 scipy + numpy。
-- 性能测试只断言对计时稳健的事实（正确性 + 巨大的 L2 优势）；
-  热引擎加速会被报告但不做断言（在极小的面板上它可忽略不计，因而计时会不稳定——
-  它在真实数据上通过脚本清晰显现）。
-- L2 缓存目前由基准和测试来演练；将其接入
-  `AssayService.evaluate`（使真实回测自动获得结果缓存的收益）是一个
-  自然的后续工作。
-
-背景：[engineering.md](../design/engineering.md) §5（缓存系统）和 §8（性能）。
+设计背景：[缓存与工程设计](../design/engineering.md)、[预计算与公共子表达式](precompute-cse.md)。

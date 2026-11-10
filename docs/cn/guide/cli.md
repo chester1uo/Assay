@@ -38,7 +38,7 @@
 | 命令 | 用途 |
 |---|---|
 | `serve-api [--host 0.0.0.0] [--port 8000]` | 运行 FastAPI REST API + WebUI（uvicorn） |
-| `serve-mcp [--transport stdio|sse] [--port 8001]` | 为 LLM 智能体运行 MCP 服务器 |
+| `serve-mcp [--transport stdio|http|sse] [--port 8001]` | 为 LLM 智能体运行 MCP 服务器 |
 
 ## 示例
 

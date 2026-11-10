@@ -34,17 +34,27 @@ class ResearchBackend(Protocol):
     def evaluate(self, expr: str, dataset: dict) -> dict: ...
 
 
+class AsyncResearchBackend(Protocol):
+    """Durable submission and polling; receipts must survive client restarts."""
+
+    def submit(self, expr: str, dataset: dict, request_id: str) -> dict: ...
+    def poll(self, receipt: dict) -> dict: ...
+
+
 class AssayBackend:
     """Adapter to the existing Assay factor evaluator; no model dependency."""
 
-    def __init__(self, service):
+    def __init__(self, service, *, reuse_panels=True):
         self.service = service
+        from assay.research_execution import ResearchExecutionPool
+        self.execution_pool = ResearchExecutionPool(service) if reuse_panels else None
 
     def describe(self) -> dict:
         return dict(kind="in_process", description="Assay daily factor evaluator",
                     fields=["open", "high", "low", "close", "volume"], frequencies=["1d"],
                     execution_modes=["next_open", "next_close", "close"],
                     known_universes=sorted(self.service._UNIVERSE_MARKET),
+                    supports_portfolio=True,
                     supports_universe_freeze=False, supports_immutable_snapshots=False)
 
     def probe(self) -> dict:
@@ -68,25 +78,61 @@ class AssayBackend:
             raise ValueError("the Assay backend cannot resolve immutable snapshot IDs")
         if dataset.get("backend_options"):
             raise ValueError("the built-in Assay backend does not support backend_options")
-        return self.service.evaluate(
-            expr, universe=dataset["universe"], period=tuple(dataset["period"]),
-            as_of=dataset["as_of"], horizons=dataset["horizons"],
-            execution=dataset["execution"], adj=dataset["adj"], save=False,
-        ).to_dict()
+        if dataset['execution'] == 'next_close' and dataset.get('evaluation_protocol') != 'assay-daily-v2':
+            raise ValueError('Register a new dataset for corrected next-day-close execution semantics')
+        if self.execution_pool is not None:
+            with self.execution_pool.lease(dataset) as entry:
+                return self._evaluate(expr, dataset, entry)
+        return self._evaluate(expr, dataset, None)
+
+    def _evaluate(self, expr, dataset, entry):
+        enabled = dataset.get('portfolio') and dataset['portfolio'].get('enabled') is not False
+        session_id = entry['sid'] if entry else None
+        try:
+            if enabled and session_id is None:
+                session_id = self.service.create_session(universe=dataset['universe'],
+                    period=tuple(dataset['period']), as_of=dataset['as_of'], adj=dataset['adj'])['session_id']
+            report = self.service.evaluate(
+                expr, universe=dataset["universe"], period=tuple(dataset["period"]),
+                as_of=dataset["as_of"], horizons=dataset["horizons"], session_id=session_id,
+                execution=dataset["execution"], adj=dataset["adj"], save=False,
+            ).to_dict()
+            if enabled and not report.get('failure_mode'):
+                from assay.research_portfolio import evaluate_portfolio
+                engine, _ = self.service._session_engine(session_id, dataset['horizons'], dataset['execution'])
+                report['panel_content_hash'] = entry['panel_hash'] if entry else engine.content_fingerprint()
+                report['universe_as_of'] = dataset['as_of']
+                report['data_as_of'] = dataset['as_of']
+                report['universe_symbols_hash'] = hashlib.sha256(_json(engine.symbols.tolist()).encode()).hexdigest()
+                report['universe_axis'] = 'historical_membership_union'
+                report['portfolio'] = evaluate_portfolio(self.service, expr, dataset, engine=engine)
+                report['portfolio']['panel_content_hash'] = report['panel_content_hash']
+                if report['portfolio']['status'] != 'completed':
+                    report.update(failure_mode='PORTFOLIO_BACKTEST_FAILED',
+                                  suggestion='Inspect portfolio attribution and data coverage.')
+            return report
+        finally:
+            if session_id is not None and entry is None:
+                self.service.expire_session(session_id)
 
 
 class ResearchWorkspace:
     """Persistent datasets, sessions, notes and independent experiment attempts.
 
     Backend names are durable; backend objects are registered per process. An
-    interrupted experiment stays ``running`` until explicitly abandoned. Retrying
+    asynchronous experiment is resumed with ``reconcile_experiment``; synchronous
+    interrupted attempts require explicit abandonment. Retrying
     with the same request_id returns that attempt without executing it again.
     """
 
-    def __init__(self, path: str | Path, backends: dict[str, ResearchBackend] | None = None):
+    def __init__(self, path: str | Path, backends: dict[str, ResearchBackend | AsyncResearchBackend] | None = None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.backends = dict(backends or {})
+        # Reuse FactorDB's canonical registry in the same SQLite file, so factor
+        # registration and attempt reservation commit together without an outbox.
+        from assay.factordb.registry import Registry
+        self.factor_registry = Registry(self.path)
         with self._db() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version not in (0, 1):
@@ -106,8 +152,21 @@ class ResearchWorkspace:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL REFERENCES sessions(id), payload TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS experiments_session ON experiments(session_id);
+                CREATE TABLE IF NOT EXISTS research_factor_attempts (
+                    experiment_id TEXT PRIMARY KEY REFERENCES experiments(id),
+                    factor_id TEXT NOT NULL REFERENCES factors(id));
+                CREATE TABLE IF NOT EXISTS research_decisions (
+                    id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id),
+                    factor_id TEXT NOT NULL REFERENCES factors(id),
+                    experiment_id TEXT NOT NULL REFERENCES experiments(id),
+                    request_id TEXT NOT NULL, payload TEXT NOT NULL,
+                    UNIQUE(session_id, request_id));
                 PRAGMA user_version=1;
             """)
+            from assay.research_lifecycle import register_attempt
+            for row in db.execute('SELECT e.payload FROM experiments e LEFT JOIN research_factor_attempts f '
+                                  'ON f.experiment_id=e.id WHERE f.experiment_id IS NULL').fetchall():
+                register_attempt(db, json.loads(row[0]))
 
     @contextmanager
     def _db(self):
@@ -120,7 +179,7 @@ class ResearchWorkspace:
         finally:
             db.close()
 
-    def register_backend(self, name: str, backend: ResearchBackend) -> None:
+    def register_backend(self, name: str, backend: ResearchBackend | AsyncResearchBackend) -> None:
         if not name.strip():
             raise ValueError("backend name must not be empty")
         if name in self.backends:
@@ -139,7 +198,9 @@ class ResearchWorkspace:
             datasets = [json.loads(r[0]) for r in db.execute("SELECT payload FROM datasets")]
         names = sorted(set(self.backends) | {d["backend"] for d in datasets})
         allowed = {"kind", "description", "endpoint", "fields", "frequencies", "execution_modes",
-                   "known_universes", "supports_universe_freeze", "supports_immutable_snapshots"}
+                   "known_universes", "supports_universe_freeze", "supports_immutable_snapshots", "supports_async", "supports_cancellation",
+                   "requires_snapshot_id", "supported_adjustments"}
+        allowed.add('supports_portfolio')
         rows = []
         for name in names:
             backend = self.backends.get(name)
@@ -175,6 +236,7 @@ class ResearchWorkspace:
         backend_options: dict[str, Any] | None = None,
         score_period: list[str] | None = None, score_dates: list[str] | None = None,
         expression_policy: dict[str, Any] | None = None,
+        portfolio: dict[str, Any] | None = None,
     ) -> dict:
         """Register a fixed daily evaluation spec; snapshot_id is caller-supplied.
 
@@ -207,6 +269,8 @@ class ResearchWorkspace:
         spec = dict(backend=backend, universe=universe, period=[str(start), str(end)],
                     as_of=str(cutoff), horizons=sorted(set(horizons)),
                     execution=execution, adj=adj, snapshot_id=snapshot_id)
+        if backend == 'factordb_ades':
+            spec['evaluation_protocol'] = 'assay-daily-v2'
         if backend_options:
             spec["backend_options"] = backend_options
         from assay.research_scoring import validate_score_window
@@ -218,6 +282,18 @@ class ResearchWorkspace:
             from assay.research_policy import normalize_policy
 
             spec["expression_policy"] = normalize_policy(expression_policy)
+        if isinstance(self.backends[backend], AssayBackend):
+            from assay.research_portfolio import normalize_portfolio
+            spec['evaluation_protocol'] = 'assay-daily-v2'
+            if portfolio is None and (score or execution == 'close'):
+                portfolio = {'enabled': False}
+            spec['portfolio'] = normalize_portfolio(spec, {} if portfolio is None else portfolio,
+                                                   self.backends[backend].service._market_for(universe))
+        elif portfolio is not None:
+            raise ValueError('portfolio options require a backend with portfolio evaluation support')
+        validator = getattr(self.backends[backend], "validate_dataset", None)
+        if callable(validator):
+            validator(spec)
         result = dict(spec, id=_id("ds_"), name=name, description=description,
                       spec_hash=hashlib.sha256(_json(spec).encode()).hexdigest(),
                       created_at=_now())
@@ -270,9 +346,11 @@ class ResearchWorkspace:
             "SELECT payload FROM experiments WHERE session_id=? ORDER BY rowid", (session_id,))]
         notes = [json.loads(r[0]) for r in db.execute(
             "SELECT payload FROM notes WHERE session_id=? ORDER BY id", (session_id,))]
+        decisions = [json.loads(r[0]) for r in db.execute(
+            "SELECT payload FROM research_decisions WHERE session_id=? ORDER BY rowid", (session_id,))]
         dataset = json.loads(db.execute("SELECT payload FROM datasets WHERE id=?", (row["dataset_id"],)).fetchone()[0])
         return dict(row, dataset=dataset,
-                    experiments=experiments, notes=notes,
+                    experiments=experiments, notes=notes, decisions=decisions,
                     remaining_experiments=max(0, row["budget"] - len(experiments)))
 
     def import_session(self, manifest: dict) -> dict:
@@ -286,6 +364,7 @@ class ResearchWorkspace:
         from assay.research_manifest import validate_state
 
         state = json.loads(_json(manifest["state"]))
+        state.setdefault('decisions', [])
         try:
             validate_state(state)
         except (TypeError, KeyError, OverflowError) as exc:
@@ -303,6 +382,9 @@ class ResearchWorkspace:
             for attempt in state["experiments"]:
                 if db.execute("SELECT 1 FROM experiments WHERE id=?", (attempt["id"],)).fetchone():
                     raise ValueError("experiment identity conflicts with existing state")
+            for event in state['decisions']:
+                if db.execute('SELECT 1 FROM research_decisions WHERE id=?', (event['id'],)).fetchone():
+                    raise ValueError('decision identity conflicts with existing state')
             incoming = {a["id"]: a for a in state["experiments"]}
             local = {r["id"]: json.loads(r["payload"]) for r in db.execute("SELECT id, payload FROM experiments")}
             # Resolve cross-session replay links in either import order. Missing
@@ -333,6 +415,12 @@ class ResearchWorkspace:
             for attempt in state["experiments"]:
                 db.execute("INSERT INTO experiments VALUES (?, ?, ?, ?)",
                            (attempt["id"], state["id"], attempt["request_id"], _json(attempt)))
+                from assay.research_lifecycle import register_attempt
+                register_attempt(db, attempt)
+            for event in state['decisions']:
+                db.execute('INSERT INTO research_decisions VALUES (?,?,?,?,?,?)',
+                           (event['id'], state['id'], event['factor_id'], event['experiment_id'],
+                            event['request_id'], _json(event)))
             for note in state["notes"]:
                 db.execute("INSERT INTO notes(session_id, payload) VALUES (?, ?)", (state["id"], _json(note)))
             return self._session_state(db, state["id"])
@@ -426,7 +514,7 @@ class ResearchWorkspace:
                 if old is None:
                     raise ValueError("replay source experiment does not exist")
                 source = json.loads(old[0])
-                if source["status"] not in {"completed", "failed", "abandoned"}:
+                if source["status"] not in {"completed", "failed", "abandoned", "cancelled"}:
                     raise ValueError("cannot replay a running experiment")
                 if source["spec_hash"] != dataset["spec_hash"]:
                     raise ValueError("replay requires an identical dataset specification")
@@ -446,10 +534,17 @@ class ResearchWorkspace:
                           dataset_id=dataset["id"], spec_hash=dataset["spec_hash"],
                           expr=expr, hypothesis=hypothesis, parent_id=parent_id, agent=agent,
                           status="running", started_at=_now(), finished_at=None, report=None, error=None)
+            from assay.research_lifecycle import identity, register_attempt
+            result['factor_id'] = identity(expr)[0]
             if replay_of is not None:
                 result["replay_of"] = replay_of
+            if callable(getattr(backend, "submit", None)):
+                result["execution"] = {"backend":dataset["backend"], "phase":"submitting"}
             db.execute("INSERT INTO experiments VALUES (?, ?, ?, ?)",
                        (result["id"], session_id, request_id, _json(result)))
+            register_attempt(db, result)
+        if "execution" in result:
+            return self.reconcile_experiment(result["id"])
         try:
             policy = dataset.get("expression_policy")
             if policy:
@@ -467,6 +562,8 @@ class ResearchWorkspace:
             # Canonical JSON types make the immediate response identical to a
             # response read after restart (e.g. integer horizon keys become strings).
             report = json.loads(_json(report))
+            from assay.research_lifecycle import validate_report
+            report = validate_report(report)
             if dataset.get("score_period"):
                 from assay.research_scoring import apply_score_window
 
@@ -483,7 +580,39 @@ class ResearchWorkspace:
             if current["status"] != "running":
                 return current
             db.execute("UPDATE experiments SET payload=? WHERE id=?", (_json(result), result["id"]))
+            from assay.research_lifecycle import index_attempt
+            index_attempt(db, result, dataset)
         return result
+
+    def reconcile_experiment(self, experiment_id: str) -> dict:
+        """Recover submission/poll the same durable job without consuming another attempt."""
+        from assay.research_async import reconcile
+        return reconcile(self, experiment_id)
+
+    def cancel_experiment(self, experiment_id: str, reason: str) -> dict:
+        """Persist cancellation intent before contacting an asynchronous backend.
+
+        Cancellation fences late results and retains the attempt charge. Remote
+        computation already in progress may finish before its worker observes it.
+        """
+        from assay.research_errors import ResearchError
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("cancellation reason is required")
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT payload FROM experiments WHERE id=?", (experiment_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"unknown experiment: {experiment_id}")
+            attempt = json.loads(row[0])
+            if attempt['status'] != 'running':
+                return attempt
+            backend = self.backends.get(self.get_dataset(attempt['dataset_id'])['backend'])
+            if 'execution' not in attempt or not callable(getattr(backend, 'cancel', None)):
+                raise ResearchError('CANCELLATION_UNSUPPORTED',
+                    'This backend does not support tracked asynchronous cancellation.', action='inspect_worker')
+            attempt.setdefault('cancellation', dict(reason=reason.strip(), requested_at=_now()))
+            db.execute("UPDATE experiments SET payload=? WHERE id=?", (_json(attempt), experiment_id))
+        return self.reconcile_experiment(experiment_id)
 
     def abandon_experiment(self, experiment_id: str, reason: str) -> dict:
         """Explicitly close an interrupted attempt; its budget remains consumed."""
@@ -497,9 +626,14 @@ class ResearchWorkspace:
             result = json.loads(row[0])
             if result["status"] != "running":
                 raise ValueError("only running experiments can be abandoned")
+            if result.get("execution"):
+                from assay.research_errors import ResearchError
+                raise ResearchError("EXECUTION_STILL_TRACKED", "Reconcile the backend job instead of abandoning an active asynchronous attempt.", action="reconcile_experiment")
             result.update(status="abandoned", finished_at=_now(),
                           error=dict(type="Abandoned", message=reason))
             db.execute("UPDATE experiments SET payload=? WHERE id=?", (_json(result), experiment_id))
+            from assay.research_lifecycle import index_attempt
+            index_attempt(db, result, self.get_dataset(result['dataset_id']))
         return result
 
     def compare_experiments(self, experiment_ids: list[str]) -> dict:
@@ -507,11 +641,31 @@ class ResearchWorkspace:
             raise ValueError("provide at least two distinct experiment IDs")
         experiments = [self.get_experiment(eid) for eid in experiment_ids]
         comparable = len({e["spec_hash"] for e in experiments}) == 1
+        hashes = [(e.get('report') or {}).get('panel_content_hash') for e in experiments]
+        data_consistent = len(set(hashes)) == 1 if all(hashes) else None
+        if data_consistent is False:
+            comparable = False
         metrics = ("rank_ic", "rank_icir", "ic", "icir", "turnover_1d", "decay_halflife_days")
-        return dict(comparable=comparable,
+        return dict(comparable=comparable, observed_data_consistent=data_consistent,
                     caveat="Matching specs do not certify unchanged underlying data or out-of-sample validity.",
                     experiments=[dict(id=e["id"], expr=e["expr"], status=e["status"],
                                       dataset_id=e["dataset_id"], spec_hash=e["spec_hash"],
                                       failure_mode=(e["report"] or {}).get("failure_mode"), error=e["error"],
+                                      factor_id=e.get('factor_id'), execution=e.get('execution'),
+                                      portfolio_metrics={k: ((e['report'] or {}).get('portfolio') or {}).get(k) for k in
+                                                         ('total_return', 'sharpe', 'max_drawdown', 'annual_turnover', 'cost_drag')},
                                       metrics={k: (e["report"] or {}).get(k) for k in metrics})
                                  for e in experiments])
+
+    def decide_candidate(self, experiment_id: str, decision: str, reason: str, *,
+                         request_id: str, agent: str = 'unspecified') -> dict:
+        from assay.research_lifecycle import decide
+        return decide(self, experiment_id, decision, reason, request_id, agent)
+
+    def list_candidates(self, session_id: str) -> list[dict]:
+        from assay.research_lifecycle import candidates
+        return candidates(self, session_id)
+
+    def factor_history(self, factor_id: str, *, session_id: str | None = None) -> dict:
+        from assay.research_lifecycle import factor_history
+        return factor_history(self, factor_id, session_id)

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -140,9 +141,10 @@ class L2FactorCache:
         path = self._path_for(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         # Temp file in the same directory guarantees os.replace is atomic (same FS).
-        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        tmp = Path(name)
         try:
-            with open(tmp, "wb") as fh:
+            with os.fdopen(fd, "wb") as fh:
                 np.save(fh, matrix, allow_pickle=False)
                 fh.flush()
                 os.fsync(fh.fileno())

@@ -95,6 +95,7 @@ class PortfolioBacktester:
         prev_close: np.ndarray | None = None,
         adv: np.ndarray | None = None,
         benchmark: Sequence[float] | np.ndarray | None = None,
+        engine: Any = None,
     ) -> PortfolioReport:
         """Execute the section-1.1 pipeline and return a :class:`PortfolioReport`.
 
@@ -145,9 +146,13 @@ class PortfolioBacktester:
 
         # --- 1. engine + matrices (PIT universe + adj versioning => §7.1/§7.2) ---
         try:
-            engine, factor, close, open_, dates, symbols = self._build_matrices(
-                expr, config, as_of
-            )
+            if engine is None:
+                engine, factor, close, open_, dates, symbols = self._build_matrices(expr, config, as_of)
+            else:
+                factor = np.asarray(engine.evaluate(expr).values, dtype=np.float64)
+                close = np.asarray(engine.field_matrix('close'), dtype=np.float64)
+                open_ = np.asarray(engine.field_matrix('open'), dtype=np.float64)
+                dates, symbols = list(engine.dates), list(engine.symbols)
         except Exception as exc:  # never raise on a data/engine problem
             return self._empty_report(
                 run_id, factor_id, config, note=f"engine build failed: {exc}"
@@ -162,7 +167,10 @@ class PortfolioBacktester:
             )
 
         # --- 2. daily simple returns + eligibility (UniverseFilter) -------------
-        daily_ret = self._daily_returns(close)  # (T, N), r[t] earned over [t-1, t]
+        # Carry the last observed mark across missing bars; a resumed quote must
+        # earn the whole price change rather than lose the intervening gap.
+        marked_close = self._mark_prices(close, open_)
+        daily_ret = self._daily_returns(marked_close)
         eligible = self._eligibility(factor, close, tradable_mask, T, N)  # (T, N) bool
         if not eligible.any():
             return self._empty_report(
@@ -211,6 +219,13 @@ class PortfolioBacktester:
         prev_mat = self._as_tn(prev_close, T, N)
         adv_mat = self._as_tn(adv, T, N)
         mask_mat = self._as_tn_bool(tradable_mask, T, N)
+        pre_returns, post_returns = None, None
+        if config.execution_price == 'next_open':
+            previous = np.vstack([marked_close[:1], marked_close[:-1]])
+            valid = np.isfinite(open_) & (open_ > 0) & np.isfinite(marked_close) & (marked_close > 0) & (previous > 0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                pre_returns = np.where(valid, open_ / previous - 1.0, 0.0)
+                post_returns = np.where(valid, marked_close / open_ - 1.0, daily_ret)
         # Real per-board A-share price-limit bands, auto-loaded from the store's
         # trade_status and rebased into the panel's adjustment basis (no-op for US
         # / offline-engine runs). ``close`` is the engine's *adjusted* close.
@@ -229,6 +244,8 @@ class PortfolioBacktester:
             daily_ret,
             schedule,
             exec_prices=exec_prices,
+            pre_trade_returns=pre_returns,
+            post_trade_returns=post_returns,
             prev_closes=prev_mat,
             limit_ups=cn_up,
             limit_downs=cn_dn,
@@ -238,6 +255,9 @@ class PortfolioBacktester:
             symbols=[str(s) for s in symbols],
             record_trades=bool(config.save_trade_log),
         )
+        missing_marks = int(np.sum((~np.isfinite(close) | (close <= 0)) & (np.abs(acct.weights) > 1e-12)))
+        if missing_marks:
+            warnings.append(f'{missing_marks} held security-days lack a closing quote; marked at the latest available open/close. No delisting recovery is inferred.')
 
         # --- 9. benchmark series ------------------------------------------------
         # The equal-weight index proxy must be *factor-independent* — keyed off
@@ -296,7 +316,7 @@ class PortfolioBacktester:
         P&L), US keeps the **split**-only basis it has always used. An explicit
         ``config.default_adj`` still wins if a caller sets one.
         """
-        explicit = getattr(config, "default_adj", None)
+        explicit = config.adjustment or getattr(config, "default_adj", None)
         if explicit:
             return explicit
         return "total" if config.market in ("A", "HK") else "split"
@@ -327,6 +347,14 @@ class PortfolioBacktester:
         has_open = "open" in getattr(engine, "_field_cols", [])
         open_ = np.asarray(engine.field_matrix("open"), dtype=np.float64) if has_open else close
         return engine, factor, close, open_, list(engine.dates), list(engine.symbols)
+
+    @staticmethod
+    def _mark_prices(close, open_):
+        marks = np.where(np.isfinite(close) & (close > 0), close,
+                         np.where(np.isfinite(open_) & (open_ > 0), open_, np.nan))
+        indices = np.where(np.isfinite(marks), np.arange(len(marks))[:, None], -1)
+        indices = np.maximum.accumulate(indices, axis=0)
+        return np.where(indices >= 0, marks[np.maximum(indices, 0), np.arange(marks.shape[1])], np.nan)
 
     @staticmethod
     def _daily_returns(close: np.ndarray) -> np.ndarray:

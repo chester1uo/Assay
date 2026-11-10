@@ -10,7 +10,7 @@ would get from the Python SDK (architecture §1, "one in-process service").
 Design (architecture §6):
 - High-level :class:`mcp.server.fastmcp.FastMCP` (decorator tools; supports the
   ``stdio`` default plus SSE / streamable-HTTP for remote agents — §6.1).
-- Eleven evaluation/library tools and eight FactorDB tools accompany fifteen research tools
+- Eleven evaluation/library tools and eight FactorDB tools accompany twenty research tools
   for datasets, sessions, notes, experiments, comparisons and interruption recovery.
 - Tool descriptions are **agent-actionable**: they spell out the dual qlib /
   Python syntax and steer the agent toward ``assay_batch`` over a serial
@@ -583,20 +583,23 @@ def fdb_job(job_id: str, top: int = 10) -> dict[str, Any]:
 
 @mcp.tool(
     name="fdb_query",
-    description=("Search scored factors. Filter by spec (from fdb_submit), min_abs_rank_icir, owner, tag; "
+    description=("Search scored factors across research and compute registries (source=all|research|compute). "
+                 "Research spec is the dataset spec_hash; compute spec comes from fdb_submit. Filter by min_abs_rank_icir, owner, tag; "
                  "sort_by rank_icir|rank_ic|ic|icir|turnover|coverage|long_short|decay_halflife|created."),
 )
 def fdb_query(spec: str | None = None, sort_by: str = "rank_icir", descending: bool = True,
               min_abs_rank_icir: float | None = None, owner: str | None = None, tag: str | None = None,
-              limit: int = 20, offset: int = 0) -> dict[str, Any]:
-    return _safe(lambda: _fdb().query(spec=spec, sort_by=sort_by, descending=descending,
+              limit: int = 20, offset: int = 0, source: str = 'all') -> dict[str, Any]:
+    from assay.research_catalog import query
+    return _safe(lambda: query(get_service, _fdb, source, spec=spec, sort_by=sort_by, descending=descending,
                                       min_abs_rank_icir=min_abs_rank_icir, owner=owner, tag=tag,
                                       limit=min(int(limit), 500), offset=int(offset)))
 
 
-@mcp.tool(name="fdb_factor", description="One factor by id: canonical form, who proposed it, tags, parents and its scores per spec.")
-def fdb_factor(factor_id: str) -> dict[str, Any]:
-    return _safe(lambda: _fdb().factor(factor_id))
+@mcp.tool(name="fdb_factor", description="Discover a canonical factor across research/compute registries, including research attempts and decisions. source=all|research|compute.")
+def fdb_factor(factor_id: str, source: str = 'all') -> dict[str, Any]:
+    from assay.research_catalog import factor
+    return _safe(lambda: factor(get_service, _fdb, factor_id, source))
 
 
 @mcp.tool(
@@ -635,8 +638,8 @@ def main(argv: list[str] | None = None) -> None:
     """Run the MCP server. ``stdio`` by default; ``--transport sse|http --port N``.
 
     ``stdio``  — Claude Desktop / local agents (the default, no network).
-    ``sse``    — Server-Sent Events over HTTP for remote agents.
-    ``http``   — streamable-HTTP transport (mapped to FastMCP ``streamable-http``).
+    ``sse``    — local legacy Server-Sent Events transport.
+    ``http``   — shared authenticated API app, with Streamable HTTP at ``/mcp/``.
     """
     parser = argparse.ArgumentParser(
         prog="assay.mcp.server",
@@ -659,6 +662,15 @@ def main(argv: list[str] | None = None) -> None:
     if args.transport == "stdio":
         mcp.run("stdio")
         return
+
+    if args.transport == "http":
+        import uvicorn
+        # Reuse REST authentication and deployment checks, rather than exposing
+        # a second unauthenticated FastMCP application.
+        uvicorn.run("assay.api.app:app", host=args.host, port=args.port)
+        return
+    if args.host not in {"127.0.0.1", "localhost", "::1"} or os.environ.get("ASSAY_DEPLOYMENT", "").strip().lower() == "production":
+        parser.error("SSE is a local legacy transport; use --transport http for the authenticated remote endpoint")
 
     # Network transports: apply host/port to the FastMCP settings before running.
     mcp.settings.host = args.host

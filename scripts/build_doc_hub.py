@@ -35,6 +35,7 @@ NAV = [
         ("guide/getting-started", "guide/getting-started.md"),
         ("guide/webui", "guide/webui.md"),
         ("guide/cli", "guide/cli.md"),
+        ("guide/deployment", "guide/deployment.md"),
     ]),
     ("data", {"en": "Data", "zh": "数据"}, [
         ("guide/qfv-data", "guide/qfv-data.md"),

@@ -127,12 +127,12 @@ class PrecomputeStore:
         # fails to evaluate on this panel (e.g. a field absent for this universe),
         # fall back to a per-expression pass that skips only the offenders.
         try:
-            pairs = list(zip(commons, engine.evaluate_many([c.expr for c in commons])))
+            pairs = list(zip(commons, engine.evaluate_many([c.expr for c in commons], mask_output=False)))
         except Exception:  # noqa: BLE001
             pairs = []
             for c in commons:
                 try:
-                    pairs.append((c, engine.evaluate_many([c.expr])[0]))
+                    pairs.append((c, engine.evaluate_many([c.expr], mask_output=False)[0]))
                 except Exception:  # noqa: BLE001 — skip the un-evaluable subtree
                     continue
         built = skipped = 0

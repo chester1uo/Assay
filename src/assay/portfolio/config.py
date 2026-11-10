@@ -104,6 +104,7 @@ class PortfolioBacktestConfig:
     market: str = "US"           # A, US, HK — sets calendar/cost model/settlement
     custom_symbols: list[str] | None = None  # used when universe == 'CUSTOM'
     as_of_date: str | None = None  # PIT: only use data known by this date (default period_end)
+    adjustment: str | None = None  # None retains the market preset adjustment basis
     include_delisted: bool = True  # survivorship-bias control
 
     # === 2.3  Rebalance parameters ==========================================
@@ -218,6 +219,8 @@ class PortfolioBacktestConfig:
         # 2.1 universe & market
         _enum("universe", self.universe, _UNIVERSES)
         _enum("market", self.market, _MARKETS)
+        if self.adjustment is not None:
+            _enum('adjustment', self.adjustment, {'none', 'split', 'total', 'forward'})
         if self.universe == "CUSTOM" and not self.custom_symbols:
             raise ValueError("universe='CUSTOM' requires non-empty custom_symbols")
         # A-share is long-only: 融券 (securities lending) is restricted to a small
@@ -285,9 +288,9 @@ class PortfolioBacktestConfig:
         _rng("new_listing_lockout_days", self.new_listing_lockout_days, 0, 252)
         _rng("ipo_lockout_days", self.ipo_lockout_days, 0, 252)
         _rng("stamp_duty_rate", self.stamp_duty_rate, 0.0, 0.003)
-        _rng("commission_rate", self.commission_rate, 0.0001, 0.001)
+        _rng("commission_rate", self.commission_rate, 0.0, 0.001)
         _rng("commission_min", self.commission_min, 0.0, 10.0)
-        _rng("transfer_fee_rate", self.transfer_fee_rate, 0.00001, 0.0001)
+        _rng("transfer_fee_rate", self.transfer_fee_rate, 0.0, 0.0001)
         _enum("suspend_handling", self.suspend_handling, _SUSPEND_HANDLING)
         _rng("inclusion_anticipation", self.inclusion_anticipation, 0, 5)
 
@@ -414,6 +417,8 @@ class PortfolioBacktestConfig:
         """
         d = self.to_dict()
         preimage = {k: v for k, v in d.items() if k in _HASH_FIELDS_V1}
+        if self.adjustment is not None:
+            preimage['adjustment'] = self.adjustment
         payload = json.dumps(preimage, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
@@ -421,6 +426,8 @@ class PortfolioBacktestConfig:
     def to_dict(self) -> dict[str, Any]:
         """JSON-safe dict of every field (lists copied, None preserved)."""
         d = asdict(self)
+        if self.adjustment is None:
+            d.pop('adjustment')  # preserve the original default payload and hash
         # asdict already deep-copies lists/dicts; ensure JSON-roundtrippable types.
         return {k: (list(v) if isinstance(v, tuple) else v) for k, v in d.items()}
 

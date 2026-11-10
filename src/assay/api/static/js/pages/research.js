@@ -19,6 +19,7 @@ export function render(root, {api, el}) {
     .rw-error {color:#c43f49;white-space:pre-wrap}
     .rw-attempt {border-left:3px solid #6485ba;padding:10px;margin:8px 0;background:var(--bg-subtle,rgba(128,148,175,.08));overflow-wrap:anywhere}
     .rw-attempt.failed {border-color:#d25d61}
+    .rw-attempt.cancelled {border-color:#8999ad}
     .rw-attempt.completed {border-color:#39a385}
     .rw-attempt.running {border-color:#dfab41}
     .rw-attempt code {display:block;margin:8px 0;white-space:pre-wrap}
@@ -40,10 +41,15 @@ export function render(root, {api, el}) {
   const detail = el('pre', {className:'rw-detail'});
   const selectedSummary = el('p', {className:'rw-muted'});
   const notes = el('div');
+  const decisions = el('div');
+  const decision = el('select', {'aria-label':'Candidate decision'},
+    ...['accepted','rejected','archived','candidate'].map(value => el('option',{value},value)));
+  const decisionReason = el('textarea', {'aria-label':'Decision reason',placeholder:'Explain the selection decision using the saved evidence'});
   const expr = el('textarea', {'aria-label':'Factor expression', placeholder:'-cs_rank(ts_returns(close,5))'});
   const hypothesis = el('textarea', {'aria-label':'Experiment hypothesis', placeholder:'Explain the candidate and expected behavior'});
   const parent = el('select', {'aria-label':'Parent experiment'});
   const note = el('textarea', {'aria-label':'Handoff note', placeholder:'Summarize evidence, failures and the next research step'});
+  const cancelReason = el('input', {'aria-label':'Cancellation reason', placeholder:'Why should this experiment stop?'});
   const live = el('input', {type:'checkbox', checked:true, 'aria-label':'Refresh every 3 seconds'});
   const button = (text, action) => el('button', {type:'button', onClick:action}, text);
   const path = (id=sid) => '/sessions/' + encodeURIComponent(id);
@@ -70,12 +76,14 @@ export function render(root, {api, el}) {
     for (const a of data.experiments) {
       parent.append(el('option', {value:a.id}, `${short(a.id)} · ${a.status}`));
       const report = a.report || {};
+      const p = report.portfolio;
       const failure = report.failure_mode || a.error?.message || a.error?.type;
       const card = el('article', {className:'rw-attempt '+a.status},
         button(`${a.status} · ${short(a.id)}`, () => inspect(a.id)),
         el('p', {className:'rw-muted'}, `${a.agent} · ${a.started_at || a.created_at || ''}`),
         el('p', {}, a.hypothesis), el('code', {}, a.expr),
-        el('p', {}, `RankIC ${metric(report.rank_ic)} · Turnover ${metric(report.turnover_1d)}`));
+        el('p', {}, `RankIC ${metric(report.rank_ic)} · Rank turnover ${metric(report.turnover_1d)}`));
+      if(p) card.append(el('p',{},`Net return ${metric(p.total_return)} · Sharpe ${metric(p.sharpe)} · Cost drag ${metric(p.cost_drag)}`));
       if (failure) card.append(el('p', {className:'rw-error'}, String(failure)));
       if (report.suggestion) card.append(el('p', {}, String(report.suggestion)));
       attempts.append(card);
@@ -89,6 +97,9 @@ export function render(root, {api, el}) {
     parent.value = ids.has(oldParent) ? oldParent : '';
     if(!data.experiments.length) attempts.append(el('p', {className:'rw-muted'}, 'No experiments yet. Connect an agent or evaluate a candidate below.'));
     notes.replaceChildren(...data.notes.map(n => el('article', {className:'rw-attempt'}, el('small', {}, n.agent), el('p', {style:{whiteSpace:'pre-wrap'}}, n.text))));
+    decisions.replaceChildren(...(data.decisions || []).map(d => el('article',{className:'rw-attempt'},
+      el('small',{},`${d.decision} · ${d.agent}`),el('p',{},d.reason),
+      button(short(d.experiment_id),()=>inspect(d.experiment_id)))));
     inspect(selected);
     status.textContent = `Loaded ${data.experiments.length} experiments · Updated ${new Date().toLocaleTimeString()}`;
   }
@@ -111,7 +122,7 @@ export function render(root, {api, el}) {
   async function mutate(action) {
     if(busy) return;
     busy = true; error.textContent = '';
-    const controls = [create, evaluate, saveNote, sessions]; controls.forEach(b => b.disabled = true);
+    const controls = [create, evaluate, saveNote, saveDecision, reconcileJobs, cancelSelected, sessions]; controls.forEach(b => b.disabled = true);
     try { await action(); } catch(e) { fail(e); }
     finally { busy = false; controls.forEach(b => b.disabled = false); }
   }
@@ -140,6 +151,31 @@ export function render(root, {api, el}) {
     if(!sid || !note.value.trim()) throw new Error('Select a session and enter a note.');
     await api.research(path()+'/notes',{text:note.value}); note.value=''; await refresh();
   }));
+  let pendingDecision = null;
+  const saveDecision = button('Save candidate decision',()=>mutate(async()=>{
+    if(!selected || !decisionReason.value.trim()) throw new Error('Select an experiment and enter a decision reason.');
+    const signature = JSON.stringify([selected,decision.value,decisionReason.value]);
+    if(!pendingDecision || pendingDecision.signature !== signature) pendingDecision={signature,id:crypto.randomUUID()};
+    await api.research('/experiments/'+encodeURIComponent(selected)+'/decisions',
+      {decision:decision.value,reason:decisionReason.value,request_id:pendingDecision.id});
+    pendingDecision=null; decisionReason.value=''; await refresh();
+  }));
+  const reconcileJobs = button('Reconcile asynchronous jobs', () => mutate(async () => {
+    if(!sid || !state) throw new Error('Select a session first.');
+    const target = sid;
+    const pending = state.experiments.filter(a => a.status === 'running' && a.execution);
+    for(const a of pending) await api.research('/experiments/'+encodeURIComponent(a.id)+'/reconcile', {});
+    if(sid === target) await refresh();
+  }));
+  const cancelSelected = button('Cancel selected asynchronous experiment', () => mutate(async () => {
+    const attempt = state?.experiments.find(a => a.id === selected);
+    if(!attempt || attempt.status !== 'running' || !attempt.execution)
+      throw new Error('Select a running asynchronous experiment first.');
+    if(!cancelReason.value.trim()) throw new Error('Enter a cancellation reason.');
+    const target = sid;
+    await api.research('/experiments/'+encodeURIComponent(attempt.id)+'/cancel', {reason:cancelReason.value.trim()});
+    if(sid === target) {cancelReason.value=''; await refresh();}
+  }));
   const exportButton = button('Download manifest', async () => {
     try {
       if(!sid) throw new Error('Select a session first.');
@@ -155,14 +191,19 @@ export function render(root, {api, el}) {
   const panel = (title,...children) => el('section',{className:'rw-panel'},el('h2',{},title),...children);
   host.append(style, el('h1',{},'Research Workbench'),
     el('p',{className:'rw-muted'},'Persistent research shared with MCP agents. Human actions are labeled; saved experiment records are not a live model reasoning trace.'),
-    el('div',{className:'rw-toolbar'},sessions,button('Refresh sessions',()=>loadSessions().catch(fail)),el('label',{},live,' Auto-refresh'),exportButton),status,error,
+    el('div',{className:'rw-toolbar'},sessions,button('Refresh sessions',()=>loadSessions().catch(fail)),el('label',{},live,' Auto-refresh'),reconcileJobs,exportButton),status,error,
     el('div',{className:'rw-grid'},
       panel('Research objective',objective,el('details',{},el('summary',{},'Start a new session'),
         el('label',{},'Dataset',datasets),goal,el('label',{},'Attempt budget',budget),create),
         el('details',{},el('summary',{},'Evaluate a candidate'),hypothesis,expr,el('label',{},'Revision parent',parent),evaluate)),
       panel('Experiment activity',attempts),
       panel('Experiment lineage',lineage),
-      panel('Evidence & handoff',selectedSummary,el('details',{},el('summary',{},'Full experiment record'),detail),notes,note,saveNote)));
+      panel('Evidence & handoff',selectedSummary,el('details',{},el('summary',{},'Full experiment record'),detail),
+        el('details',{},el('summary',{},'Cancel an asynchronous experiment'),
+          el('p',{className:'rw-muted'},'Cancellation stops queued work and rejects late results. Remote computation may still finish.'),
+          cancelReason,cancelSelected),
+        el('details',{},el('summary',{},'Candidate decisions'),decisions,decision,decisionReason,saveDecision),
+        notes,note,saveNote)));
   (async () => {
     try {
       const rows = await api.research('/datasets');

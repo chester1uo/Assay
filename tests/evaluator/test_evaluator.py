@@ -45,12 +45,12 @@ def test_forward_returns_next_close_math_and_nan_tail():
     out = forward_returns(close, None, [1, 2], execution="next_close")
     # h=1: fwd[t] = close[t+1]/close[t] - 1 == 1.0 for all defined rows.
     h1 = out[1][:, 0]
-    np.testing.assert_allclose(h1[:4], [1.0, 1.0, 1.0, 1.0])
-    assert np.isnan(h1[4])  # last row falls off the panel
+    np.testing.assert_allclose(h1[:3], [1.0, 1.0, 1.0])
+    assert np.isnan(h1[3:]).all()
     # h=2: close[t+2]/close[t] - 1 == 3.0; last *two* rows are the NaN tail.
     h2 = out[2][:, 0]
-    np.testing.assert_allclose(h2[:3], [3.0, 3.0, 3.0])
-    assert np.isnan(h2[3]) and np.isnan(h2[4])
+    np.testing.assert_allclose(h2[:2], [3.0, 3.0])
+    assert np.isnan(h2[2:]).all()
 
 
 def test_forward_returns_next_open_math_and_nan_tail():
@@ -87,7 +87,7 @@ def test_forward_returns_unknown_execution_raises():
 def test_forward_returns_nan_on_nonpositive_price():
     # A non-finite or non-positive price entering the ratio yields NaN, not a blow-up.
     close = np.array([[1.0], [2.0], [0.0], [8.0]])  # zero *price* at t=2
-    out = forward_returns(close, None, [1], execution="next_close")[1][:, 0]
+    out = forward_returns(close, None, [1], execution="close")[1][:, 0]
     # fwd[0]=2/1-1=1 (fine); fwd[1]=0/2-1=-1 (zero numerator is allowed, finite).
     np.testing.assert_allclose(out[:2], [1.0, -1.0])
     assert np.isnan(out[2])  # close[3]/close[2] divides by a zero price -> NaN

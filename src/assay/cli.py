@@ -596,7 +596,7 @@ def cmd_serve_mcp(args, config: AssayConfig | None) -> None:
             "The MCP surface (assay.mcp.server) is a planned module (architecture §8.3); "
             "ensure the 'mcp' package and assay.mcp are available."
         )
-    mcp_main(transport=args.transport, port=args.port)
+    mcp_main(["--transport", args.transport, "--host", args.host, "--port", str(args.port)])
 
 
 def cmd_verify(args, config: AssayConfig) -> None:
@@ -800,9 +800,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--reload", action="store_true", help="uvicorn auto-reload (dev)")
     sp.set_defaults(func=cmd_serve_api, needs_config=False)
 
-    sp = sub.add_parser("serve-mcp", help="run the MCP server (stdio or sse)")
-    sp.add_argument("--transport", default="stdio", choices=["stdio", "sse"])
-    sp.add_argument("--port", type=int, default=8001, help="port for the sse transport")
+    sp = sub.add_parser("serve-mcp", help="run MCP locally or through the shared HTTP API")
+    sp.add_argument("--transport", default="stdio", choices=["stdio", "sse", "http"])
+    sp.add_argument("--host", default="127.0.0.1")
+    sp.add_argument("--port", type=int, default=8001, help="port for HTTP transports")
     sp.set_defaults(func=cmd_serve_mcp, needs_config=False)
 
     sp = sub.add_parser("seed-demo", help="populate the library with Alpha101 / Alpha158 demo factors")

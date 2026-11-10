@@ -1,0 +1,133 @@
+<h1 class="doc-title">Deploying Assay</h1>
+<p>The public base URL is <strong>https://assay.qfinverse.com</strong>. REST and MCP run in the
+same API process, use the same authentication and share persistent research state.</p>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Interface</th>
+<th>Public endpoint</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Web workbench</td>
+<td><code>https://assay.qfinverse.com/</code></td>
+</tr>
+<tr>
+<td>Streamable HTTP MCP</td>
+<td><code>https://assay.qfinverse.com/mcp/</code></td>
+</tr>
+<tr>
+<td>Research REST</td>
+<td><code>https://assay.qfinverse.com/v1/research</code></td>
+</tr>
+<tr>
+<td>OpenAPI / interactive API</td>
+<td><code>https://assay.qfinverse.com/openapi.json</code> / <code>/docs</code></td>
+</tr>
+<tr>
+<td>Connection discovery</td>
+<td><code>https://assay.qfinverse.com/.well-known/assay.json</code></td>
+</tr>
+<tr>
+<td>Documentation</td>
+<td><code>https://assay.qfinverse.com/doc/</code></td>
+</tr>
+<tr>
+<td>Liveness / authenticated readiness</td>
+<td><code>/health</code> / <code>/ready</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>The discovery document is Assay-specific metadata. It advertises the interface
+version, actual tool count/schema digest and authentication methods. It is not an
+OAuth discovery document. Remote clients need support for a Bearer token or
+<code>X-API-Key</code>; clients that require OAuth-only servers need an additional integration.</p>
+<h2 id="install-and-configure">Install and configure</h2>
+<p>Python 3.12 and the versions in <code>deploy/constraints.txt</code> are used by the deployment
+acceptance tests. From the release checkout:</p>
+<pre><code class="language-bash">python3.12 -m venv .venv
+.venv/bin/python -m pip install -c deploy/constraints.txt '.[api,mcp,perf]'
+python scripts/build_doc_hub.py
+</code></pre>
+<p>Run the document build with the development interpreter that has <code>markdown-it-py</code>,
+or ship the already generated static documentation. It is not a runtime dependency.</p>
+<p>Use <a href="https://github.com/QFinVerse/Assay/blob/main/deploy/assay.env.example" target="_blank" rel="noopener noreferrer"><code>deploy/assay.env.example</code></a> for the environment,
+<a href="https://github.com/QFinVerse/Assay/blob/main/deploy/assay.service" target="_blank" rel="noopener noreferrer"><code>assay.service</code></a> for systemd, and
+<a href="https://github.com/QFinVerse/Assay/blob/main/deploy/Caddyfile" target="_blank" rel="noopener noreferrer"><code>Caddyfile</code></a> for TLS and streaming proxying. The templates
+assume a dedicated <code>assay</code> user, the checkout/venv at <code>/opt/assay</code>, configuration at
+<code>/etc/assay/assay.env</code>, writable local storage at <code>/var/lib/assay</code> and prepared,
+read-only US data at <code>/srv/assay/market/us</code>. Create the directories and assign the
+runtime directory to that user before starting the unit. Adjust paths to the host.</p>
+<p>Key settings:</p>
+<pre><code class="language-dotenv">ASSAY_DEPLOYMENT=production
+ASSAY_PUBLIC_URL=https://assay.qfinverse.com
+ASSAY_MCP_HTTP=1
+ASSAY_ACCOUNTS=1
+ASSAY_CORS_ORIGINS=https://assay.qfinverse.com
+ASSAY_DATA_DIR=/var/lib/assay
+ASSAY_STATE_DIR=/var/lib/assay/accounts
+ASSAY_CONFIG_FILE=/var/lib/assay/config.json
+ASSAY_DATA_DIR_US=/srv/assay/market/us
+</code></pre>
+<p>Production mode rejects a missing HTTPS public origin, missing authentication or
+disabled/unavailable MCP. Configure <code>ASSAY_PUBLIC_URL</code> as an origin with no path,
+query or embedded credential. The public URL is used in discovery and OpenAPI;
+proxy-provided Host values cannot replace it.</p>
+<p>When using accounts for a new installation, visit <code>/login</code>, then use the first-setup
+token from <code>ASSAY_STATE_DIR/setup_token</code> to create the administrator. Existing
+installations retain their auth database and secret. Researchers join by invitation
+and create a personal API key on the Account page. The server needs no LLM key;
+the external agent supplies its own model connection.</p>
+<p>Start with one API worker. Research SQLite state is persistent, while temporary
+panel sessions and cache counters are process-local. The in-process data scheduler
+also runs per process. Stateless MCP HTTP does not make these components distributed.
+For FactorDB/ADES, additionally configure its writable registry/queue directory,
+the read-only QFV panel and worker-only keys; the base template does not enable it.</p>
+<h2 id="reverse-proxy-and-transport">Reverse proxy and transport</h2>
+<p>Preserve the external <code>Host</code>, <code>Authorization</code>, <code>X-API-Key</code>, <code>Accept</code> and MCP protocol
+headers. Disable response buffering for <code>/mcp/</code> and evaluation streams. Caddy's
+template flushes immediately; for nginx use <code>proxy_buffering off</code>, HTTP/1.1 and a
+read timeout long enough for a complete experiment. Trust forwarded headers only
+from the actual proxy, as the systemd command does for loopback.</p>
+<p>Use <code>/mcp/</code> as the canonical client URL. <code>/mcp</code> returns a relative 308 redirect.
+The MCP transport validates Host and Origin against the configured endpoint and
+allowed browser origins, including equivalent explicit default ports. CORS exposes
+the MCP session/protocol headers. Legacy SSE is restricted to local use; the public
+endpoint uses Streamable HTTP and the installed SDK's negotiated protocol version.</p>
+<h2 id="verify-the-release">Verify the release</h2>
+<p>Set <code>ASSAY_MCP_API_KEY</code> through your normal secret manager or shell, then run:</p>
+<pre><code class="language-bash">PYTHONPATH=src .venv/bin/python scripts/check_deployment.py \
+  --base-url https://assay.qfinverse.com \
+  --output artifacts/deployment-release/check.json
+</code></pre>
+<p>The checker reads health, discovery and OpenAPI; verifies unauthenticated rejection;
+checks authenticated readiness and dataset access; initializes a real MCP session;
+and calls tool discovery, lint and dataset listing. It creates no dataset, session
+or experiment and makes no model calls. No key is written to its report. A missing
+key yields an incomplete result and exit code 2, rather than a successful verdict.</p>
+<p><code>/health</code> is cheap process liveness. <code>/ready</code> verifies that the research database can
+enter a write transaction and the MCP transport is available; it requires the same
+credentials as REST. It does not certify market coverage. Before admitting a mining
+job, separately check backend availability, its requested data/calendar window and
+a small authorized factor experiment against the prepared data. Lint alone does
+not exercise factor execution or portfolio accounting.</p>
+<p>Before switching traffic, run the regression suite and verify a new authenticated
+research session through MCP and REST. Preserve its request ID and confirm the same
+attempt after restart. The tests in <code>tests/api/test_deployment.py</code> exercise real TCP
+MCP connections; existing research transport tests cover restart, budgets and migration.</p>
+<h2 id="persistent-state-and-release-boundaries">Persistent state and release boundaries</h2>
+<p>Back up <code>/var/lib/assay</code>, including research and account databases, <code>auth_secret</code>,
+configuration and the factor library. Cache files may be rebuilt. Use SQLite's
+backup API or a stopped service for database copies; copying a live database file
+alone is not a consistent backup. Keep a protected pre-upgrade snapshot and restore
+it with the previous release when rolling back across schema changes.</p>
+<p>This deployment serves a <strong>shared research workspace for a trusted team</strong>. Accounts
+control entry and admin privileges; research sessions and factor history are shared
+among authenticated researchers. Separate organizations requiring private research
+records need separate instances or an additional ownership/authorization layer.</p>
+<p>The read-only market-data/atomic-publication contract for compute reuse is described
+in <a href="/doc/guide/performance">performance</a>. Full experiment results can be large; use compact
+research context and the paginated experiment/history endpoints for routine agent reads.</p>
+<p>Client examples: <a href="/doc/guide/mcp-server">MCP</a>, <a href="/doc/guide/reference-agent">reference agent</a>,
+<a href="/doc/guide/rest-api">REST</a>.</p>

@@ -17,10 +17,11 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 RESEARCH_TOOLS = {
+    'assay_candidate_decide', 'assay_candidate_list', 'assay_factor_history',
     'assay_backend_list', 'assay_dataset_register', 'assay_dataset_list',
     'assay_research_session_create', 'assay_research_session_list',
     'assay_research_context', 'assay_research_note',
-    'assay_experiment_run', 'assay_experiment_get', 'assay_experiment_compare',
+    'assay_experiment_run', 'assay_experiment_get', 'assay_experiment_reconcile', 'assay_experiment_cancel', 'assay_experiment_compare',
     'assay_experiment_replay', 'assay_lint',
 }
 
@@ -48,29 +49,21 @@ def normalize_tool_result(result):
 
 
 def model_tool_result(name, result):
-    """Summarize routine evaluation feedback; keep full reports in receipts/server.
-
-    experiment_get remains an explicit full-report inspection tool. No numeric
-    score is recomputed here, and scope/failure metadata remain visible.
-    """
+    """Bound model feedback; retain original reports in receipts/server."""
     result = normalize_tool_result(result)
-    if name not in {'assay_experiment_run', 'assay_experiment_replay'} or not isinstance(result, dict):
+    if name == 'assay_factor_history' and isinstance(result, dict):
+        if 'factor_id' in result and 'history_page' not in result:
+            from assay.research_inspection import inspect_factor_history
+            return inspect_factor_history(result)
+        return result
+    if name not in {'assay_experiment_run', 'assay_experiment_replay', 'assay_experiment_get'} or not isinstance(result, dict):
         return result
     if 'id' not in result or 'status' not in result:
         return result
-    summary = {k: v for k, v in result.items() if k not in {'report', 'panel_report'}}
-    report = result.get('report')
-    if isinstance(report, dict):
-        fields = ('failure_mode', 'suggestion', 'diagnostics', 'rank_ic', 'rank_icir', 'ic', 'icir',
-                  'turnover_1d', 'decay_halflife_days', 'ic_by_horizon', 'n_dates', 'n_symbols',
-                  'eval_period', 'panel_period', 'score_period', 'scoring_complete', 'universe_id',
-                  'universe_as_of', 'universe_symbols_hash', 'data_as_of', 'execution', 'adj',
-                  'diagnostics_scope', 'unavailable_score_metrics')
-        summary['report'] = {k: report[k] for k in fields if k in report}
-    else:
-        summary['report'] = report
-    summary['report_detail'] = 'summary; call assay_experiment_get with this ID for the full saved report'
-    return summary
+    if name == 'assay_experiment_get' and 'section' in result and 'items' in result:
+        return result  # preserve the explicitly requested, bounded detail page
+    from assay.research_inspection import summarize_attempt
+    return summarize_attempt(result)
 
 
 def atomic_json(path: Path, payload):
@@ -297,9 +290,13 @@ def main():
     parser.add_argument('--temperature', type=float, default=.7)
     parser.add_argument('--extra-body', type=json.loads, default={})
     parser.add_argument('--allow-returned-model', action='append')
-    parser.add_argument('--server-command', nargs=argparse.REMAINDER, required=True)
+    transport = parser.add_mutually_exclusive_group(required=True)
+    transport.add_argument('--mcp-url', help='Remote Streamable HTTP URL, e.g. https://assay.qfinverse.com/mcp/')
+    transport.add_argument('--server-command', nargs=argparse.REMAINDER)
+    parser.add_argument('--mcp-api-key-env', default='ASSAY_MCP_API_KEY')
+    parser.add_argument('--mcp-timeout', type=float, default=300)
     args = parser.parse_args()
-    if not args.server_command:
+    if args.server_command is not None and not args.server_command:
         parser.error('server command is empty')
     key = os.environ.get(args.api_key_env)
     if not key:
@@ -309,14 +306,11 @@ def main():
                       allowed_returned_models=args.allow_returned_model)
 
     async def execute():
-        from mcp import ClientSession
-        from mcp.client.stdio import StdioServerParameters, stdio_client
-        params = StdioServerParameters(command=args.server_command[0], args=args.server_command[1:], env=dict(os.environ))
-        async with stdio_client(params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                return await run_agent(session, model, task=args.task_file.read_text(), output=args.output,
-                                       max_turns=args.max_turns, max_tool_calls=args.max_tool_calls)
+        from assay.mcp.client import connect_mcp
+        async with connect_mcp(command=args.server_command, url=args.mcp_url,
+                               api_key=os.environ.get(args.mcp_api_key_env), timeout=args.mcp_timeout) as session:
+            return await run_agent(session, model, task=args.task_file.read_text(), output=args.output,
+                                   max_turns=args.max_turns, max_tool_calls=args.max_tool_calls)
     result = asyncio.run(execute())
     print(json.dumps({k: result[k] for k in ('status', 'usage', 'usage_complete', 'final_text')}, indent=2))
 

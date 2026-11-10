@@ -1,15 +1,38 @@
 <h1 class="doc-title">MCP Server</h1>
-<p>服务现有 <strong>34 个工具</strong>，含 8 个 FactorDB 工具及 15 个后端发现、持久数据集、研究会话与实验工具。
+<p>服务现有 <strong>39 个工具</strong>，含 8 个 FactorDB 工具及 20 个后端发现、持久数据集、研究会话与实验工具。
 使用流程与恢复语义见 <a href="/doc/guide/agent-research">Agent 研究指南</a>。</p>
 <p>MCP server 将 Assay 的 evaluate→library 循环暴露为 Model Context Protocol 工具，供 LLM
 agent 调用以驱动自主的 alpha 挖掘。基于高层的 <strong>FastMCP</strong> API 构建
 （<a href="https://github.com/QFinVerse/Assay/blob/main/src/assay/mcp/server.py" target="_blank" rel="noopener noreferrer"><code>src/assay/mcp/server.py</code></a>）。</p>
-<h2 id="运行">运行</h2>
-<pre><code class="language-bash">python -m assay.mcp.server                          # stdio (Claude Desktop / local agents)
-python -m assay.cli serve-mcp --transport sse --port 8001   # SSE/HTTP (remote agents)
+<h2 id="公开入口">公开入口</h2>
+<p>远程 Agent 使用 <strong><code>https://assay.qfinverse.com/mcp/</code></strong>，传输为 Streamable HTTP。
+通过 <code>Authorization: Bearer …</code> 或 <code>X-API-Key</code> 发送个人／服务 key。模型供应商的 key
+与 Assay 访问 key 是两份不同的凭证。当前未实现 OAuth，客户端需要支持这两种请求头。</p>
+<p><a href="https://assay.qfinverse.com/.well-known/assay.json" target="_blank" rel="noopener noreferrer"><code>/.well-known/assay.json</code></a>
+提供部署后的实际工具数与 schema 摘要。研究 session 持久化在服务端数据库中，MCP 传输本身无状态。</p>
+<pre><code class="language-python">import asyncio
+import os
+from assay.mcp.client import connect_mcp
+
+async def main():
+    async with connect_mcp(url=&quot;https://assay.qfinverse.com/mcp/&quot;,
+                           api_key=os.environ[&quot;ASSAY_MCP_API_KEY&quot;]) as session:
+        tools = await session.list_tools()
+        print([tool.name for tool in tools.tools])
+        print(await session.call_tool(&quot;assay_backend_list&quot;, {&quot;probe&quot;: True}))
+
+asyncio.run(main())
 </code></pre>
-<p>模块导入时不需要凭证；服务底层的数据存储是惰性构建的，因此
-只有触及价格数据的工具才需要 MASSIVE 凭证。</p>
+<p>研究流程使用 dataset → research session → experiment → 检查／决策。
+<code>assay_experiment_run</code> 默认复用行情与因子计算，每次尝试仍独立记录。日常检查优先使用紧凑 context
+和实验／历史分页接口；为保持兼容，run／replay 的即时返回仍包含完整实验。已认证研究员目前共享工作区。</p>
+<p>部署和上线后验收见<a href="/doc/guide/deployment">部署指南</a>。</p>
+<h2 id="本地运行">本地运行</h2>
+<pre><code class="language-bash">python -m assay.mcp.server                          # stdio (Claude Desktop / local agents)
+python -m assay.cli serve-mcp --transport http --port 8001 # 共用鉴权的 HTTP 应用
+</code></pre>
+<p>HTTP 模式需安装 <code>.[api,mcp]</code>，stdio 只需 MCP extra。使用已准备的本地行情不需要供应商凭证。
+旧的 <code>--transport sse</code> 仅供 loopback 开发；公开部署使用共用的 HTTP 应用。</p>
 <h2 id="评估与因子库工具-11-个">评估与因子库工具（11 个）</h2>
 <div class="table-wrap"><table class="doc-table">
 <thead>

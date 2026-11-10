@@ -206,22 +206,20 @@ class FactorService:
         """Record a worker's scores for a completed task (see :mod:`assay.ades`)."""
         from assay.ades.slice import decode_print
 
-        spec, version, owner = task["spec"], task["version"], task["owner"]
-        done = failed = 0
-        for r in results:
-            fid = r.get("factor_id")
-            if not fid:
-                continue
-            if r.get("metrics") is not None:
-                self.reg.put_score(fid, spec, version, owner, r["metrics"])
-                if r.get("print"):
-                    self._remember(spec, fid, decode_print(r["print"]))
-                done += 1
-            else:
-                self.reg.put_score(fid, spec, version, owner, {"error": r.get("error")})
-                failed += 1
-        self._progress(task["job_id"], owner, done, failed, seconds)
-        return {"done": done, "failed": failed}
+        applied = self.reg.apply_task_results(task, results, seconds)
+        if applied:
+            for r in results:
+                if r.get("metrics") is not None and r.get("print"):
+                    self._remember(task["spec"], r["factor_id"], decode_print(r["print"]))
+        return {"done":sum(r.get("metrics") is not None for r in results),
+                "failed":sum(r.get("metrics") is None for r in results), "applied":applied}
+
+    def recover_results(self, job_id=None):
+        if self.ades is not None:
+            for task, results, seconds in self.ades.result_receipts(job_id):
+                self.apply_results(task, results, seconds)
+            for receipt in self.ades.cancellation_receipts(job_id):
+                self.reg.apply_cancellation(receipt)
 
     def lease(self, worker: str, panel: str, info: dict | None = None) -> dict | None:
         task = self.ades.lease(worker, panel, info)
@@ -236,8 +234,9 @@ class FactorService:
         while True:
             time.sleep(10)
             try:
-                for t in self.ades.reap():
-                    self._progress(t["job_id"], t["owner"], 0, t["n"], 0.0)
+                self.recover_results()
+                self.ades.reap()
+                self.recover_results()
             except Exception:  # noqa: BLE001
                 log.exception("ades reaper")
 

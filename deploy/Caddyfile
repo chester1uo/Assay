@@ -1,0 +1,12 @@
+assay.qfinverse.com {
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+
+    reverse_proxy 127.0.0.1:8000 {
+        # Stream MCP/SSE responses immediately. Keep Host and auth headers intact.
+        flush_interval -1
+    }
+}

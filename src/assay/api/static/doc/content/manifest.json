@@ -10,7 +10,8 @@
    "pages": [
     "guide/getting-started",
     "guide/webui",
-    "guide/cli"
+    "guide/cli",
+    "guide/deployment"
    ]
   },
   {
@@ -176,7 +177,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "guide/webui": {
    "group": "start",
@@ -230,7 +231,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "guide/cli": {
    "group": "start",
@@ -296,6 +297,60 @@
    },
    "updated": "2026-07-04"
   },
+  "guide/deployment": {
+   "group": "start",
+   "title": {
+    "en": "Deploying Assay",
+    "zh": "部署 Assay"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "install-and-configure",
+      "text": "Install and configure",
+      "level": 2
+     },
+     {
+      "id": "reverse-proxy-and-transport",
+      "text": "Reverse proxy and transport",
+      "level": 2
+     },
+     {
+      "id": "verify-the-release",
+      "text": "Verify the release",
+      "level": 2
+     },
+     {
+      "id": "persistent-state-and-release-boundaries",
+      "text": "Persistent state and release boundaries",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "安装与配置",
+      "text": "安装与配置",
+      "level": 2
+     },
+     {
+      "id": "反向代理与传输",
+      "text": "反向代理与传输",
+      "level": 2
+     },
+     {
+      "id": "发布验收",
+      "text": "发布验收",
+      "level": 2
+     },
+     {
+      "id": "持久状态与部署范围",
+      "text": "持久状态与部署范围",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-11-10"
+  },
   "guide/qfv-data": {
    "group": "data",
    "title": {
@@ -358,7 +413,7 @@
      }
     ]
    },
-   "updated": "2026-11-08"
+   "updated": "2026-11-02"
   },
   "guide/data-and-adjustment": {
    "group": "data",
@@ -566,7 +621,7 @@
      }
     ]
    },
-   "updated": "2026-08-01"
+   "updated": "2026-11-02"
   },
   "guide/multi-market": {
    "group": "data",
@@ -740,6 +795,11 @@
       "level": 2
      },
      {
+      "id": "factor-selection-and-portfolio-evidence",
+      "text": "Factor selection and portfolio evidence",
+      "level": 2
+     },
+     {
       "id": "scoring-windows-and-expression-contracts",
       "text": "Scoring windows and expression contracts",
       "level": 2
@@ -768,6 +828,16 @@
       "id": "migrating-a-session",
       "text": "Migrating a session",
       "level": 2
+     },
+     {
+      "id": "durable-asynchronous-research",
+      "text": "Durable asynchronous research",
+      "level": 2
+     },
+     {
+      "id": "cancel-asynchronous-research",
+      "text": "Cancel asynchronous research",
+      "level": 2
      }
     ],
     "zh": [
@@ -779,6 +849,11 @@
      {
       "id": "读取区间-评分区间与表达式约束",
       "text": "读取区间、评分区间与表达式约束",
+      "level": 2
+     },
+     {
+      "id": "因子选择与组合回测",
+      "text": "因子选择与组合回测",
       "level": 2
      },
      {
@@ -805,6 +880,16 @@
       "id": "会话迁移",
       "text": "会话迁移",
       "level": 2
+     },
+     {
+      "id": "持久异步实验",
+      "text": "持久异步实验",
+      "level": 2
+     },
+     {
+      "id": "取消异步实验",
+      "text": "取消异步实验",
+      "level": 2
      }
     ]
    },
@@ -818,6 +903,11 @@
    },
    "headings": {
     "en": [
+     {
+      "id": "connect-to-the-public-server",
+      "text": "Connect to the public server",
+      "level": 2
+     },
      {
       "id": "run-the-offline-demo",
       "text": "Run the offline demo",
@@ -835,6 +925,11 @@
      }
     ],
     "zh": [
+     {
+      "id": "连接公开服务",
+      "text": "连接公开服务",
+      "level": 2
+     },
      {
       "id": "离线运行",
       "text": "离线运行",
@@ -1079,7 +1174,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-03"
   },
   "guide/precompute-cse": {
    "group": "research",
@@ -1184,45 +1279,55 @@
    "headings": {
     "en": [
      {
-      "id": "caches",
-      "text": "Caches",
+      "id": "research-execution-reuse",
+      "text": "Research execution reuse",
       "level": 2
      },
      {
-      "id": "run-the-benchmark",
-      "text": "Run the benchmark",
+      "id": "source-updates",
+      "text": "Source updates",
+      "level": 3
+     },
+     {
+      "id": "inspect-reuse",
+      "text": "Inspect reuse",
+      "level": 3
+     },
+     {
+      "id": "measured-workloads",
+      "text": "Measured workloads",
       "level": 2
      },
      {
-      "id": "representative-numbers",
-      "text": "Representative numbers",
-      "level": 2
-     },
-     {
-      "id": "notes",
-      "text": "Notes",
+      "id": "alpha-101-cache-microbenchmark",
+      "text": "Alpha-101 cache microbenchmark",
       "level": 2
      }
     ],
     "zh": [
      {
-      "id": "缓存",
-      "text": "缓存",
+      "id": "研究执行复用",
+      "text": "研究执行复用",
       "level": 2
      },
      {
-      "id": "运行基准",
-      "text": "运行基准",
+      "id": "数据更新",
+      "text": "数据更新",
+      "level": 3
+     },
+     {
+      "id": "查看复用情况",
+      "text": "查看复用情况",
+      "level": 3
+     },
+     {
+      "id": "实测工作负载",
+      "text": "实测工作负载",
       "level": 2
      },
      {
-      "id": "代表性数值",
-      "text": "代表性数值",
-      "level": 2
-     },
-     {
-      "id": "说明",
-      "text": "说明",
+      "id": "alpha-101-缓存微基准",
+      "text": "Alpha-101 缓存微基准",
       "level": 2
      }
     ]
@@ -1237,6 +1342,11 @@
    },
    "headings": {
     "en": [
+     {
+      "id": "durable-research-endpoints",
+      "text": "Durable research endpoints",
+      "level": 2
+     },
      {
       "id": "auth",
       "text": "Auth",
@@ -1280,6 +1390,11 @@
     ],
     "zh": [
      {
+      "id": "持久研究接口",
+      "text": "持久研究接口",
+      "level": 2
+     },
+     {
       "id": "鉴权",
       "text": "鉴权",
       "level": 2
@@ -1321,7 +1436,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "guide/python-sdk": {
    "group": "api",
@@ -1416,8 +1531,13 @@
    "headings": {
     "en": [
      {
-      "id": "run",
-      "text": "Run",
+      "id": "public-endpoint",
+      "text": "Public endpoint",
+      "level": 2
+     },
+     {
+      "id": "local-execution",
+      "text": "Local execution",
       "level": 2
      },
      {
@@ -1438,8 +1558,13 @@
     ],
     "zh": [
      {
-      "id": "运行",
-      "text": "运行",
+      "id": "公开入口",
+      "text": "公开入口",
+      "level": 2
+     },
+     {
+      "id": "本地运行",
+      "text": "本地运行",
       "level": 2
      },
      {
@@ -1470,6 +1595,11 @@
    "headings": {
     "en": [
      {
+      "id": "complete-capability-map",
+      "text": "Complete capability map",
+      "level": 2
+     },
+     {
       "id": "responsibilities",
       "text": "Responsibilities",
       "level": 2
@@ -1488,9 +1618,19 @@
       "id": "integration-provenance",
       "text": "Integration provenance",
       "level": 2
+     },
+     {
+      "id": "validation-and-paper-scope",
+      "text": "Validation and paper scope",
+      "level": 2
      }
     ],
     "zh": [
+     {
+      "id": "完整能力与入口",
+      "text": "完整能力与入口",
+      "level": 2
+     },
      {
       "id": "组件分工",
       "text": "组件分工",
@@ -1509,6 +1649,11 @@
      {
       "id": "整合来源",
       "text": "整合来源",
+      "level": 2
+     },
+     {
+      "id": "已有验证与论文边界",
+      "text": "已有验证与论文边界",
       "level": 2
      }
     ]
@@ -1647,7 +1792,7 @@
      }
     ]
    },
-   "updated": "2026-11-08"
+   "updated": "2026-11-03"
   },
   "design/architecture": {
    "group": "design",
@@ -2131,7 +2276,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "design/engineering": {
    "group": "design",
@@ -2635,7 +2780,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "design/portfolio-backtest": {
    "group": "design",
@@ -2729,7 +2874,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-03"
   },
   "design/minute-backtesting": {
    "group": "design",
@@ -3931,7 +4076,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-02"
   },
   "reports/alpha101": {
    "group": "reports",

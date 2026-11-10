@@ -11,6 +11,7 @@ def build_context(state: dict, backend: dict, limit: int) -> dict:
     from assay.engine import parse
 
     groups = {}
+    decisions = {d['factor_id']: d for d in state.get('decisions', [])}
     failures = Counter()
     views = []
     for attempt in state["experiments"]:
@@ -22,21 +23,33 @@ def build_context(state: dict, backend: dict, limit: int) -> dict:
             canonical = expr.strip()
         groups.setdefault(canonical, []).append(attempt["id"])
         reason = report.get("failure_mode") or (attempt.get("error") or {}).get("type")
-        if attempt["status"] in {"failed", "abandoned"}:
+        if attempt["status"] in {"failed", "abandoned", "cancelled"}:
             failures[reason or attempt["status"]] += 1
         views.append(dict(id=attempt["id"], expr=expr, hypothesis=attempt["hypothesis"],
-                          status=attempt["status"], agent=attempt["agent"],
+                          decision=decisions.get(attempt.get('factor_id'), {}).get('decision', 'candidate'),
+                          status=attempt["status"], agent=attempt["agent"], execution=attempt.get("execution"),
                           parent_id=attempt.get("parent_id"), replay_of=attempt.get("replay_of"),
+                          factor_id=attempt.get('factor_id'),
                           failure_mode=reason, suggestion=report.get("suggestion"),
-                          metrics={k: report.get(k) for k in ("rank_ic", "rank_icir", "turnover_1d")}))
+                          metrics={k: report.get(k) for k in ("rank_ic", "rank_icir", "turnover_1d")},
+                          portfolio_metrics={k: (report.get('portfolio') or {}).get(k) for k in
+                                             ('total_return', 'sharpe', 'max_drawdown', 'annual_turnover', 'cost_drag')}))
 
     def finite(value):
         return type(value) in (int, float) and math.isfinite(value)
 
-    ranked = sorted((v for v in views if v["status"] == "completed" and finite(v["metrics"]["rank_ic"])),
+    ranked = sorted((v for v in views if v["status"] == "completed" and v['decision'] in {'candidate', 'accepted'}
+                     and finite(v["metrics"]["rank_ic"])),
                     key=lambda v: (-abs(v["metrics"]["rank_ic"]), v["id"]))
+    seen, unique = set(), []
+    for view in ranked:
+        key = view.get('factor_id') or view['expr']
+        if key not in seen:
+            unique.append(view)
+            seen.add(key)
+    ranked = unique
     running = [v for v in views if v["status"] == "running"]
-    failed = [v for v in views if v["status"] in {"failed", "abandoned"}]
+    failed = [v for v in views if v["status"] in {"failed", "abandoned", "cancelled"}]
     repeated = [dict(canonical=expr, count=len(ids), experiment_ids=ids[-limit:])
                 for expr, ids in groups.items() if len(ids) > 1]
     repeated.sort(key=lambda r: (-r["count"], r["canonical"]))
@@ -44,7 +57,7 @@ def build_context(state: dict, backend: dict, limit: int) -> dict:
     if not backend["registered"]:
         actions.append("Register this dataset's backend in the serving process before evaluating.")
     if running:
-        actions.append("Inspect running attempts; abandon only after confirming the original worker stopped.")
+        actions.append("Reconcile or cancel tracked asynchronous attempts; abandon synchronous attempts only after confirming the worker stopped.")
     if state["remaining_experiments"] == 0:
         actions.append("Attempt budget is exhausted; review evidence or create a new research session.")
     else:
@@ -57,6 +70,7 @@ def build_context(state: dict, backend: dict, limit: int) -> dict:
                 recent_attempts=views[-limit:], top_candidates=ranked[:limit], ranked_by="absolute_rank_ic",
                 failed_attempts=failed[-limit:], failure_counts=dict(failures), running_attempts=running[-limit:],
                 repeated_expressions=repeated[:limit], notes=state["notes"][-limit:],
+                decisions=state.get('decisions', [])[-limit:],
                 truncated=dict(recent_attempts=len(views) > limit, top_candidates=len(ranked) > limit,
                                failed_attempts=len(failed) > limit, running_attempts=len(running) > limit,
                                repeated_expressions=len(repeated) > limit, notes=len(state["notes"]) > limit),

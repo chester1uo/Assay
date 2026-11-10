@@ -1,21 +1,51 @@
 # MCP Server
 
-服务现有 **34 个工具**，含 8 个 FactorDB 工具及 15 个后端发现、持久数据集、研究会话与实验工具。
+服务现有 **39 个工具**，含 8 个 FactorDB 工具及 20 个后端发现、持久数据集、研究会话与实验工具。
 使用流程与恢复语义见 [Agent 研究指南](agent-research.md)。
 
 MCP server 将 Assay 的 evaluate→library 循环暴露为 Model Context Protocol 工具，供 LLM
 agent 调用以驱动自主的 alpha 挖掘。基于高层的 **FastMCP** API 构建
 （[`src/assay/mcp/server.py`](../../../src/assay/mcp/server.py)）。
 
-## 运行
+## 公开入口
+
+远程 Agent 使用 **`https://assay.qfinverse.com/mcp/`**，传输为 Streamable HTTP。
+通过 `Authorization: Bearer …` 或 `X-API-Key` 发送个人／服务 key。模型供应商的 key
+与 Assay 访问 key 是两份不同的凭证。当前未实现 OAuth，客户端需要支持这两种请求头。
+
+[`/.well-known/assay.json`](https://assay.qfinverse.com/.well-known/assay.json)
+提供部署后的实际工具数与 schema 摘要。研究 session 持久化在服务端数据库中，MCP 传输本身无状态。
+
+```python
+import asyncio
+import os
+from assay.mcp.client import connect_mcp
+
+async def main():
+    async with connect_mcp(url="https://assay.qfinverse.com/mcp/",
+                           api_key=os.environ["ASSAY_MCP_API_KEY"]) as session:
+        tools = await session.list_tools()
+        print([tool.name for tool in tools.tools])
+        print(await session.call_tool("assay_backend_list", {"probe": True}))
+
+asyncio.run(main())
+```
+
+研究流程使用 dataset → research session → experiment → 检查／决策。
+`assay_experiment_run` 默认复用行情与因子计算，每次尝试仍独立记录。日常检查优先使用紧凑 context
+和实验／历史分页接口；为保持兼容，run／replay 的即时返回仍包含完整实验。已认证研究员目前共享工作区。
+
+部署和上线后验收见[部署指南](deployment.md)。
+
+## 本地运行
 
 ```bash
 python -m assay.mcp.server                          # stdio (Claude Desktop / local agents)
-python -m assay.cli serve-mcp --transport sse --port 8001   # SSE/HTTP (remote agents)
+python -m assay.cli serve-mcp --transport http --port 8001 # 共用鉴权的 HTTP 应用
 ```
 
-模块导入时不需要凭证；服务底层的数据存储是惰性构建的，因此
-只有触及价格数据的工具才需要 MASSIVE 凭证。
+HTTP 模式需安装 `.[api,mcp]`，stdio 只需 MCP extra。使用已准备的本地行情不需要供应商凭证。
+旧的 `--transport sse` 仅供 loopback 开发；公开部署使用共用的 HTTP 应用。
 
 ## 评估与因子库工具（11 个）
 

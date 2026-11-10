@@ -80,6 +80,8 @@ class PortfolioAccountant:
         schedule: dict[int, np.ndarray],
         *,
         exec_prices: np.ndarray | None = None,
+        pre_trade_returns: np.ndarray | None = None,
+        post_trade_returns: np.ndarray | None = None,
         prev_closes: np.ndarray | None = None,
         limit_ups: np.ndarray | None = None,
         limit_downs: np.ndarray | None = None,
@@ -130,6 +132,16 @@ class PortfolioAccountant:
             raise ValueError("daily_returns must be 2-D (T, N)")
         T, N = rets.shape
         rets = np.where(np.isfinite(rets), rets, 0.0)  # NaN return -> 0 for that name
+        if (pre_trade_returns is None) != (post_trade_returns is None):
+            raise ValueError('supply both pre_trade_returns and post_trade_returns')
+        pre, post = rets, None
+        if pre_trade_returns is not None:
+            pre = np.asarray(pre_trade_returns, dtype=np.float64)
+            post = np.asarray(post_trade_returns, dtype=np.float64)
+            if pre.shape != rets.shape or post.shape != rets.shape:
+                raise ValueError('execution return legs must match daily_returns')
+            pre = np.where(np.isfinite(pre), pre, 0.0)
+            post = np.where(np.isfinite(post), post, 0.0)
 
         nav = np.empty(T, dtype=np.float64)
         gross = np.empty(T, dtype=np.float64)
@@ -151,7 +163,7 @@ class PortfolioAccountant:
         for t in range(T):
             # 1) Drift: each held weight earns its name's return into date t. The
             #    portfolio's gross daily return is the weighted sum; cash earns 0.
-            r_t = rets[t]
+            r_t = pre[t]
             port_ret = float(np.dot(cur_w, r_t))
             nav_val *= 1.0 + port_ret
             gross_val *= 1.0 + port_ret
@@ -213,6 +225,13 @@ class PortfolioAccountant:
                         diag[k] += res.diag.get(k, 0.0)
                     step += 1
 
+            # Opening fills own the open-to-close leg, including on their first
+            # trading day. Unchanged holdings earn both legs of the full day.
+            if post is not None:
+                intraday = float(np.dot(cur_w, post[t]))
+                nav_val *= 1.0 + intraday
+                gross_val *= 1.0 + intraday
+                cur_w = cur_w * (1.0 + post[t]) / (1.0 + intraday)
             nav[t] = nav_val
             gross[t] = gross_val
             weight_log[t] = cur_w

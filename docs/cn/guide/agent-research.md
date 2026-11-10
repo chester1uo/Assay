@@ -56,9 +56,46 @@ Dataset 还可指定 `expression_policy`：`fields`、`operators`、`max_window`
 窗口预算沿用 AlphaBench 稳定 OHLCV 语法的规则，不代表 EMA 等递归滤波器只有有限历史依赖。
 读取范围仍需显式包含足够预热和标签缓冲，注册接口不会自动下载或推导额外行情。
 
+## 因子选择与组合回测
+
+新注册的内置 `assay` 数据集在次日成交模式下，默认同时运行因子诊断与组合回测。
+`report.portfolio` 保存成本后净值、收益、Sharpe、回撤、实际交易换手与成本拖累。
+注册时可用 `portfolio={"rebalance_type": "weekly"}` 固定回测参数；参数参与数据集哈希。
+`portfolio={"enabled": False}` 仅运行因子诊断，显式 IC 评分窗口与同日 `close` 模式默认如此。
+已有数据集保留原配置。缺少冲击成本输入、资金规模或持仓报价时，报告会给出具体记录。
+
+每个可解析的实验与规范化因子在同一个 SQLite 事务中登记。目录复用 FactorDB Registry，
+同一因子可以关联多次实验及多个研究会话；完整报告保留在实验历史中，目录的最新分数仅供检索。
+
+```python
+ws.decide_candidate(second["id"], "accepted", "保留较短窗口继续研究",
+                    request_id="select-shorter", agent="agent-b")
+print(ws.list_candidates(session["id"]))
+print(ws.factor_history(second["factor_id"]))
+```
+
+选择状态包括 `candidate`、`accepted`、`rejected`、`archived`，按研究会话分别维护。
+每次决定追加保存证据实验、理由、作者和幂等请求标识；采纳必须有完成的实验作为依据。
+决定不消耗实验预算，随会话重启续接、导出及恢复；淘汰和归档的因子不会出现在交接上下文的活跃候选中。
+MCP 提供 `assay_candidate_decide`、`assay_candidate_list`、`assay_factor_history`，
+Workbench 可查看组合指标并通过同一 REST 状态记录人工决定。
+
+`fdb_query`、`fdb_factor` 默认通过 `source="all"` 查询研究目录和已配置的计算目录，也可指定
+`research` 或 `compute`。计算提交和节点存储仍需配置 FactorDB/ADES，查询入口不会复制节点或合并物理数据库。
+
+次日开盘成交时，旧持仓承担隔夜收益，成交后持仓承担日内收益；`next_close` 的 IC 标签和组合成交均从次日收盘开始。
+新配置记录 `evaluation_protocol="assay-daily-v2"`，旧 `next_close` 数据集须重新注册，历史报告仍可读取。
+计算评分缓存也区分执行语义版本。面板内容哈希包含行情、历史成分和分组标签，防止修订数据误用缓存。
+预计算子表达式保留入池前的滚动历史，横截面计算与最终输出按当日成分筛选。
+
+可运行 `scripts/validate_research_loop.py --data-root PREPARED_STORE --output NEW_DIR`，
+在已有真实行情上验证完整闭环、重启恢复、独立现金／股数账本对账，并输出原始数据和实现哈希。
+完整研究实验耗时、首次因子矩阵计算、共享面板/CSE 批量计算和精确缓存命中分别报告。
+矩阵计算吞吐不等同于完整回测吞吐；独立账本验证已记录成交下的净值核算，选股规则和供应商数据完整性需另行检验。
+
 ## MCP 研究工具
 
-运行 `assay serve-mcp`。15 个研究工具如下，与原有 11 个评估/因子库工具共存：
+运行 `assay serve-mcp`。20 个研究工具如下，与原有 11 个评估/因子库工具共存：
 
 | 工具 | 用途 |
 |---|---|
@@ -74,12 +111,25 @@ Dataset 还可指定 `expression_policy`：`fields`、`operators`、`max_window`
 | `assay_research_session_get` | 恢复研究上下文和实验历史 |
 | `assay_research_note` | 保存判断、失败方向和交接说明 |
 | `assay_experiment_run` | 执行假设并保留结果 |
-| `assay_experiment_get` | 检查报告、诊断与异常 |
+| `assay_experiment_get` | 读取指标、成本及失败摘要，按页查看实验明细 |
 | `assay_experiment_compare` | 比较指标并标记配置差异 |
-| `assay_experiment_abandon` | 显式结束中断尝试 |
+| `assay_experiment_abandon` | 显式结束同步中断尝试 |
+| `assay_candidate_decide` | 依据实验追加采纳、淘汰、归档或重新开放决定 |
+| `assay_candidate_list` | 查看规范化候选与当前会话选择状态 |
+| `assay_factor_history` | 分页读取因子的实验摘要及决定历史 |
+| `assay_experiment_reconcile` | 恢复或查询持久异步任务 |
+| `assay_experiment_cancel` | 保存原因并取消异步任务 |
 
 建议流程：发现可用股票池 → 注册数据集 → 创建或恢复会话 → 查看已有尝试 → lint → 执行实验 →
 检查指标与诊断 → 保存判断 → 决定修订、调用已有组合回测工具或停止。下一轮决策由外部 Agent 驱动。
+
+`assay_experiment_get(id)` 现在默认返回精简摘要。查看明细时指定
+`section="trades"`、`"positions"`、`"nav"`、`"ic"` 或 `"diagnostics"`，
+并传入 `offset` 和 `limit`（1–100）；结果包含 `total` 与 `next_offset`。
+这避免大规模交易明细占满模型上下文。Python workspace 与 REST 实验接口仍返回完整报告。
+长会话应优先使用 `assay_research_context` 向模型提供上下文；session export 和完整会话
+接口用于存储及分析完整证据。`assay_factor_history` 同样接受 `offset` 与 `limit`，
+按时间顺序分别截取实验、决定列表，`history_page` 给出两类记录的总数。
 
 ## 重试、预算与恢复
 
@@ -151,3 +201,33 @@ SDK 使用 `target.import_session(manifest)`，MCP 使用 `assay_research_import
 
 导入不会自动停用源工作区。预算约束按工作区生效，迁移后应选择在哪个工作区继续。
 这是研究快照复制，不提供分布式 worker 协调或跨工作区统一预算。
+
+## 持久异步实验
+
+配置 FactorDB controller 与 ADES worker 后，选择 `backend="factordb_ades"`，将后端探测返回的
+`data_version` 填入 dataset 的 `snapshot_id`，并使用 `adj="total"`、`as_of=end`。
+该后端拒绝评分窗口和自定义 backend options；具体 SDK 示例见[英文指南](../../en/guide/agent-research.md#durable-asynchronous-research)。
+
+实验返回 `running` 时，超时或重启后调用 `assay_experiment_reconcile(experiment_id)`，
+或 REST `POST /v1/research/experiments/{id}/reconcile`。网页也提供 **Reconcile asynchronous jobs**。
+协调操作复用原 job，不再扣尝试预算；普通读取和自动刷新只读取保存的记录。
+任务完成、重试耗尽的回执可在跨库写入中断后恢复；租约 token 拒绝旧 worker 的迟到结果。
+
+错误含 `code`、`retryable`、`recommended_action`。暂时故障保留运行状态；确定性输入错误结束当前尝试，
+可创建带父实验关联的新修订。异步任务支持保存原因后取消，见下文。版本是逻辑标识，不认证物理数据内容；
+结果是 FactorDB 聚合诊断。重启时应保留研究、registry 和 queue 数据库，导出记录不会复制行情或运行中的 worker。
+
+## 取消异步实验
+
+SDK：`ws.cancel_experiment(experiment_id, "研究方向改变")`；MCP：
+`assay_experiment_cancel(experiment_id, reason)`；REST：
+`POST /v1/research/experiments/{id}/cancel`，请求体为 `{"reason":"研究方向改变"}`。
+网页选中运行中的异步实验，展开 **Cancel an asynchronous experiment**，填入原因后取消。
+
+取消意图先持久保存，后端暂时不可用时仍保留为运行中；重启后使用 reconcile 接续取消，
+首次原因不会被重试覆盖。排队任务停止派发，运行任务撤销租约，延迟派发和迟到结果也被拒绝。
+已接受的完成回执优先保留。远端正在执行的原生计算可能仍会结束，取消不承诺立即中断 CPU 计算。
+
+`cancelled` 是可导出、可作为修订父节点的终态，尝试预算不退还，不产生因子评分或失败缓存。
+每日计算用量按已接受结果回执计入，已运行但被丢弃的计算时间尚未计量。
+同步后端返回 `CANCELLATION_UNSUPPORTED`，需确认 worker 停止后再显式 abandon。
