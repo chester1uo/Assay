@@ -1,5 +1,10 @@
 # Reference agent and offline demo
 
+The reference client provides `--preset deepseek-flash` for the official
+DeepSeek Chat Completions API. Set `DEEPSEEK_API_KEY` in the environment; the
+preset requests non-thinking mode. Explicit `--base-url`, `--model`,
+`--api-key-env`, and `--extra-body` options can override these defaults.
+
 Assay's server exposes tools and persists research records. The optional reference
 client in `assay.agent` lets a Chat Completions-compatible model choose tools through
 real stdio or authenticated HTTP MCP. It is replaceable: other MCP clients can use

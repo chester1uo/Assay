@@ -266,8 +266,8 @@ def assay_universes() -> dict[str, Any]:
         "Run a FULL portfolio backtest for a factor — the deepest performance test: "
         "it turns the cross-sectional signal into an achievable NET return by "
         "building a portfolio, rebalancing on a schedule, applying constraints "
-        "and configured trading costs (commission / stamp duty; market impact requires "
-        "order participation inputs, which this tool does not supply; A-share ±price-limit "
+        "and configured trading costs (commission / stamp duty; with capital, market impact "
+        "and capacity use trailing daily turnover; A-share ±price-limit "
         "+ T+1 are auto-enforced for CSI* universes), then marking to market daily. "
         "Returns Sharpe / Sortino / Calmar, annual & total return, excess return vs "
         "benchmark, max drawdown, annual turnover, cost_drag, avg holding days, beta/"
@@ -287,6 +287,12 @@ def assay_portfolio_backtest(
     max_single_weight: float = 0.05,
     initial_capital: float | None = None,
     commission_min: float | None = None,
+    liquidity_volume_multiplier: float | None = None,
+    adv_window: int | None = None,
+    max_adv_fraction: float | None = None,
+    partial_fill_handling: str | None = None,
+    slippage_model: str | None = None,
+    slippage_k: float | None = None,
 ) -> dict[str, Any]:
     """Portfolio backtest -> compact performance summary (no heavy NAV/trade series).
 
@@ -294,6 +300,12 @@ def assay_portfolio_backtest(
     cost & limit preset chosen from the universe's market) and runs the §1.1 pipeline.
     Returns the scalar performance metrics + monthly returns + a_share_metrics; the
     full NAV/benchmark/trade series are omitted to keep the response compact.
+
+    With initial_capital, trailing raw close times volume supplies participation.
+    liquidity_volume_multiplier converts the source volume unit to shares: use
+    100 for Tushare A-share lots and 1 for shares. It is required for A-shares.
+    Missing history blocks affected orders. The report records whether inputs
+    were available and whether the configured impact model actually applied.
     """
     from assay.portfolio import PortfolioBacktestConfig
 
@@ -302,6 +314,19 @@ def assay_portfolio_backtest(
     # service market codes are US/CN/HK; the portfolio preset uses US/A/HK.
     market = {"CN": "A"}.get(svc._market_for(universe), svc._market_for(universe))
     cost_options = {} if commission_min is None else {"commission_min": commission_min}
+    for key, value in dict(adv_window=adv_window, max_adv_fraction=max_adv_fraction,
+                           partial_fill_handling=partial_fill_handling, slippage_model=slippage_model,
+                           slippage_k=slippage_k).items():
+        if value is not None:
+            cost_options[key] = value
+    if initial_capital is not None:
+        if market == 'A' and liquidity_volume_multiplier is None:
+            raise ValueError('A-share liquidity requires liquidity_volume_multiplier: 100 for Tushare lots or 1 for shares')
+        cost_options.update(liquidity_model='trailing_notional_v1',
+            liquidity_volume_multiplier=liquidity_volume_multiplier if liquidity_volume_multiplier is not None
+                                        else 1.0)
+    elif liquidity_volume_multiplier is not None:
+        raise ValueError('liquidity_volume_multiplier requires initial_capital')
     cfg = PortfolioBacktestConfig.preset(
         market,
         universe=universe,
@@ -329,9 +354,14 @@ def assay_portfolio_backtest(
     out["config"] = {"universe": universe, "market": market, "rebalance": rebalance,
                      "weight_method": weight_method, "long_short": cfg.long_short,
                      "initial_capital": cfg.initial_capital, "commission_min": cfg.commission_min,
-                     "commission_rate": cfg.commission_rate, "slippage_model": cfg.slippage_model}
+                     "commission_rate": cfg.commission_rate, "slippage_model": cfg.slippage_model,
+                     "slippage_k":cfg.slippage_k, "adv_window":cfg.adv_window,
+                     "max_adv_fraction":cfg.max_adv_fraction, "partial_fill_handling":cfg.partial_fill_handling,
+                     "liquidity_volume_multiplier":cfg.liquidity_volume_multiplier}
+    liquidity = (d.get('attribution') or {}).get('liquidity') or {}
     out["cost_assumptions"] = {"minimum_commission_capital_supplied": cfg.initial_capital is not None,
-                               "impact_participation_supplied": False}
+                               "impact_participation_supplied": bool(liquidity.get('valid_entries')),
+                               "liquidity_data": liquidity or None}
     out["cost_drag_definition"] = ('gross_return minus total_return; positive values represent return lost to costs. '
                                    'Gross NAV follows the realized net portfolio weights.')
     return out
@@ -539,24 +569,32 @@ register_research_tools(mcp, get_service)
 # ---------------------------------------------------------------------------
 def _fdb():
     from assay.factordb import service
-
-    return service.get()
+    return service.for_current()
 
 
 def _owner(ctx: Context | None) -> str:
     """The signed-in caller over HTTP; ``ASSAY_AGENT_NAME`` (or "mcp") over stdio."""
+    from assay.research_tenant import current_tenant
+    from assay.factordb.service import owner_for_tenant
+    tenant = current_tenant.get()
+    if tenant is not None:
+        return owner_for_tenant(tenant)
     try:
-        user = getattr(ctx.request_context.request.state, "user", None)
-        if user is not None:
-            return user.username
+        request = ctx.request_context.request
+        if request is not None:
+            user = getattr(request.state, "user", None)
+            return user.username if user is not None else "anonymous"
     except Exception:  # noqa: BLE001 — stdio has no request
         pass
     return os.environ.get("ASSAY_AGENT_NAME", "mcp")
 
 
 def _safe(fn):
+    from assay.factordb.agent import SubmissionConflict
     try:
         return fn()
+    except SubmissionConflict as exc:
+        return {"error": {"code": "REQUEST_CONFLICT", "message": str(exc)}}
     except RuntimeError as exc:
         return {"error": {"code": "UNAVAILABLE", "message": str(exc)}}
     except ValueError as exc:
@@ -570,21 +608,26 @@ def _safe(fn):
         "(TOP500/TOP1000/TOP3000/SP500/NASDAQ100), start, optional end/horizons/execution. "
         "Returns at once: job_id for the new work, already_scored factors with their metrics, "
         "duplicates (same canonical factor), rejected expressions with a hint. Time-series parts "
-        "are computed once and shared with every agent, so resubmitting costs nothing. Then poll "
+        "are reused within the selected registry when available. For ADES, set a stable request_id "
+        "and reuse it with identical inputs after a lost response. Then poll "
         "fdb_job. Tag your factors (tags) and name the factors they derive from (parents)."
     ),
 )
 def fdb_submit(exprs: list[str], universe: str, start: str, end: str | None = None,
                horizons: list[int] | None = None, execution: str = "next_open",
                tags: list[str] | None = None, parents: list[str] | None = None, label: str = "",
+               request_id: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
     def run():
+        if not exprs or len(exprs) > 5000:
+            raise ValueError('exprs must contain between 1 and 5000 expressions')
         svc, owner = _fdb(), _owner(ctx)
-        if svc.over_budget(owner):
+        saved = svc.reg.generic_submission(owner, request_id) if request_id is not None else None
+        if svc.over_budget(owner) and saved is None:
             return {"error": {"code": "BUDGET", "message": "daily compute budget used up"}}
-        return svc.submit(owner, exprs[:5000], universe=universe, start=start, end=end,
+        return svc.submit(owner, exprs, universe=universe, start=start, end=end,
                           horizons=horizons or (1, 5, 10, 20), execution=execution,
-                          tags=tags or (), parents=parents or (), label=label)
+                          tags=tags or (), parents=parents or (), label=label, request_id=request_id)
     return _safe(run)
 
 

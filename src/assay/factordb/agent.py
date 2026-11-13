@@ -15,6 +15,7 @@ in this process computes the slices on FactorDB.
 from __future__ import annotations
 
 import logging
+import json
 import queue
 import threading
 import time
@@ -38,6 +39,10 @@ __all__ = ["FactorService"]
 CHUNK = 64                 # expressions per scheduling slice
 FINGERPRINT_DAYS = 60      # sampled days for novelty
 DEFAULT_HORIZONS = (1, 5, 10, 20)
+
+
+class SubmissionConflict(ValueError):
+    """A client reused an idempotency key with different submission inputs."""
 
 
 def _f(x, nd=5):
@@ -83,25 +88,45 @@ def _ranks(x: np.ndarray) -> np.ndarray:
 
 
 class FactorService:
-    def __init__(self, db: FactorDB, registry: Registry, *, daily_budget_s: float = 0.0, ades=None, stores=None):
+    def __init__(self, db: FactorDB, registry: Registry, *, daily_budget_s: float = 0.0, ades=None, stores=None,
+                 tenant_owner=None, owner_router=None, owner_dispatch_recovery=None, start_background=True):
         from assay.data.markets import MarketStores
 
         self.db, self.reg, self.ades = db, registry, ades
         self.stores = stores or MarketStores({"US": db.qfv})
         self.daily_budget_s = daily_budget_s
+        self.tenant_owner, self.owner_router = tenant_owner, owner_router
+        self.owner_dispatch_recovery = owner_dispatch_recovery
         self._queues: "OrderedDict[str, deque]" = OrderedDict()   # owner -> deque of (job_id, exprs)
         self._wake = threading.Event()
+        self._stop = threading.Event()
         self._lock = threading.Lock()
         self._fwd: dict = {}                                      # spec -> (dates, labels, fwd, close)
         self._prints: dict = {}                                   # spec -> {factor_id: ranks on sample days}
         self._spec_data = None                                    # ADES mode: one loaded spec for reads
-        self._thread = threading.Thread(target=self._reap if ades is not None else self._run,
-                                        name="factordb-jobs", daemon=True)
-        self._thread.start()
+        self._thread = None
+        if start_background:
+            self._thread = threading.Thread(target=self._reap if ades is not None else self._run,
+                                            name="factordb-jobs", daemon=True)
+            self._thread.start()
+
+    def close(self):
+        """Stop background maintenance when the controller is replaced."""
+        self._stop.set()
+        self._wake.set()
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=2)
 
     # ── submit ───────────────────────────────────────────────────────────────
     def submit(self, owner: str | None, exprs: list[str], *, universe: str, start: str, end: str | None = None,
-               horizons=DEFAULT_HORIZONS, execution: str = "next_open", tags=(), parents=(), label: str = "") -> dict:
+               horizons=DEFAULT_HORIZONS, execution: str = "next_open", tags=(), parents=(), label: str = "",
+               request_id: str | None = None) -> dict:
+        if self.tenant_owner is not None:
+            owner = self.tenant_owner
+        if request_id is not None:
+            return self._submit_idempotent(owner, exprs, universe=universe, start=start, end=end,
+                                           horizons=horizons, execution=execution, tags=tags,
+                                           parents=parents, label=label, request_id=request_id)
         universe = universe.upper()
         store = self.stores.for_universe(universe)
         end = self.stores.end(universe, end)
@@ -140,15 +165,16 @@ class FactorService:
                 accepted.append((fid, e, new))
         job_id = None
         if accepted:
-            job_id = "job_" + uuid.uuid4().hex[:12]
+            job_id = "job_" + uuid.uuid4().hex
             self.reg.create_job(job_id, owner, spec, [e for _, e, _ in accepted], label, version=version)
             self.reg.update_job(job_id, factor_ids=[f for f, _, _ in accepted])
             if self.ades is not None:
-                # Legacy workers only implement the unchanged next_open labels.
-                # Fenced task IDs keep the other modes on upgraded workers.
+                # Private jobs and non-default labels require upgraded workers
+                # with lease fencing. Shared next_open keeps legacy compatibility.
                 self.ades.enqueue(job_id, owner or "anonymous", spec, version,
                                   [[fid, e] for fid, e, _ in accepted], CHUNK,
-                                  idempotent=execution in {'next_close','close'})
+                                  idempotent=self.tenant_owner is not None or execution in {'next_close','close'},
+                                  stable=True)
             else:
                 with self._lock:
                     q = self._queues.setdefault(owner or "anonymous", deque())
@@ -159,6 +185,89 @@ class FactorService:
                 "n_already_scored": len(known), "duplicates": duplicates[:50], "rejected": rejected[:50],
                 "next": "poll fdb_job with job_id" if job_id else "nothing to compute",
                 "universe": universe, "data_version": version}
+
+    def _submit_idempotent(self, owner, exprs, *, universe, start, end, horizons, execution, tags, parents,
+                           label, request_id):
+        """Atomically save a client request and its job before durable dispatch."""
+        if self.ades is None:
+            raise ValueError('request_id for FactorDB submissions requires ADES')
+        if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 128:
+            raise ValueError('request_id must be a nonempty string of at most 128 characters')
+        owner = owner or 'anonymous'
+        universe = str(universe).upper()
+        horizons = sorted({int(h) for h in horizons})
+        inputs = json.dumps(dict(exprs=list(exprs), universe=universe, start=str(start), end=end,
+                                 horizons=horizons, execution=execution, tags=list(tags),
+                                 parents=list(parents), label=label), sort_keys=True, allow_nan=False)
+
+        def replay(saved):
+            if saved['inputs'] != inputs:
+                raise SubmissionConflict('request_id already belongs to different submission inputs')
+            self.recover_dispatches()
+            return saved['receipt']
+
+        prior = self.reg.generic_submission(owner, request_id)
+        if prior is not None:
+            return replay(prior)
+        store = self.stores.for_universe(universe)
+        resolved_end = self.stores.end(universe, end)
+        from datetime import date
+        if date.fromisoformat(start) > date.fromisoformat(resolved_end):
+            raise ValueError('start must not be later than end')
+        if not store.get_universe(universe, resolved_end, resolved_end):
+            raise ValueError(f'no {universe} members available on {resolved_end}')
+        spec = spec_key(universe, start, resolved_end, horizons, execution)
+        version = store.snapshot_id
+        with self.reg._lock, self.reg._conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row = c.execute('SELECT inputs,receipt FROM generic_submissions WHERE owner=? AND request_id=?',
+                            (owner, request_id)).fetchone()
+            if row is not None:
+                saved = {'inputs': row['inputs'], 'receipt': json.loads(row['receipt'])}
+            else:
+                c.execute('INSERT OR IGNORE INTO specs VALUES (?,?,?,?,?,?)',
+                          (spec, universe, str(start), str(resolved_end), json.dumps(horizons), execution))
+                accepted, rejected, known, duplicates, seen = [], [], [], [], {}
+                for expr in exprs:
+                    try:
+                        node = parse(expr)
+                        bad = sorted(op for op in _ops(node) if not operators.is_registered(op))
+                        if bad:
+                            raise ValueError(f'unknown operators {bad}; see fdb_operators')
+                        canon = cn.canonicalize(node)
+                        fid = cn.factor_id(canon)
+                    except Exception as exc:
+                        rejected.append({'expr':expr, 'code':'PARSE_ERROR', 'message':str(exc)[:300],
+                                         'hint':'check operator names and arity with fdb_operators'})
+                        continue
+                    if fid in seen:
+                        duplicates.append({'expr':expr, 'factor_id':fid, 'same_as':seen[fid]})
+                        continue
+                    seen[fid] = expr
+                    updated = c.execute('UPDATE factors SET submits=submits+1 WHERE id=?', (fid,)).rowcount
+                    if not updated:
+                        c.execute('INSERT INTO factors (id,canonical,expr,owner,created,tags,parents) VALUES (?,?,?,?,?,?,?)',
+                                  (fid,str(canon),expr,owner,time.time(),json.dumps(list(tags)),json.dumps(list(parents))))
+                    score_row = c.execute('SELECT * FROM scores WHERE factor_id=? AND spec=? AND version=?',
+                                          (fid,spec,version)).fetchone()
+                    if score_row is not None:
+                        known.append({'factor_id':fid,'expr':expr,'new':False,**_brief(self.reg._score_row(score_row))})
+                    else:
+                        accepted.append((fid,expr))
+                job_id = 'job_' + uuid.uuid4().hex if accepted else None
+                if job_id:
+                    c.execute("INSERT INTO jobs (id,owner,spec,status,total,created,exprs,label,version,factor_ids) "
+                              "VALUES (?,?,?,'queued',?,?,?,?,?,?)",
+                              (job_id,owner,spec,len(accepted),time.time(),json.dumps([e for _,e in accepted]),
+                               str(label)[:120],version,json.dumps([f for f,_ in accepted])))
+                receipt = {'job_id':job_id,'spec':spec,'queued':len(accepted),'already_scored':known[:50],
+                           'n_already_scored':len(known),'duplicates':duplicates[:50],'rejected':rejected[:50],
+                           'next':'poll fdb_job with job_id' if job_id else 'nothing to compute',
+                           'universe':universe,'data_version':version,'request_id':request_id}
+                c.execute('INSERT INTO generic_submissions VALUES (?,?,?,?)',
+                          (owner,request_id,inputs,json.dumps(receipt,allow_nan=False)))
+                saved = {'inputs':inputs,'receipt':receipt}
+        return replay(saved)
 
     # ── worker ───────────────────────────────────────────────────────────────
     def _next_slice(self):
@@ -173,7 +282,7 @@ class FactorService:
         return None
 
     def _run(self) -> None:
-        while True:
+        while not self._stop.is_set():
             nxt = self._next_slice()
             if nxt is None:
                 self._wake.wait(5)
@@ -233,6 +342,13 @@ class FactorService:
         """Record a worker's scores for a completed task (see :mod:`assay.ades`)."""
         from assay.ades.slice import decode_print
 
+        if self.owner_router is not None:
+            target = self.owner_router(task['owner'])
+            if target is not self:
+                return target.apply_results(task, results, seconds)
+        if self.tenant_owner is not None and task['owner'] != self.tenant_owner:
+            raise ValueError('task belongs to another account')
+
         applied = self.reg.apply_task_results(task, results, seconds)
         if applied:
             for r in results:
@@ -241,32 +357,86 @@ class FactorService:
         return {"done":sum(r.get("metrics") is not None for r in results),
                 "failed":sum(r.get("metrics") is None for r in results), "applied":applied}
 
-    def recover_results(self, job_id=None):
+    def recover_results(self, job_id=None, *, best_effort=False):
         if self.ades is not None:
-            for task, results, seconds in self.ades.result_receipts(job_id):
-                self.apply_results(task, results, seconds)
+            for task, results, seconds in self.ades.result_receipts(job_id, owner=self.tenant_owner):
+                if self.tenant_owner is not None and task['owner'] != self.tenant_owner:
+                    continue
+                try:
+                    self.apply_results(task, results, seconds)
+                except Exception:
+                    if not best_effort:
+                        raise
+                    log.exception('Could not recover ADES result for task %s', task['id'])
             for receipt in self.ades.cancellation_receipts(job_id):
-                self.reg.apply_cancellation(receipt)
+                try:
+                    if self.tenant_owner is not None:
+                        if self.reg.job(receipt['job_id']) is not None:
+                            self.reg.apply_cancellation(receipt)
+                    elif self.owner_router is not None:
+                        owner = self.ades.job_owner(receipt['job_id'])
+                        target = self.owner_router(owner) if owner else self
+                        target.reg.apply_cancellation(receipt)
+                    else:
+                        self.reg.apply_cancellation(receipt)
+                except Exception:
+                    if not best_effort:
+                        raise
+                    log.exception('Could not recover ADES cancellation for job %s', receipt['job_id'])
 
     def lease(self, worker: str, panel: str | list[str], info: dict | None = None) -> dict | None:
         task = self.ades.lease(worker, panel, info, supports_research_leases=(info is None or info.get("lease_token_supported") is True))
         if task is not None:
-            task["spec"] = self.reg.spec(task["spec"])
-            job = self.reg.job(task["job_id"])
-            if job is not None and job["status"] == "queued":
-                self.reg.update_job(task["job_id"], status="running", started=time.time())
+            try:
+                target = self.owner_router(task['owner']) if self.owner_router is not None else self
+                spec = target.reg.spec(task["spec"])
+                if spec is None:
+                    raise ValueError('task registry or specification is unavailable')
+                task["spec"] = spec
+                job = target.reg.job(task["job_id"])
+                if job is not None and job["status"] == "queued":
+                    target.reg.update_job(task["job_id"], status="running", started=time.time())
+            except Exception:
+                self.ades.release(task['task_id'], worker, task.get('lease_token'))
+                raise
         return task
 
-    def _reap(self) -> None:
-        while True:
-            time.sleep(10)
+    def recover_dispatches(self):
+        """Idempotently dispatch a generic job interrupted before queue commit."""
+        if self.ades is None:
+            return
+        for job in self.reg.pending_dispatches():
+            if self.ades.job_owner(job['id']) is not None:
+                continue
             try:
-                self.recover_results()
-                self.ades.reap()
-                self.ades.retire_versions(list(self.stores.versions().values()))
-                self.recover_results()
-            except Exception:  # noqa: BLE001
-                log.exception("ades reaper")
+                spec = self.reg.spec(job['spec'])
+                if spec is None or not job['version']:
+                    raise ValueError('job specification or data version missing')
+                exprs = job['exprs']
+                ids = job['factor_ids']
+                if len(ids) != len(exprs):
+                    ids = [cn.factor_id(cn.canonicalize(parse(expr))) for expr in exprs]
+                    self.reg.update_job(job['id'], factor_ids=ids)
+                if len(ids) != job['total']:
+                    raise ValueError('job factor count is inconsistent')
+                self.ades.enqueue(job['id'], job['owner'] or 'anonymous', job['spec'], job['version'],
+                                  list(map(list, zip(ids, exprs))), CHUNK,
+                                  idempotent=(self.tenant_owner is not None or self.reg.is_idempotent_job(job['id']) or
+                                              spec['execution'] in {'next_close', 'close'}),
+                                  stable=True)
+            except Exception:  # one bad outbox entry must not block other jobs
+                log.exception('Could not recover ADES dispatch for job %s', job['id'])
+
+    def _reap(self) -> None:
+        while not self._stop.wait(10):
+            for operation in (lambda: self.recover_results(best_effort=True), self.recover_dispatches,
+                              self.owner_dispatch_recovery or (lambda: None), self.ades.reap,
+                              lambda: self.ades.retire_versions(list(self.stores.versions().values())),
+                              lambda: self.recover_results(best_effort=True)):
+                try:
+                    operation()
+                except Exception:  # noqa: BLE001
+                    log.exception("ades reaper")
 
     def _forward(self, spec, universe, start, end, horizons, execution):
         key = (spec, self.stores.for_universe(universe).snapshot_id)
@@ -320,10 +490,26 @@ class FactorService:
         universe = universe.upper()
         end = self.stores.end(universe, end)
         spec = spec_key(universe, start, end, sorted({int(h) for h in horizons}), execution)
-        prints = dict(self._prints.get((spec, self.stores.for_universe(universe).snapshot_id), {}))
+        version = self.stores.for_universe(universe).snapshot_id
+        if self.ades is not None:
+            # Worker receipts retain fingerprints durably; rebuild this account's
+            # in-memory index after process restart or facade eviction.
+            from assay.ades.slice import decode_print
+            for task, results, _ in self.ades.result_receipts(owner=self.tenant_owner, spec=spec, version=version):
+                if self.owner_router is not None:
+                    try:
+                        if self.owner_router(task['owner']) is not self:
+                            continue
+                    except RuntimeError:
+                        continue
+                for result in results:
+                    if (result.get('metrics') is not None and result.get('print') and
+                            result['factor_id'] not in self._prints.get((spec, version), {})):
+                        self._remember((spec, version), result['factor_id'], decode_print(result['print']))
+        prints = dict(self._prints.get((spec, version), {}))
         if not prints:
             return {"spec": spec, "library": 0, "max_abs_corr": None, "nearest": [],
-                    "note": "no scored factors on this spec yet"}
+                    "note": "no novelty fingerprints available for this spec and data version"}
         expr = expr_or_id
         f = self.reg.factor(expr_or_id) if not any(c in expr_or_id for c in "(,") else None
         if f:
@@ -427,6 +613,8 @@ class FactorService:
 
     def budget(self, owner: str | None) -> dict:
         """Compute used today; ``limit_seconds`` / ``left_seconds`` are ``None`` when uncapped."""
+        if self.tenant_owner is not None:
+            owner = self.tenant_owner
         u = self.reg.usage_today(owner)
         if not self.daily_budget_s or self.daily_budget_s <= 0:
             return {**u, "limit_seconds": None, "left_seconds": None}

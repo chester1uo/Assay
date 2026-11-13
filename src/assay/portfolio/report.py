@@ -86,9 +86,10 @@ class Trade:
     cost: float          # total transaction cost for this trade (fraction of NAV)
     blocked_reason: str | None = None
     deferred_reason: str | None = None
+    participation: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "date": self.date,
             "symbol": self.symbol,
             "side": self.side,
@@ -100,6 +101,9 @@ class Trade:
             "blocked_reason": self.blocked_reason,
             "deferred_reason": self.deferred_reason,
         }
+        if self.participation is not None:
+            result['participation'] = _clean_float(self.participation)
+        return result
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Trade":
@@ -114,6 +118,7 @@ class Trade:
             cost=d.get("cost"),
             blocked_reason=d.get("blocked_reason"),
             deferred_reason=d.get("deferred_reason"),
+            participation=d.get("participation"),
         )
 
 

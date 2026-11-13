@@ -146,8 +146,9 @@ CN data (Tushare) adds a few wrinkles the US path does not have:
 - **Price limits (涨跌停)** are stored in `trade_status` (`up_limit` / `down_limit` and the
   `*_locked` flags). Use them with `adj="none"` prices for execution constraints — a name
   locked limit-up cannot be bought at the close.
-- **Volume units** — Tushare reports volume in 手 (100-share lots). It is normalized during
-  ingest; the ASSAY `volume` column is in shares, consistent with the US path.
+- **Volume units** — the current Tushare CN ingester stores `vol` as 100-share lots;
+  it does not convert to shares. Other data sources may use shares. Confirm the
+  source and set the appropriate liquidity volume multiplier when backtesting.
 - **Incremental updates** fetch **by trade-date** (all symbols per API call) and append to
   the per-symbol raw files, so a daily update is a handful of calls, not one per symbol.
 

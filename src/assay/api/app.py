@@ -235,6 +235,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
         expose_headers=["Mcp-Session-Id", "MCP-Protocol-Version", "WWW-Authenticate"],
     )
+    app.add_middleware(_ResearchTenantScope)
 
     register_exception_handlers(app)
 
@@ -341,6 +342,38 @@ def _mcp_http(deployment):
             yield
 
     return asgi, lifespan
+
+
+class _ResearchTenantScope:
+    """Bind authenticated account identity to research calls for the request lifetime."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get('path', '')
+        if scope['type'] != 'http' or not (path.startswith('/v1/') or
+                                           path.startswith('/mcp') or path == '/ready'):
+            await self.app(scope, receive, send)
+            return
+        from assay.api.auth import _presented, auth_enabled, resolve_user
+        from assay.research_tenant import UNAUTHENTICATED, current_tenant, tenant_for_user
+
+        tenant = None
+        if auth_enabled():
+            request = Request(scope, receive)
+            try:
+                user = resolve_user(request, _presented(request.headers.get('x-api-key'),
+                                                        request.headers.get('authorization')))
+            except StarletteHTTPException as exc:
+                await JSONResponse({'error': str(exc.detail)}, status_code=exc.status_code)(scope, receive, send)
+                return
+            tenant = tenant_for_user(user)
+        token = current_tenant.set(tenant)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            current_tenant.reset(token)
 
 
 class _McpAuth:

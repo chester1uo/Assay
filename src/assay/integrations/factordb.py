@@ -14,6 +14,14 @@ def _json(value):
     return json.dumps(value, sort_keys=True, allow_nan=False)
 
 
+def _job_id(request_id, owner):
+    # The queue is shared across accounts. Namespace deterministic retry IDs so
+    # importing the same experiment in two accounts cannot collide or cancel
+    # the other account's work. Preserve existing service-workspace job IDs.
+    basis = f'{owner}\x1f{request_id}' if str(owner).startswith('assay-private:') else request_id
+    return 'rjob_' + hashlib.sha256(basis.encode()).hexdigest()[:24]
+
+
 class FactorDBResearchBackend:
     def __init__(self, factory=None, *, owner='research'):
         if factory is None:
@@ -86,7 +94,7 @@ class FactorDBResearchBackend:
                     raise ResearchError('INVALID_EXPRESSION', str(exc), action='revise_expression') from exc
                 fid=cn.factor_id(cn.canonicalize(node))
                 spec=spec_key(dataset['universe'],*dataset['period'],dataset['horizons'],dataset['execution'])
-                jid='rjob_'+hashlib.sha256(request_id.encode()).hexdigest()[:24]
+                jid=_job_id(request_id, self.owner)
                 c.execute('INSERT OR IGNORE INTO specs VALUES (?,?,?,?,?,?)',
                     (spec,dataset['universe'],*dataset['period'],_json(dataset['horizons']),dataset['execution']))
                 c.execute('INSERT OR IGNORE INTO factors (id,canonical,expr,owner,created) VALUES (?,?,?,?,?)',
@@ -108,18 +116,24 @@ class FactorDBResearchBackend:
 
     def cancel(self, receipt, reason):
         """Cancel by stable attempt identity, even if its submission response was lost."""
+        expected_job = _job_id(receipt['request_id'], self.owner)
+        if str(self.owner).startswith('assay-private:') and receipt.get('job_id') not in (None, expected_job):
+            raise ResearchError('EXECUTION_IDENTITY_MISMATCH', 'Cancellation receipt does not belong to this account.')
         svc = self._service()
         with svc.reg._conn() as c:
             saved = c.execute('SELECT receipt FROM research_submissions WHERE request_id=?',
                               (receipt['request_id'],)).fetchone()
         if saved:
             receipt = {**receipt, **json.loads(saved['receipt'])}
-        jid = receipt.get('job_id') or 'rjob_' + hashlib.sha256(receipt['request_id'].encode()).hexdigest()[:24]
+        jid = receipt.get('job_id') or _job_id(receipt['request_id'], self.owner)
         job = svc.reg.job(jid)
         if job and job['status'] in {'done', 'failed'}:
             # Cached jobs have no queue task; their already accepted result wins.
             return {**self.poll(receipt), 'execution': receipt}
-        acknowledgement = svc.ades.cancel_job(jid, reason)
+        if str(self.owner).startswith('assay-private:'):
+            acknowledgement = svc.ades.cancel_job(jid, reason, owner=self.owner)
+        else:
+            acknowledgement = svc.ades.cancel_job(jid, reason)
         svc.recover_results(jid)
         execution = {**receipt, 'job_id': jid, 'cancellation_receipt': acknowledgement}
         if acknowledgement['status'] == 'finished':
@@ -127,6 +141,8 @@ class FactorDBResearchBackend:
         return {'phase': 'cancelled', 'report': None, 'execution': execution}
 
     def poll(self, receipt):
+        if str(self.owner).startswith('assay-private:') and receipt.get('job_id') != _job_id(receipt['request_id'], self.owner):
+            raise ResearchError('EXECUTION_IDENTITY_MISMATCH', 'Execution receipt does not belong to this account.')
         svc=self._service()
         svc.recover_results(receipt['job_id'])
         job=svc.reg.job(receipt['job_id'])

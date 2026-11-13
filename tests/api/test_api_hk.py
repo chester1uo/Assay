@@ -269,7 +269,10 @@ def test_backtest_accepts_initial_capital_and_minimum_commission(client):
     body = response.json()
     assert body['config']['initial_capital'] == 10000.
     assert body['config']['commission_min'] == 5.
-    assert any('participation' in warning for warning in body['warnings'])
+    liquidity = body['attribution']['liquidity']
+    assert liquidity['model'] == 'trailing_notional_v1'
+    assert liquidity['volume_multiplier'] == 1
+    assert liquidity['impact_applied'] is False  # slippage_model is zero
     assert not any('minimum commission' in warning for warning in body['warnings'])
 
 

@@ -171,6 +171,8 @@ class PortfolioBacktestConfig:
     slippage_k: float = 0.20         # 0.05–0.50; impact coefficient (see market table)
     adv_window: int = 20             # 5–60 trading days for ADV
     max_adv_fraction: float = 0.10   # 0.01–0.50; max order as fraction of ADV
+    liquidity_model: str | None = None  # trailing_notional_v1; None preserves historical behavior
+    liquidity_volume_multiplier: float | None = None  # shares per volume unit
     partial_fill_handling: str = "defer"  # defer|cancel|force
     include_bid_ask: bool = False    # add half-spread to cost (needs bid-ask data; inert)
 
@@ -308,6 +310,17 @@ class PortfolioBacktestConfig:
         _rng("slippage_k", self.slippage_k, 0.05, 0.50)
         _rng("adv_window", self.adv_window, 5, 60)
         _rng("max_adv_fraction", self.max_adv_fraction, 0.01, 0.50)
+        if self.liquidity_model is not None:
+            _enum('liquidity_model', self.liquidity_model, {'trailing_notional_v1'})
+            if self.initial_capital is None:
+                raise ValueError('liquidity_model requires initial_capital in market currency')
+            if (isinstance(self.liquidity_volume_multiplier, bool) or
+                    not isinstance(self.liquidity_volume_multiplier, (int, float)) or
+                    not math.isfinite(self.liquidity_volume_multiplier) or self.liquidity_volume_multiplier <= 0):
+                raise ValueError('liquidity_model requires a positive liquidity_volume_multiplier')
+            self.liquidity_volume_multiplier = float(self.liquidity_volume_multiplier)
+        elif self.liquidity_volume_multiplier is not None:
+            raise ValueError('liquidity_volume_multiplier requires liquidity_model')
         _enum("partial_fill_handling", self.partial_fill_handling, _PARTIAL_FILL)
 
         # 2.8 benchmark
@@ -429,6 +442,9 @@ class PortfolioBacktestConfig:
             preimage['adjustment'] = self.adjustment
         if self.initial_capital is not None:
             preimage['initial_capital'] = self.initial_capital
+        if self.liquidity_model is not None:
+            preimage['liquidity_model'] = self.liquidity_model
+            preimage['liquidity_volume_multiplier'] = self.liquidity_volume_multiplier
         payload = json.dumps(preimage, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
@@ -440,6 +456,9 @@ class PortfolioBacktestConfig:
             d.pop('adjustment')  # preserve the original default payload and hash
         if self.initial_capital is None:
             d.pop('initial_capital')
+        if self.liquidity_model is None:
+            d.pop('liquidity_model')
+            d.pop('liquidity_volume_multiplier')
         # asdict already deep-copies lists/dicts; ensure JSON-roundtrippable types.
         return {k: (list(v) if isinstance(v, tuple) else v) for k, v in d.items()}
 

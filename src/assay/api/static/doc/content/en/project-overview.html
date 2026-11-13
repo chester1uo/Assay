@@ -1,0 +1,64 @@
+<h1 class="doc-title">Assay project overview</h1>
+<p>Assay is an agent-facing environment for factor research, combining market-data
+readers, expression evaluation, portfolio backtests, durable research sessions,
+factor lifecycle records, and inspection tools. External agents choose the model,
+hypotheses, and research policy; Assay executes and records their experiments.
+QFinVerse is an optional market-data source, and other backends can be integrated.</p>
+<h2 id="research-workflow">Research workflow</h2>
+<p>Register a dataset and start or resume a research session. The agent reads prior
+context, lints and evaluates a candidate, inspects the resulting metrics or
+failure, and saves its decision or handoff note. Sessions retain experiment IDs,
+budgets, parent links, and exportable records. Research audit examines those
+records; it does not prove investment performance or automatically rerun them.</p>
+<p>The default research evaluator runs in process. The optional <code>factordb_ades</code>
+backend links an experiment to a FactorDB job executed by ADES workers. A direct
+FactorDB job is distinct from a research session. A temporary panel session is
+also distinct from a durable research session and must be recreated after restart.</p>
+<h2 id="interfaces-and-capabilities">Interfaces and capabilities</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>Area</th>
+<th>Entry point</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent tools</td>
+<td><a href="/doc/guide/mcp-server">MCP</a>, including dataset, experiment, FactorDB and audit tools</td>
+</tr>
+<tr>
+<td>Programmatic access</td>
+<td><a href="/doc/guide/rest-api">REST</a>, <a href="/doc/guide/python-sdk">Python SDK</a>, CLI</td>
+</tr>
+<tr>
+<td>Human research</td>
+<td><a href="/doc/guide/research-workbench">Research workbench</a> and WebUI</td>
+</tr>
+<tr>
+<td>Execution</td>
+<td><a href="/doc/guide/portfolio-backtest">Portfolio backtesting</a>, factor evaluation, data readers</td>
+</tr>
+<tr>
+<td>Persistence</td>
+<td><a href="/doc/guide/agent-research">Agent research</a>, <a href="/doc/design/factordb">FactorDB</a>, session manifests</td>
+</tr>
+</tbody>
+</table></div>
+<p>The public service is at https://assay.qfinverse.com/, with MCP at <code>/mcp/</code> and
+REST under <code>/v1/</code>. Check <code>/.well-known/assay.json</code> for the deployed version,
+tool discovery, authentication, and workspace scope. Personal keys and model
+provider keys serve different purposes; Assay does not require a model key on
+the server. The <a href="/doc/guide/deployment">deployment guide</a> explains reviewer access.</p>
+<h2 id="version-and-evidence-boundaries">Version and evidence boundaries</h2>
+<p>The repository working tree and a deployed service can be different versions.
+At the 2026-11-13 inspection, the public build was <code>03bab24</code> and used a shared
+research workspace. Later local changes include private account workspaces,
+trailing-liquidity inputs, and idempotent ADES submissions. The changes require
+an explicit release before they are available on that service. Account-level
+hard CPU, memory, and storage quotas are not implemented.</p>
+<p>Dataset configuration hashes do not freeze a physical market-data snapshot.
+The published benchmarks and agent studies each record their version and scope:
+fixed-order replay is not a complete autonomous workflow, and synthetic agent
+traces do not establish trading profitability. See the <a href="/doc/project-overview">Chinese project status
+overview</a> for the detailed local evidence inventory.</p>

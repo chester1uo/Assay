@@ -187,8 +187,8 @@
 现金分红进入 <code>adj_events.dividend_cash</code>（优先税后值）。</li>
 <li><strong>涨跌停</strong> 存于 <code>trade_status</code>（<code>up_limit</code> / <code>down_limit</code> 及 <code>*_locked</code> 标志）。对执行约束用
 <code>adj=&quot;none&quot;</code> 的价格——一只封涨停的股票无法按收盘买入。</li>
-<li><strong>成交量单位</strong> —— Tushare 以 手（100 股）报量。导入时已归一化；ASSAY 的 <code>volume</code> 列以「股」为
-单位，与美股路径一致。</li>
+<li><strong>成交量单位</strong> —— 当前 Tushare A 股导入保留原始的手（100 股）单位，没有转换为股；其他来源可能
+使用股。回测流动性时需确认数据来源并设置相应的成交量倍数。</li>
 <li><strong>增量更新</strong> 按 <strong>交易日</strong> 抓取（每次 API 调用返回全市场所有股票），并追加到逐股原始文件，因此
 一次日更是个位数次调用，而非每只股票一次。</li>
 </ul>

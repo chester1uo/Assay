@@ -106,6 +106,8 @@ def controller(tmp_path, monkeypatch):
     auth._reset_for_tests()
     monkeypatch.setattr(service, "_service", None)
     yield TestClient(app), panel
+    if service._service is not None:
+        service._service.close()
     monkeypatch.setattr(service, "_service", None)
 
 

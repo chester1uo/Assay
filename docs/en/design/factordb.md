@@ -1,5 +1,7 @@
 # FactorDB — a factor store for large-scale, agent-driven research
 
+With account authentication, personal FactorDB jobs and scores use private registries; the shared service registry remains available to the service key. ADES workers are trusted and can read the expressions they execute.
+
 Status: design + phase 1 (daily) implementation. Scope: Assay on the QFinVerse daily panel
 (US), extended to minute bars in phase 2.
 

@@ -1,5 +1,9 @@
 # Integrated Assay architecture
 
+> This document describes the current local architecture and retains historical
+> integration evidence. See the [project overview](../../cn/project-overview.md)
+> for the distinction between local and deployed versions.
+
 Assay combines the upstream factor computation platform with a persistent research
 workspace. Both live in this repository; QFinVerse is an optional data producer,
 not a service that must be installed for the offline research workflow.
@@ -15,7 +19,7 @@ not a service that must be installed for the offline research workflow.
 3. **Persistent research:** dataset specifications, goals, attempt budgets,
    successful/failed experiments, revisions, notes, context, explicit replay, and
    integrity-checked export/import.
-4. **Agent access:** 36 MCP tools, a replaceable reference client with request/tool
+4. **Agent access:** 40 MCP tools, a replaceable reference client with request/tool
    limits and raw receipts, SDK and REST. The agent supplies the research policy.
 5. **Human access:** the four-area workbench in the integrated sidebar, accounts
    and keys, Doc Hub, and existing factor and portfolio pages.
@@ -39,19 +43,20 @@ a session attempt to a durable FactorDB job and its versioned result receipt.
 | Component | Responsibility | Retained implementation |
 | --- | --- | --- |
 | Factor engine and portfolio evaluation | Parse expressions, compute panels, score factors, simulate portfolios | Upstream engine, vectorized operations, optional Rust kernels and OSQP/Clarabel solvers |
-| Shared factor infrastructure | Canonical factor identities, stored values, novelty queries, asynchronous jobs | Upstream FactorDB and its eight MCP operations |
+| Factor infrastructure | Canonical factor identities, stored values, novelty queries, asynchronous jobs | Upstream FactorDB and its eight MCP operations; private accounts use separate registries |
 | Distributed execution | Lease factor-computation slices to workers | Upstream ADES controller, worker, heartbeat and task queue |
 | Research workspace | Dataset specifications, goals, attempt budgets, hypotheses, failed evaluations, parent links, notes, manifests | Persistent SQLite workspace and backend protocol |
-| Agent and human clients | Choose research actions, inspect outcomes and continue sessions | Reference agent, 17 research MCP operations, SDK/REST and browser workbench |
+| Agent and human clients | Choose research actions, inspect outcomes and continue sessions | Reference agent, 21 research MCP operations, SDK/REST and browser workbench |
 | Application shell | Authentication, navigation and documentation | Upstream account/session authentication and sidebar, with the research page added |
 
-The MCP server has 36 operations: 11 evaluation/library tools, eight FactorDB tools,
-and 17 research tools. HTTP MCP is mounted at `/mcp/`; each API application owns
+The MCP server has 40 operations: 11 evaluation/library tools, eight FactorDB tools,
+and 21 research tools. HTTP MCP is mounted at `/mcp/`; each API application owns
 an independent HTTP lifecycle. Stdio remains available for local agent clients.
 
 ## Distinct records and budgets
 
-A FactorDB factor is a shared, canonical expression and its computed evidence. A
+A FactorDB factor is a canonical expression and its computed evidence. Service keys
+use a shared workspace, while private accounts use separate registries. A
 research attempt records one session decision, including failure and provenance.
 Repeated attempts remain separate records even when their expressions match.
 The existing factor library remains available as well. Integrating the modules
@@ -66,9 +71,10 @@ completion/final failure receipts survive interruption before registry updates;
 registry application records progress and compute usage once per task.
 
 The workspace separately enforces a per-session attempt budget. FactorDB daily
-compute usage is charged to the configured backend owner (`research` by default),
-on the receipt's UTC completion day. This is a shared owner budget, not per-user
-isolation or a global reservation of future compute.
+compute usage is charged on the receipt's UTC completion day. With account
+authentication enabled, private tasks are attributed to the account; service keys
+retain the shared service workspace. This budget is not a reservation of future
+compute or a hard CPU, memory, or storage quota.
 
 Persistent research sessions differ from temporary evaluator panel sessions.
 Reconciliation recovers asynchronous execution evidence; it does not restart a
@@ -84,8 +90,11 @@ completion wins a race with cancellation. The attempt charge remains consumed. S
 
 Research REST routes use the existing `get_api_key` dependency, inheriting service
 keys, personal API keys, account cookies and same-origin mutation checks. The
-workspace is shared among authorized callers; accounts do not create private
-per-user research stores. Manual browser writes remain labeled `human:webui`.
+local implementation provides private per-account research stores when account
+authentication is enabled; service keys retain the shared workspace. Market data,
+the ADES queue and trusted workers can still be shared. The current deployed
+version uses a shared research workspace. Manual browser writes remain labeled
+`human:webui`.
 
 The built-in data store and upstream QFinVerse-panel reader are retained. Local
 synthetic and prepared data remain usable without a QFinVerse installation.

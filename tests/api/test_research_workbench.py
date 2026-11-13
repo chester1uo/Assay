@@ -108,7 +108,13 @@ def test_workbench_inherits_account_cookie_auth_and_csrf(workbench, tmp_path, mo
             'username':'researcher', 'password':'correct horse battery'})
         assert response.status_code == 200
         assert client.get('/v1/research/datasets').status_code == 200
-        payload = {'dataset_id':dataset['id'], 'goal':'authenticated research'}
+        assert client.get('/v1/research/datasets').json() == []
+        own = client.post('/v1/research/datasets', json={
+            'name':'private', 'universe':dataset['universe'], 'period':dataset['period'],
+            'as_of':dataset['as_of'], 'horizons':dataset['horizons'],
+            'execution':dataset['execution'], 'adj':dataset['adj']})
+        assert own.status_code == 200
+        payload = {'dataset_id':own.json()['id'], 'goal':'authenticated research'}
         assert client.post('/v1/research/sessions', json=payload,
                            headers={'Origin':'https://unrelated.example'}).status_code == 403
         created = client.post('/v1/research/sessions', json=payload)

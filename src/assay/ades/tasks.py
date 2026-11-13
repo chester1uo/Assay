@@ -24,6 +24,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from assay.sqlite_util import open_wal
 
 __all__ = ["TaskQueue"]
 
@@ -41,6 +42,16 @@ CREATE TABLE IF NOT EXISTS tasks (
     error TEXT, created REAL NOT NULL, updated REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status, owner, created);
+CREATE INDEX IF NOT EXISTS tasks_job_id ON tasks (job_id);
+-- Database-side guards also apply to older controllers during rolling upgrades.
+-- Preserve existing receipts: unlike a unique index, the duplicate guard can
+-- be installed even if a historical queue already contains duplicate rows.
+CREATE TRIGGER IF NOT EXISTS tasks_guard_owner BEFORE INSERT ON tasks
+WHEN EXISTS (SELECT 1 FROM tasks WHERE job_id=NEW.job_id AND owner<>NEW.owner)
+BEGIN SELECT RAISE(ABORT, 'job identity belongs to another owner'); END;
+CREATE TRIGGER IF NOT EXISTS tasks_guard_duplicate_chunk BEFORE INSERT ON tasks
+WHEN EXISTS (SELECT 1 FROM tasks WHERE job_id=NEW.job_id AND items=NEW.items)
+BEGIN SELECT RAISE(IGNORE); END;
 CREATE TABLE IF NOT EXISTS owners (owner TEXT PRIMARY KEY, served REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS workers (
     name TEXT PRIMARY KEY, seen REAL NOT NULL, version TEXT, info TEXT NOT NULL DEFAULT '{}',
@@ -57,23 +68,25 @@ class TaskQueue:
         self._lock = threading.RLock()
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            c.execute('BEGIN IMMEDIATE')
             if 'lease_token' not in {r[1] for r in c.execute('PRAGMA table_info(tasks)')}:
                 c.execute('ALTER TABLE tasks ADD COLUMN lease_token TEXT')
 
     def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.path, timeout=30, isolation_level=None)
-        c.row_factory = sqlite3.Row
-        c.execute("PRAGMA journal_mode=WAL")
-        return c
+        return open_wal(self.path, autocommit=True)
 
     # ── controller side ──────────────────────────────────────────────────────
-    def enqueue(self, job_id: str, owner: str, spec: str, version: str, items: list, chunk: int, *, idempotent: bool = False) -> int:
+    def enqueue(self, job_id: str, owner: str, spec: str, version: str, items: list, chunk: int, *,
+                idempotent: bool = False, stable: bool = False) -> int:
         """Split ``items`` ((factor_id, expr) pairs) into tasks; returns how many."""
         now = time.time()
-        rows = [("rtsk_" + hashlib.sha256(f"{job_id}:{i}".encode()).hexdigest()[:24] if idempotent else "t_" + uuid.uuid4().hex[:16], job_id, owner, spec, version, json.dumps(items[i:i + chunk]),
+        rows = [(("rtsk_" if idempotent else "t_") + hashlib.sha256(f"{job_id}:{i}".encode()).hexdigest()[:24]
+                 if idempotent or stable else "t_" + uuid.uuid4().hex[:16], job_id, owner, spec, version, json.dumps(items[i:i + chunk]),
                  len(items[i:i + chunk]), "queued", now, now) for i in range(0, len(items), chunk)]
         with self._lock, self._conn() as c:
             c.execute("BEGIN IMMEDIATE")
+            if c.execute('SELECT 1 FROM tasks WHERE job_id=? AND owner<>? LIMIT 1', (job_id, owner)).fetchone():
+                raise ValueError('job identity belongs to another owner')
             for row in rows:
                 previous = c.execute("SELECT job_id,owner,spec,version,items,n FROM tasks WHERE id=?", (row[0],)).fetchone()
                 if previous is not None and tuple(previous) != tuple(row[1:7]):
@@ -108,7 +121,7 @@ class TaskQueue:
                   (error, now, r["id"]))
         return []
 
-    def cancel_job(self, job_id: str, reason: str) -> dict:
+    def cancel_job(self, job_id: str, reason: str, *, owner: str | None = None) -> dict:
         """Fence queued/leased tasks atomically; accepted completion wins the race.
 
         A tombstone also fences a dispatch arriving after cancellation. This does
@@ -116,6 +129,9 @@ class TaskQueue:
         """
         with self._lock, self._conn() as c:
             c.execute("BEGIN IMMEDIATE")
+            if owner is not None and c.execute(
+                    'SELECT 1 FROM tasks WHERE job_id=? AND owner<>? LIMIT 1', (job_id, owner)).fetchone():
+                raise ValueError('job belongs to another account')
             previous = c.execute("SELECT * FROM job_cancellations WHERE job_id=?", (job_id,)).fetchone()
             if previous is not None:
                 return {**dict(previous), "status": "cancelled"}
@@ -134,6 +150,12 @@ class TaskQueue:
             return [dict(row) for row in c.execute(
                 "SELECT * FROM job_cancellations" + (" WHERE job_id=?" if job_id else ""),
                 (job_id,) if job_id else ()).fetchall()]
+
+    def job_owner(self, job_id):
+        """Owner recorded by the controller when this job was enqueued."""
+        with self._conn() as c:
+            row = c.execute('SELECT owner FROM tasks WHERE job_id=? LIMIT 1', (job_id,)).fetchone()
+        return row['owner'] if row is not None else None
 
     def drop_job(self, job_id: str) -> None:
         with self._lock, self._conn() as c:
@@ -250,10 +272,15 @@ class TaskQueue:
                             (now, task_id, worker, now, lease_token, lease_token))
             return cur.rowcount == 1
 
-    def result_receipts(self, job_id=None):
+    def result_receipts(self, job_id=None, *, owner=None, spec=None, version=None):
+        filters, args = [], []
+        for field, value in (('t.job_id', job_id), ('t.owner', owner), ('t.spec', spec), ('t.version', version)):
+            if value is not None:
+                filters.append(field + '=?')
+                args.append(value)
         with self._conn() as c:
             rows = c.execute("SELECT t.*, r.payload, r.seconds FROM tasks t JOIN task_results r ON t.id=r.task_id"
-                             + (" WHERE t.job_id=?" if job_id else ""), (job_id,) if job_id else ()).fetchall()
+                             + (" WHERE " + ' AND '.join(filters) if filters else ""), args).fetchall()
         return [(dict(row), json.loads(row["payload"]), row["seconds"]) for row in rows]
 
     def _seen(self, c, worker: str, version: str, info: dict | None, now: float) -> None:

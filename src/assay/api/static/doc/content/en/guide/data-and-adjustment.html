@@ -203,8 +203,9 @@ the raw <code>up_limit</code> / <code>down_limit</code> bands (see §4).</li>
 <li><strong>Price limits (涨跌停)</strong> are stored in <code>trade_status</code> (<code>up_limit</code> / <code>down_limit</code> and the
 <code>*_locked</code> flags). Use them with <code>adj=&quot;none&quot;</code> prices for execution constraints — a name
 locked limit-up cannot be bought at the close.</li>
-<li><strong>Volume units</strong> — Tushare reports volume in 手 (100-share lots). It is normalized during
-ingest; the ASSAY <code>volume</code> column is in shares, consistent with the US path.</li>
+<li><strong>Volume units</strong> — the current Tushare CN ingester stores <code>vol</code> as 100-share lots;
+it does not convert to shares. Other data sources may use shares. Confirm the
+source and set the appropriate liquidity volume multiplier when backtesting.</li>
 <li><strong>Incremental updates</strong> fetch <strong>by trade-date</strong> (all symbols per API call) and append to
 the per-symbol raw files, so a daily update is a handful of calls, not one per symbol.</li>
 </ul>

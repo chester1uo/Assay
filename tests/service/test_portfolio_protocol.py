@@ -167,7 +167,8 @@ def test_research_dataset_runs_with_declared_capital_and_minimum_fees(tmp_path):
     assert portfolio['cost_assumptions']['commission_min'] == 5.
     assert 'positive values' in portfolio['cost_drag_definition']
     assert not any('minimum commission' in w.lower() for w in portfolio['warnings'])
-    assert any('participation' in w.lower() for w in portfolio['warnings'])
+    assert portfolio['cost_assumptions']['impact_participation_supplied'] is True
+    assert portfolio['cost_assumptions']['liquidity_data']['excludes_execution_day'] is True
     assert portfolio['cost_drag'] > 0
     from assay.research_audit import audit_manifest
     manifest = ws.export_session(sid)

@@ -26,8 +26,11 @@ House style: ``from __future__ import annotations``, dataclasses/type hints, num
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import os
+import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncGenerator, Iterable
 
@@ -157,20 +160,101 @@ class AssayService:
         # DataStore is the only credential-hungry dependency: build it lazily.
         self._store = None
         self._stores: dict[str, object] = {}  # market -> DataStore (multi-market serving)
-        self.library = FactorLibrary(config.library_path)
-        self.combinations = CombinationStore(config.data_dir / "combinations")
-        self.cache = L2FactorCache(config.cache_path)
-        self.sessions = SessionRegistry()
+        self._library = FactorLibrary(config.library_path)
+        self._combinations = CombinationStore(config.data_dir / "combinations")
+        self._cache = L2FactorCache(config.cache_path)
+        self._sessions = SessionRegistry()
+        self._tenant_resources_lock = threading.RLock()
+        self._tenant_resources = {}
         # Apply admin-editable system settings (parallelism / cache / eval defaults)
         # onto the live config, so a customised store takes effect at startup.
         self.apply_system_config()
+
+    def _private_resources(self):
+        """Resolve every user-owned service resource from authenticated context."""
+        from assay.research_tenant import UNAUTHENTICATED, current_tenant
+        tenant = current_tenant.get()
+        if tenant == UNAUTHENTICATED:
+            raise PermissionError('Authenticated identity required')
+        if tenant is None:
+            return None
+        with self._tenant_resources_lock:
+            resources = self._tenant_resources.get(tenant)
+            if resources is None:
+                account_root = self.config.data_dir / 'research' / 'accounts'
+                account_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+                account_root.chmod(0o700)
+                key = hashlib.sha256(tenant.encode('utf-8')).hexdigest()
+                root = account_root / key
+                root.mkdir(exist_ok=True, mode=0o700)
+                root.chmod(0o700)
+                resources = dict(root=root, library=FactorLibrary(root / 'library'),
+                                 combinations=CombinationStore(root / 'combinations'),
+                                 cache=L2FactorCache(root / 'cache'),
+                                 sessions=SessionRegistry(id_prefix='sess_' + uuid.uuid4().hex + '_'))
+                self._tenant_resources[tenant] = resources
+            return resources
+
+    @property
+    def library(self):
+        resources = self._private_resources()
+        return resources['library'] if resources is not None else self._library
+
+    @property
+    def combinations(self):
+        resources = self._private_resources()
+        return resources['combinations'] if resources is not None else self._combinations
+
+    @property
+    def cache(self):
+        resources = self._private_resources()
+        return resources['cache'] if resources is not None else self._cache
+
+    @property
+    def sessions(self):
+        resources = self._private_resources()
+        return resources['sessions'] if resources is not None else self._sessions
 
     @property
     def research(self):
         """Durable agent research workspace, separate from in-memory panel sessions."""
         from assay.research import AssayBackend, ResearchWorkspace
+        from assay.research_tenant import UNAUTHENTICATED, current_tenant
         from assay.integrations.factordb import FactorDBResearchBackend
 
+        tenant = current_tenant.get()
+        if tenant == UNAUTHENTICATED:
+            raise PermissionError('Authenticated research identity required')
+        if tenant is not None:
+            # Separate databases isolate datasets, sessions, notes, experiment
+            # records, factor histories and the accompanying research registry.
+            import hashlib
+            import threading
+            from collections import OrderedDict
+            if not hasattr(self, '_research_tenant_lock'):
+                # Services are normally initialized on one thread. setdefault
+                # keeps the same lock even when two requests arrive together.
+                self.__dict__.setdefault('_research_tenant_lock', threading.RLock())
+            with self._research_tenant_lock:
+                stores = self.__dict__.setdefault('_research_tenants', OrderedDict())
+                if tenant not in stores:
+                    private_dir = self._private_resources()['root']
+                    backend = AssayBackend(self)
+                    backend.execution_pool.max_entries = 1
+                    backend.execution_pool.max_bytes = 64 * 1024**2
+                    from assay.factordb import service as compute_service
+                    owner = compute_service.owner_for_tenant(tenant)
+                    stores[tenant] = ResearchWorkspace(
+                        private_dir / 'workspace.sqlite3',
+                        {'assay': backend, 'factordb_ades': FactorDBResearchBackend(
+                            lambda owner=owner: compute_service.for_owner(owner), owner=owner)},
+                    )
+                    if len(stores) > 128:
+                        _, evicted = stores.popitem(last=False)
+                        evicted.backends['assay'].execution_pool.retire()
+                else:
+                    stores.move_to_end(tenant)
+                return stores[tenant]
         if not hasattr(self, "_research"):
             self._research = ResearchWorkspace(
                 self.config.data_dir / "research" / "workspace.sqlite3",
@@ -847,8 +931,10 @@ class AssayService:
             if n_jobs <= 1:
                 reports = [_run(e) for e in exprs]
             else:
+                from contextvars import copy_context
                 with ThreadPoolExecutor(max_workers=n_jobs) as pool:
-                    reports = list(pool.map(_run, exprs))
+                    futures = [pool.submit(copy_context().run, _run, e) for e in exprs]
+                    reports = [future.result() for future in futures]
         finally:
             if own_session:
                 self.sessions.expire(session_id)
@@ -865,6 +951,13 @@ class AssayService:
         subtree hash + panel fingerprint, so it is shared across processes and
         auto-refreshes when new history changes the fingerprint (engineering §4.3).
         """
+        resources = self._private_resources()
+        if resources is not None:
+            with self._tenant_resources_lock:
+                if 'precompute' not in resources:
+                    from assay.engine import PrecomputeStore
+                    resources['precompute'] = PrecomputeStore(resources['root'] / 'precompute')
+                return resources['precompute']
         if getattr(self, "_precompute", None) is None:
             from pathlib import Path
 

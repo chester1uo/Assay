@@ -5,7 +5,22 @@ from types import SimpleNamespace
 
 import pytest
 
-from assay.agent import run_agent, ChatModel
+from assay.agent import run_agent, ChatModel, model_options
+
+
+def test_reference_agent_deepseek_preset_and_provider_override():
+    preset = model_options('deepseek-flash')
+    assert preset == {
+        'base_url': 'https://api.deepseek.com', 'model': 'deepseek-flash',
+        'api_key_env': 'DEEPSEEK_API_KEY', 'extra_body': {'thinking': {'type': 'disabled'}},
+    }
+    override = model_options('deepseek-flash', base_url='https://example.org/v1',
+                             model='custom', api_key_env='CUSTOM_KEY', extra_body={})
+    assert override == {'base_url': 'https://example.org/v1', 'model': 'custom',
+                        'api_key_env': 'CUSTOM_KEY', 'extra_body': {}}
+    assert model_options(base_url='https://example.org', model='model')['api_key_env'] == 'ASSAY_AGENT_API_KEY'
+    with pytest.raises(ValueError, match='specify'):
+        model_options()
 
 
 def test_compact_feedback_keeps_net_portfolio_metrics_without_trade_arrays():

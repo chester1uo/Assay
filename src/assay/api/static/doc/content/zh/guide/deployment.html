@@ -77,6 +77,6 @@ ASSAY_DATA_DIR_US=/srv/assay/market/us
 <p>切换流量前运行回归测试，并用 MCP／REST 验证新建研究 session。保存 request ID，在重启后确认仍返回同一实验。<code>tests/api/test_deployment.py</code> 使用真实 TCP MCP 连接；已有研究传输测试覆盖重启、预算与迁移。</p>
 <h2 id="持久状态与部署范围">持久状态与部署范围</h2>
 <p>备份 <code>/var/lib/assay</code>，包括研究库、账户库、<code>auth_secret</code>、配置和因子库；缓存可重建。数据库使用 SQLite backup API 或停服后复制，直接复制正在写入的主库文件不能保证一致。升级前保留受保护的快照，跨 schema 回滚时配合旧版本恢复。</p>
-<p>当前部署面向<strong>可信团队的共享研究工作区</strong>。账户控制入口与管理员权限，已认证研究员之间共享研究 session 和因子历史。需要机构间私有研究记录时，应使用独立实例或增加 ownership／authorization 层。</p>
+<p>启用账户认证后，个人账户使用独立的研究、因子库、组合和 FactorDB 注册库；服务密钥继续访问原有共享工作区。账户库与账户目录应一起备份，工作区身份迁移后浏览器用户需重新登录。ADES worker 是可信执行者，可以读取其执行的表达式。临时面板 session 仍属于单个进程，账户级 CPU、内存和存储硬配额尚未实施；需要这些资源边界时应使用独立实例。</p>
 <p>计算复用对只读行情／原子发布的要求见<a href="/doc/guide/performance">性能指南</a>。完整实验结果可能较大，Agent 日常读取应使用紧凑 context，以及实验／历史的分页接口。</p>
 <p>连接示例：<a href="/doc/guide/mcp-server">MCP</a>、<a href="/doc/guide/reference-agent">参考 Agent</a>、<a href="/doc/guide/rest-api">REST</a>。</p>

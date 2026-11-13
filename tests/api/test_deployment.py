@@ -50,7 +50,11 @@ def test_public_contract_auth_origin_host_alias_and_cors(production):
         assert discovery['mcp']['url']=='https://assay.qfinverse.com/mcp/'
         assert discovery['mcp']['tool_count']==40 and discovery['authentication']['required']
         assert not discovery['authentication']['oauth']
-        assert discovery['research']['scope']=='shared-workspace'
+        assert discovery['research']['scope']=='service-workspace'
+        assert discovery['research']['tenant_isolation'] is False
+        assert discovery['research']['library_scope'] == 'local-shared'
+        assert discovery['research']['panel_session_scope'] == 'process'
+        assert discovery['research']['private_compute_registry'] is False
         schema=c.get('/openapi.json').json()
         assert schema['servers']==[{'url':'https://assay.qfinverse.com'}]
         assert schema['paths']['/v1/research/datasets']['post']['security']==[

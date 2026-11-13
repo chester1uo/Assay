@@ -77,7 +77,7 @@ class DeploymentSettings:
 def install_endpoints(app, settings, mcp_app, get_service):
     from fastapi import Depends
     from fastapi.responses import JSONResponse
-    from assay.api.auth import auth_enabled, get_api_key
+    from assay.api.auth import accounts_enabled, auth_enabled, get_api_key
 
     @app.get("/.well-known/assay.json", tags=["System"])
     async def discovery(request: Request):
@@ -100,7 +100,17 @@ def install_endpoints(app, settings, mcp_app, get_service):
                                  json.dumps(schemas, sort_keys=True).encode()).hexdigest()),
                     authentication=dict(required=auth_enabled(), methods=["bearer", "x-api-key"],
                                         oauth=False, personal_keys_url=base+"/login"),
-                    research=dict(persistent=True, scope="shared-workspace", tenant_isolation=False))
+                    research=dict(persistent=True, scope=("account-workspace" if accounts_enabled() else
+                                  "service-workspace" if auth_enabled() else "local-shared-workspace"),
+                                  tenant_isolation=accounts_enabled(),
+                                  service_key_scope="shared-service-workspace",
+                                  library_scope="account" if accounts_enabled() else "local-shared",
+                                  panel_session_scope="process", panel_sessions_require_sticky_routing=True,
+                                  shared_compute_registry=True, account_shared_compute_access=False,
+                                  private_compute_registry=accounts_enabled(), private_compute_requires_ades=True,
+                                  private_compute_configured=bool(accounts_enabled() and
+                                      os.environ.get('ASSAY_FACTORDB_DIR') and os.environ.get('ASSAY_QFV_PANEL_DIR') and
+                                      os.environ.get('ASSAY_ADES', '').lower() in ('1', 'true', 'yes'))))
 
     @app.get("/ready", tags=["System"], dependencies=[Depends(get_api_key)])
     def ready():

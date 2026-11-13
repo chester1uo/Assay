@@ -133,10 +133,13 @@ backup API or a stopped service for database copies; copying a live database fil
 alone is not a consistent backup. Keep a protected pre-upgrade snapshot and restore
 it with the previous release when rolling back across schema changes.
 
-This deployment serves a **shared research workspace for a trusted team**. Accounts
-control entry and admin privileges; research sessions and factor history are shared
-among authenticated researchers. Separate organizations requiring private research
-records need separate instances or an additional ownership/authorization layer.
+When account authentication is enabled, personal accounts use private research,
+library, combination and FactorDB registries. Service keys continue to use the
+original shared workspace. Back up the account database and account directories
+together; existing browser sessions must sign in again after the workspace-identity
+migration. ADES workers are trusted with the expressions they execute. Temporary
+panel sessions remain process-local, and account-level CPU, memory and storage hard
+quotas are not yet enforced; use separate instances when those boundaries are needed.
 
 The read-only market-data/atomic-publication contract for compute reuse is described
 in [performance](performance.md). Full experiment results can be large; use compact

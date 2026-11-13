@@ -1,0 +1,129 @@
+<h1 class="doc-title">Assay 项目总览</h1>
+<p>本文梳理 2026-11-13 的项目状态。<strong>“当前源码”指本地工作树，包含尚未提交的修改；“线上”指已部署的版本。</strong> 两者的功能并不完全相同。本文是状态索引，具体参数与操作以对应指南和实际接口为准。</p>
+<h2 id="定位与边界">定位与边界</h2>
+<p>Assay 是面向外部 Agent 的因子研究环境：它同时提供因子计算与组合回测、可持续的研究记录、因子生命周期管理，以及供 Agent 调用的接口。它不内置必须使用的模型或固定的挖掘策略，提出假设、决定下一次实验和解释结果仍由外部 Agent 或研究员负责。</p>
+<p>QFinVerse 可以为 Assay 提供日频市场面板；Assay 也支持自己的数据管线和其他评估后端。AlphaBench 是独立的评测项目，已有适配器可连接它的服务；RD-Agent 等则可作为 Agent 策略或比较对象。它们不等同于 Assay 本身。</p>
+<h2 id="数据和研究流程">数据和研究流程</h2>
+<pre><code class="language-mermaid">flowchart LR
+    A[外部 Agent 或研究员] --&gt; I[MCP / REST / Python SDK / WebUI]
+    I --&gt; W[研究工作区\nDataset · Session · Experiment]
+    W --&gt; E[表达式检查与因子引擎]
+    D[市场数据\n本地行情 / QFinVerse 面板] --&gt; E
+    E --&gt; B[因子诊断与组合回测]
+    B --&gt; R[实验结果 · 失败 · 笔记 · 审计]
+    R --&gt; W
+    W --&gt; A
+    W -. 可选异步后端 .-&gt; F[FactorDB\n因子 · Job · 生命周期]
+    I --&gt; F
+    F -. 可选分布式执行 .-&gt; Q[ADES 队列与 Worker]
+    Q --&gt; D
+    Q --&gt; F
+    F -. 结果回执 .-&gt; W
+</code></pre>
+<p>典型流程是：注册数据集配置 → 创建或恢复研究会话 → Agent 查看上下文并提交假设与表达式 → 引擎计算因子、诊断并按配置运行组合回测 → 保存成功或失败、候选决定和笔记 → Agent 检查并选择下一步，最终导出或审计记录。默认研究后端在进程内执行；只有选择 <code>factordb_ades</code> 后端时，研究实验才通过 FactorDB/ADES 异步执行。直接提交 FactorDB job 也不会自动创建研究 session。</p>
+<h2 id="主要模块">主要模块</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>模块</th>
+<th>当前源码提供的能力</th>
+<th>主要位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>数据层</td>
+<td>美股、A 股、港股数据管线及 QFinVerse 日频面板读取；日期、股票池、复权及行情面板处理</td>
+<td><code>src/assay/data/</code>， <a href="/doc/guide/data-and-adjustment">数据与复权</a></td>
+</tr>
+<tr>
+<td>因子引擎</td>
+<td>表达式解析、算子与 AST、面板计算、预计算和缓存；支持部分 qlib 风格表达式</td>
+<td><code>src/assay/engine/</code>， <a href="/doc/design/architecture">架构</a></td>
+</tr>
+<tr>
+<td>因子评估与组合回测</td>
+<td>IC、RankIC、衰减等诊断，以及调仓、成本、约束、净值和交易记录</td>
+<td><code>src/assay/evaluator/</code>、<code>src/assay/portfolio/</code>， <a href="/doc/guide/portfolio-backtest">组合回测</a></td>
+</tr>
+<tr>
+<td>持续研究状态</td>
+<td>数据集配置、会话、预算、假设、失败、实验关系、候选决定、笔记、导入导出</td>
+<td><code>src/assay/research*.py</code>， <a href="/doc/guide/agent-research">Agent 研究</a></td>
+</tr>
+<tr>
+<td>FactorDB</td>
+<td>规范因子身份、去重、评分、相似度、查询和批量 job；关联研究实验和候选历史</td>
+<td><code>src/assay/factordb/</code>， <a href="/doc/design/factordb">FactorDB 设计</a></td>
+</tr>
+<tr>
+<td>ADES</td>
+<td>为 FactorDB 可选地分发计算切片，管理 worker、租约、心跳、重试及结果回执</td>
+<td><code>src/assay/ades/</code>， <a href="/doc/guide/agent-research">Agent 研究</a></td>
+</tr>
+<tr>
+<td>审计</td>
+<td>检查研究记录中的预算、来源、生命周期与指标证据，生成供人工或 Agent judge 阅读的报告</td>
+<td><code>src/assay/research_audit.py</code>， <a href="/doc/guide/research-audit">研究审计</a></td>
+</tr>
+<tr>
+<td>接入与管理</td>
+<td>Python SDK、CLI、REST、MCP、WebUI、账户和文档中心</td>
+<td><code>src/assay/api/</code>、<code>src/assay/mcp/</code>， <a href="/doc/guide/deployment">部署</a></td>
+</tr>
+</tbody>
+</table></div>
+<p>研究 experiment、FactorDB job、已保存的因子库条目各自承担不同职责，并非同一条记录。研究 session 持久保存实验历史；计算用的临时 panel session 是进程内缓存，重启后需重新创建。</p>
+<h2 id="接口">接口</h2>
+<div class="table-wrap"><table class="doc-table">
+<thead>
+<tr>
+<th>用途</th>
+<th>地址或方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>网站</td>
+<td><a href="https://assay.qfinverse.com/" target="_blank" rel="noopener noreferrer">assay.qfinverse.com</a></td>
+</tr>
+<tr>
+<td>MCP</td>
+<td><code>https://assay.qfinverse.com/mcp/</code>；本地也支持 stdio</td>
+</tr>
+<tr>
+<td>REST</td>
+<td><code>https://assay.qfinverse.com/v1/</code>；研究、因子、组合、FactorDB 和 ADES 有各自路由</td>
+</tr>
+<tr>
+<td>接口文档与发现</td>
+<td><code>/docs</code>、<code>/openapi.json</code>、<code>/.well-known/assay.json</code>、<code>/doc/</code></td>
+</tr>
+<tr>
+<td>Python / CLI</td>
+<td><code>assay</code> Python 包及 <code>assay</code> 命令，详见 <a href="/doc/guide/python-sdk">Python SDK</a> 和 <a href="/doc/guide/cli">CLI</a></td>
+</tr>
+</tbody>
+</table></div>
+<p>2026-11-13 的线上发现文档报告 40 个 MCP 工具、需要 Bearer 或 API key，且当时不提供 OAuth。实际工具及其 schema 以目标服务的发现文档或 MCP <code>tools/list</code> 为准。Assay 服务端不要求模型 API key；调用方自行配置模型和凭据。</p>
+<h2 id="关键能力的当前状态">关键能力的当前状态</h2>
+<ul>
+<li><strong>回测可靠性</strong>：组合回测覆盖成本、最低佣金、资金、次日开盘／收盘执行和记录审计。历史组合数据集的兼容修复已上线；没有新执行协议标识的旧 <code>next_close</code> 数据集仍需按新版约定重新注册，历史报告可读。数据正确性仍取决于行情来源、股票池和执行假设。</li>
+<li><strong>容量与市场冲击（本地）</strong>：设置初始资金后，新配置可用此前交易日的未复权收盘价与成交量估算成交额及订单参与率，再按配置限制容量和计算冲击；数据不足时阻断受影响订单。A 股需要确认成交量单位。未提供本金或参与率、显式关闭模型、或使用强制成交时有相应限制。详见 <a href="/doc/guide/agent-research">Agent 研究</a>；此功能尚未部署到当前线上版本。</li>
+<li><strong>生命周期</strong>：研究会话保存多次实验及决定；FactorDB 保存规范因子、规格、job 和计算结果。二者可关联，Agent 可继续研究并导出或导入记录。</li>
+<li><strong>幂等性（本地）</strong>：研究实验支持稳定 <code>request_id</code>。普通 FactorDB 提交在 ADES 模式下也可使用 <code>request_id</code>；客户端重试须复用相同 ID 和输入，跨 REST/MCP 重试可返回同一任务。未提供 ID 的提交不具备这项保证，非 ADES 的普通 FactorDB 提交尚不支持该参数。</li>
+<li><strong>账户隔离（本地）</strong>：启用账户认证后，个人账户使用独立研究、因子库、组合及 FactorDB 注册数据；服务密钥仍访问共享工作区。行情、ADES 队列和可信 worker 等资源仍共享，账户级 CPU、内存、存储硬配额尚未实现。升级前需备份账户与工作区，用户需重新登录；历史共享数据不会自动划归个人。当前线上发现文档仍标记为共享研究工作区。</li>
+<li><strong>复现与审计</strong>：数据集哈希固定配置，并不自动冻结供应商行情、后端代码或模型；清单哈希可检查记录完整性，但不是真实性证明，也不自动重跑实验。</li>
+</ul>
+<h2 id="验证与论文材料">验证与论文材料</h2>
+<p>当前源码最近一次完整自动化回归为 <strong>1,348 通过、3 跳过</strong>，日志见 <code>artifacts/liquidity-tenant-20261113/idempotent-full-after-owner.log</code>；这是本地工作树结果，不等于线上版本已通过相同测试。</p>
+<ul>
+<li><a href="https://github.com/QFinVerse/Assay/blob/main/experiments/efficiency/README.md" target="_blank" rel="noopener noreferrer">效率测试</a> 包含固定因子研究任务优化前后、因子执行组件和固定订单回放；不同计时范围、缓存、输入及费用条件需要分别解读，不能推出完整系统全面优于其他框架。</li>
+<li><a href="https://github.com/QFinVerse/Assay/blob/main/experiments/roadmap-baselines/README.md" target="_blank" rel="noopener noreferrer">回测引擎对照</a> 包含 Qlib、vectorbt 的固定订单回放和 Alphalens 的 RankIC 比较；费用场景存在口径差异，不能用于直接报告统一加速比。</li>
+<li><a href="https://github.com/QFinVerse/Assay/blob/main/experiments/workflow-comparison/README.md" target="_blank" rel="noopener noreferrer">Agent 工作流试验</a> 使用真实模型和合成数据，对比相同 Assay 工具下的原生与受限 Qlib 适配后端；它不是原生 RD-Agent 的完整研究流程。</li>
+<li><a href="https://github.com/QFinVerse/Assay/blob/main/experiments/baseline-acceptance/README.md" target="_blank" rel="noopener noreferrer">基线接入验收</a> 复用部分本地策略和接口，验证接入与恢复；不同方法预算不一致，不用于方法排名。</li>
+<li>论文源码和当前 PDF 分别位于 <code>manuscript/main.tex</code> 和 <code>manuscript/assay.pdf</code>。稿件需要按最终发布版本和实际实验结果重新核对；完整系统级效率优势、真实用户节时和更广泛任务覆盖仍需进一步证据。</li>
+</ul>
+<h2 id="版本与后续工作">版本与后续工作</h2>
+<p>2026-11-13 的只读健康检查显示，线上构建为 <code>03bab24</code>，其研究工作区是共享的。本地当前分支为 <code>codex/agent-native-deployment-20261110</code>，基于该提交但有尚未提交的源码、文档、测试和论文改动；本地能力不能直接当作线上能力。发布前应完成回归、备份、账户迁移与重新登录提示，并对 REST、MCP、行情及 worker 进行线上验收。</p>
+<p>接下来优先处理：完善并验收账户级资源隔离；核对尚未发布的改动及历史数据迁移；按最终版本补充系统级效率和用户工作流证据。当前项目已经具备 Agent 调用、持久状态、闭环实验与审计的主要结构，但不能将已有工程能力直接表述为完整生产隔离或已证明的全面性能优势。</p>

@@ -96,9 +96,9 @@ def test_portfolio_tool_exposes_capital_and_cost_warnings(tmp_path, monkeypatch)
     assert result['config']['initial_capital'] == 10000.
     assert result['config']['commission_min'] == 5.
     assert result['cost_assumptions']['minimum_commission_capital_supplied'] is True
-    assert result['cost_assumptions']['impact_participation_supplied'] is False
+    assert result['cost_assumptions']['impact_participation_supplied'] is True
     assert 'positive values' in result['cost_drag_definition']
-    assert any('participation' in w for w in result['warnings'])
+    assert result['cost_assumptions']['liquidity_data']['excludes_execution_day'] is True
     without_capital = tool('ts_returns(close,3)', universe=dataset['universe'], period=dataset['period'],
                            commission_min=5.)
     assert any('minimum commission' in w for w in without_capital['warnings'])

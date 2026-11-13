@@ -116,6 +116,7 @@ class User:
     session_version: int = 1
     created_at: float = 0.0
     last_login_at: float | None = None
+    workspace_id: str = ""
 
     def public(self) -> dict:
         return {"id": self.id, "username": self.username, "role": self.role,
@@ -137,7 +138,8 @@ CREATE TABLE IF NOT EXISTS users (
     disabled INTEGER NOT NULL DEFAULT 0,
     session_version INTEGER NOT NULL DEFAULT 1,
     created_at REAL NOT NULL,
-    last_login_at REAL
+    last_login_at REAL,
+    workspace_id TEXT
 );
 CREATE TABLE IF NOT EXISTS api_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -189,6 +191,13 @@ class AccountStore:
         self._lock = threading.RLock()
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            # Serialize migration across web workers. Existing accounts receive
+            # a durable random namespace; a rebuilt DB cannot reuse old IDs.
+            c.execute('BEGIN IMMEDIATE')
+            if 'workspace_id' not in {row[1] for row in c.execute('PRAGMA table_info(users)')}:
+                c.execute('ALTER TABLE users ADD COLUMN workspace_id TEXT')
+            c.execute("UPDATE users SET workspace_id=lower(hex(randomblob(16))) WHERE workspace_id IS NULL OR workspace_id=''")
+            c.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_workspace_id ON users(workspace_id)')
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -207,7 +216,7 @@ class AccountStore:
         return User(id=row["id"], username=row["username"], role=row["role"],
                     display_name=row["display_name"], disabled=bool(row["disabled"]),
                     session_version=row["session_version"], created_at=row["created_at"],
-                    last_login_at=row["last_login_at"])
+                    last_login_at=row["last_login_at"], workspace_id=row['workspace_id'])
 
     def audit(self, actor: str | None, action: str, detail: str = "") -> None:
         with self._lock, self._conn() as c:
@@ -224,9 +233,9 @@ class AccountStore:
             raise AccountError(f"role must be one of {', '.join(ROLES)}")
         try:
             return c.execute(
-                "INSERT INTO users (username, display_name, password_hash, role, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (username, str(display_name or "")[:120], hash_password(password), role, time.time()),
+                "INSERT INTO users (username, display_name, password_hash, role, created_at, workspace_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (username, str(display_name or "")[:120], hash_password(password), role, time.time(), secrets.token_hex(16)),
             ).lastrowid
         except sqlite3.IntegrityError as exc:
             raise AccountError("username already taken") from exc
@@ -477,7 +486,8 @@ def _unb64(s: str) -> bytes:
 
 
 def sign_session(secret: bytes, user: User, ttl_s: int) -> str:
-    payload = json.dumps({"u": user.id, "v": user.session_version, "exp": int(time.time()) + int(ttl_s)},
+    payload = json.dumps({"u": user.id, "v": user.session_version, "w": user.workspace_id,
+                          "exp": int(time.time()) + int(ttl_s)},
                          separators=(",", ":")).encode()
     return f"{_b64(payload)}.{_b64(hmac.new(secret, payload, hashlib.sha256).digest())}"
 

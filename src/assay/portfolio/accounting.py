@@ -90,6 +90,7 @@ class PortfolioAccountant:
         limit_ups: np.ndarray | None = None,
         limit_downs: np.ndarray | None = None,
         adv_fractions: np.ndarray | None = None,
+        adv_notional: np.ndarray | None = None,
         tradable_masks: np.ndarray | None = None,
         dates: list[str] | None = None,
         symbols: list[str] | None = None,
@@ -135,6 +136,12 @@ class PortfolioAccountant:
         if rets.ndim != 2:
             raise ValueError("daily_returns must be 2-D (T, N)")
         T, N = rets.shape
+        if adv_notional is not None:
+            if adv_fractions is not None or self.config.initial_capital is None:
+                raise ValueError('adv_notional requires capital and cannot be combined with adv_fractions')
+            adv_notional = np.asarray(adv_notional, dtype=np.float64)
+            if adv_notional.shape != (T, N):
+                raise ValueError('adv_notional must match daily_returns')
         rets = np.where(np.isfinite(rets), rets, 0.0)  # NaN return -> 0 for that name
         if (pre_trade_returns is None) != (post_trade_returns is None):
             raise ValueError('supply both pre_trade_returns and post_trade_returns')
@@ -176,6 +183,8 @@ class PortfolioAccountant:
         diag = {"limit_hit_count": 0.0, "forced_hold_count": 0.0,
                 "blocked_suspended": 0.0, "blocked_adv": 0.0, "n_trades": 0.0,
                 "blocked_cash": 0.0, "blocked_limit_data": 0.0, "n_orders": 0.0}
+        if adv_notional is not None:
+            diag['blocked_liquidity_data'] = 0.0
 
         step = 0
         for t in range(T):
@@ -215,6 +224,13 @@ class PortfolioAccountant:
                     lim_dn = limit_downs[t] if limit_downs is not None else None
                     advf = adv_fractions[t] if adv_fractions is not None else None
                     mask = tradable_masks[t] if tradable_masks is not None else None
+                    liquidity_mask = None
+                    if adv_notional is not None:
+                        liquidity = adv_notional[t]
+                        available = np.isfinite(liquidity) & (liquidity > 0)
+                        liquidity_mask = available
+                        advf = np.divide(np.abs(target - cur_w) * self.config.initial_capital * nav_val,
+                                         liquidity, out=np.full(N, np.nan), where=available)
                     d_lbl = dates[t] if dates is not None else ""
 
                     if run_cost_model is not None:
@@ -227,6 +243,7 @@ class PortfolioAccountant:
                         limit_up=lim_up,
                         limit_down=lim_dn,
                         adv_fraction=advf,
+                        liquidity_mask=liquidity_mask,
                         tradable_mask=mask,
                         acquired_step=acquired_step,
                         acquired_units=acquired_units,

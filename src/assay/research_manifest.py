@@ -108,9 +108,10 @@ def validate_state(state, *, allow_running=False):
             if dataset['backend'] == 'factordb_ades':
                 from assay.research_lifecycle import identity
                 from assay.factordb.registry import spec_key
+                from assay.integrations.factordb import _job_id
                 expected = dict(factor_id=identity(attempt['expr'])[0], request_id=attempt['id'],
                     spec=spec_key(dataset['universe'], *dataset['period'], dataset['horizons'], dataset['execution']),
-                    job_id='rjob_' + hashlib.sha256(attempt['id'].encode()).hexdigest()[:24])
+                    job_id=_job_id(attempt['id'], execution.get('owner', 'research')))
                 if dataset['execution'] == 'next_close' and 'evaluation_protocol' not in dataset:
                     legacy = json.dumps([dataset['universe'], *dataset['period'], dataset['horizons'], 'next_close'])
                     expected['spec'] = hashlib.blake2b(legacy.encode(), digest_size=8).hexdigest()

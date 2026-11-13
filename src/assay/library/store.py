@@ -21,9 +21,12 @@ Design notes:
 from __future__ import annotations
 
 import json
+import re
+import threading
 from pathlib import Path
 
 from assay.library.report import FactorReport, FactorSummary
+from assay.library._atomic import write_text
 
 __all__ = ["FactorLibrary"]
 
@@ -56,14 +59,19 @@ class FactorLibrary:
         self.path.mkdir(parents=True, exist_ok=True)
         # factor_id -> FactorSummary (the queryable index)
         self._index: dict[str, FactorSummary] = {}
+        self._lock = threading.RLock()
+        self._index_stamp = None
         self._reindex()
 
     # -- internals ---------------------------------------------------------
     def _file(self, factor_id: str) -> Path:
+        if not isinstance(factor_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', factor_id):
+            raise ValueError('invalid factor id')
         return self.path / f"{factor_id}.json"
 
     def _reindex(self) -> None:
         """Rebuild the in-memory summary index by scanning the directory."""
+        stamp = self._signature()
         self._index.clear()
         for fp in sorted(self.path.glob("*.json")):
             try:
@@ -73,6 +81,23 @@ class FactorLibrary:
             report = FactorReport.from_dict(d)
             fid = report.factor_id or fp.stem
             self._index[fid] = FactorSummary.from_report(report)
+        self._index_stamp = stamp
+
+    def _signature(self):
+        # Directory timestamps can have coarse granularity. Atomic replacements
+        # give each version a new inode, even when writes share one timestamp.
+        rows = []
+        for path in self.path.glob('*.json'):
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            rows.append((path.name, stat.st_ino, stat.st_mtime_ns, stat.st_size))
+        return tuple(sorted(rows))
+
+    def _refresh(self):
+        if self._signature() != self._index_stamp:
+            self._reindex()
 
     # -- write -------------------------------------------------------------
     def save(self, report: FactorReport) -> str:
@@ -83,8 +108,9 @@ class FactorLibrary:
         """
         fid = report.factor_id or FactorReport.compute_factor_id(report.expr_canonical)
         report.factor_id = fid
-        self._file(fid).write_text(report.to_json())
-        self._index[fid] = FactorSummary.from_report(report)
+        with self._lock:
+            write_text(self._file(fid), report.to_json())
+            self._index[fid] = FactorSummary.from_report(report)
         return fid
 
     # -- read --------------------------------------------------------------
@@ -101,7 +127,10 @@ class FactorLibrary:
     def all_reports(self) -> list[FactorReport]:
         """Load every stored report (full objects). Order matches the sorted index keys."""
         out: list[FactorReport] = []
-        for fid in self._index:
+        with self._lock:
+            self._refresh()
+            ids = list(self._index)
+        for fid in ids:
             r = self.get(fid)
             if r is not None:
                 out.append(r)
@@ -130,7 +159,9 @@ class FactorLibrary:
         non-finite metrics treated as ``-inf``. ``factor_id`` breaks ties for
         determinism. ``limit``/``offset`` page the result (``limit < 0`` -> no cap).
         """
-        rows = list(self._index.values())
+        with self._lock:
+            self._refresh()
+            rows = list(self._index.values())
 
         # --- filter ---
         def _keep(s: FactorSummary) -> bool:
@@ -168,15 +199,13 @@ class FactorLibrary:
         if isinstance(ids, str):
             ids = [ids]
         n = 0
-        for fid in ids:
-            fp = self._file(fid)
-            existed = self._index.pop(fid, None) is not None
-            if fp.exists():
+        with self._lock:
+            for fid in ids:
+                fp = self._file(fid)
+                self._index.pop(fid, None)
                 try:
                     fp.unlink()
-                    existed = True
-                except OSError:
+                    n += 1
+                except FileNotFoundError:
                     pass
-            if existed:
-                n += 1
         return n

@@ -62,6 +62,10 @@ class PortfolioBacktestRequest(BaseModel):
     NASDAQ-100 cost & limit defaults) overridden by the inline fields. ``as_of`` is
     the point-in-time knowledge cutoff forwarded to the run (defaults inside the
     backtester to ``config.as_of_date`` then ``period_end``).
+
+    Inline requests with initial_capital enable trailing liquidity automatically.
+    A nested config is replayed verbatim; include liquidity_model and
+    liquidity_volume_multiplier explicitly if liquidity is desired.
     """
 
     # Allow extra top-level fields so callers can pass config knobs inline
@@ -110,6 +114,10 @@ class PortfolioBacktestRequest(BaseModel):
         market = str(extra.pop("market", "") or "").upper()
         if market not in ("US", "A", "HK"):
             market = _market_for_universe(str(extra.get("universe") or ""))
+        if extra.get('initial_capital') is not None and 'liquidity_model' not in extra:
+            extra['liquidity_model'] = 'trailing_notional_v1'
+            if market != 'A':
+                extra.setdefault('liquidity_volume_multiplier', 1.0)
         return PortfolioBacktestConfig.preset(market, **extra)
 
 

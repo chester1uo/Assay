@@ -41,8 +41,8 @@ def normalize_portfolio(dataset, options, market):
         raise ValueError('portfolio universe, period, as_of, execution and adjustment must match dataset')
     if options.get('execution_offset_days', 1) != 1:
         raise ValueError('portfolio execution_offset_days must match next-day dataset execution')
-    # Missing market-specific data is not synthesized. The default cost is the
-    # market preset commission; impact requires explicit participation inputs.
+    # Market-specific inputs are not synthesized; liquidity is configured by
+    # dataset registration and preserved in the frozen portfolio settings.
     params = {**options, **fixed}
     params.pop('market')
     config = PortfolioBacktestConfig.preset(fixed['market'], **params)
@@ -58,8 +58,10 @@ def evaluate_portfolio(service, expr, dataset, *, engine=None):
     report['spec_hash'] = dataset['spec_hash']
     report['cost_drag_definition'] = ('gross_return minus total_return; positive values represent return lost to costs. '
                                       'Gross NAV follows the realized net portfolio weights.')
+    liquidity = (report.get('attribution') or {}).get('liquidity') or {}
     report['cost_assumptions'] = dict(commission_rate=config.commission_rate, commission_min=config.commission_min,
-        slippage_model=config.slippage_model, impact_participation_supplied=False,
+        slippage_model=config.slippage_model, impact_participation_supplied=bool(liquidity.get('valid_entries')),
         minimum_commission_capital_supplied=config.initial_capital is not None,
-        initial_capital=config.initial_capital)
+        initial_capital=config.initial_capital, liquidity_model=config.liquidity_model,
+        liquidity_data=liquidity or None)
     return report

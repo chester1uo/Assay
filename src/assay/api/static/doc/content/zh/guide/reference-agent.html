@@ -25,12 +25,14 @@ python -m assay.demo --output ./demo-workspace
 export ASSAY_DATA_DIR=&quot;$PWD/agent-workspace&quot;
 # 通过自己的密钥管理方式设置 DEEPSEEK_API_KEY。
 python -m assay.agent \
-  --base-url https://api.deepseek.com --model deepseek-flash \
-  --api-key-env DEEPSEEK_API_KEY --extra-body '{&quot;thinking&quot;:{&quot;type&quot;:&quot;disabled&quot;}}' \
+  --preset deepseek-flash \
   --task-file task.txt --output ./agent-run \
   --max-turns 8 --max-tool-calls 16 --max-tokens 4096 \
   --server-command python -m assay.mcp.server
 </code></pre>
+<p><code>--preset deepseek-flash</code> 使用 DeepSeek 官方 API、<code>deepseek-flash</code> 模型和
+<code>DEEPSEEK_API_KEY</code> 环境变量，默认关闭独立思考模式。也可以继续显式指定
+<code>--base-url</code>、<code>--model</code>、<code>--api-key-env</code> 和 <code>--extra-body</code> 来连接其他供应商。</p>
 <p><code>task.txt</code> 可以要求 Agent 发现合成数据集、创建三次尝试预算的会话、检验反转假设、查看
 失败原因并保存交接笔记。<code>--server-command</code> 放在最后。客户端和服务端使用的 Python 均需
 安装 MCP extra。工具定义、研究文本与报告会发送给配置的模型提供商；密钥保留在环境变量

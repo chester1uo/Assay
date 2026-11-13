@@ -1,5 +1,8 @@
 # Assay Documentation
 
+See the [project overview](project-overview.md) for the architecture, research
+workflow, and the distinction between local and deployed capabilities.
+
 Assay is a point-in-time-correct, agent-native factor backtesting engine for LLM-driven alpha
 mining. This folder holds the **design specs** and the **usage guides**.
 

@@ -300,6 +300,14 @@ class ResearchWorkspace:
             spec['evaluation_protocol'] = 'assay-daily-v2'
             if portfolio is None and (score or execution == 'close'):
                 portfolio = {'enabled': False}
+            if isinstance(portfolio, dict) and portfolio.get('initial_capital') is not None:
+                portfolio = dict(portfolio)
+                if 'liquidity_model' not in portfolio:
+                    portfolio['liquidity_model'] = 'trailing_notional_v1'
+                if portfolio.get('liquidity_model') and 'liquidity_volume_multiplier' not in portfolio:
+                    if self.backends[backend].service._market_for(universe) == 'CN':
+                        raise ValueError('A-share liquidity requires liquidity_volume_multiplier: 100 for Tushare lots or 1 for shares')
+                    portfolio['liquidity_volume_multiplier'] = 1.0
             spec['portfolio'] = normalize_portfolio(spec, {} if portfolio is None else portfolio,
                                                    self.backends[backend].service._market_for(universe))
             if spec['portfolio'].get('enabled') is not False:

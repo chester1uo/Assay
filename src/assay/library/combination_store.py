@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from assay.library._atomic import write_text
 
 __all__ = ["CombinationStore", "LAST_RUN_ID"]
 
@@ -51,6 +53,8 @@ class CombinationStore:
         self.path = Path(path)
         self.path.mkdir(parents=True, exist_ok=True)
         self._index: dict[str, dict[str, Any]] = {}
+        self._lock = threading.RLock()
+        self._index_stamp = None
         self._reindex()
 
     # -- internals ---------------------------------------------------------
@@ -92,6 +96,7 @@ class CombinationStore:
         }
 
     def _reindex(self) -> None:
+        stamp = self._signature()
         self._index.clear()
         for fp in sorted(self.path.glob("*.json")):
             try:
@@ -100,6 +105,21 @@ class CombinationStore:
                 continue
             cid = rec.get("id") or fp.stem
             self._index[cid] = self._summarize(rec)
+        self._index_stamp = stamp
+
+    def _signature(self):
+        rows = []
+        for path in self.path.glob('*.json'):
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            rows.append((path.name, stat.st_ino, stat.st_mtime_ns, stat.st_size))
+        return tuple(sorted(rows))
+
+    def _refresh(self):
+        if self._signature() != self._index_stamp:
+            self._reindex()
 
     # -- write -------------------------------------------------------------
     def save(self, result: dict, *, name: str | None = None, record_id: str | None = None) -> dict[str, Any]:
@@ -112,9 +132,10 @@ class CombinationStore:
         saved_at = _now_iso()
         cid = record_id or self._make_id(result, name, saved_at)
         rec = {"id": cid, "name": name or "", "saved_at": saved_at, "result": result}
-        self._file(cid).write_text(json.dumps(rec, default=str))
-        self._index[cid] = self._summarize(rec)
-        return self._index[cid]
+        with self._lock:
+            write_text(self._file(cid), json.dumps(rec, default=str))
+            self._index[cid] = self._summarize(rec)
+            return self._index[cid]
 
     # -- read --------------------------------------------------------------
     def get(self, cid: str) -> dict[str, Any] | None:
@@ -129,7 +150,9 @@ class CombinationStore:
 
     def list(self, *, include_last: bool = True, limit: int = 200) -> list[dict[str, Any]]:
         """Saved-run summaries, newest first (the rolling last run first when kept)."""
-        rows = [dict(s) for s in self._index.values()]
+        with self._lock:
+            self._refresh()
+            rows = [dict(s) for s in self._index.values()]
         if not include_last:
             rows = [r for r in rows if not r.get("is_last")]
         # last run pinned first, then by saved_at descending.
@@ -141,17 +164,15 @@ class CombinationStore:
         if isinstance(ids, str):
             ids = [ids]
         n = 0
-        for cid in ids:
-            fp = self._file(cid)
-            existed = self._index.pop(cid, None) is not None
-            if fp.exists():
+        with self._lock:
+            for cid in ids:
+                fp = self._file(cid)
+                self._index.pop(cid, None)
                 try:
                     fp.unlink()
-                    existed = True
-                except OSError:
+                    n += 1
+                except FileNotFoundError:
                     pass
-            if existed:
-                n += 1
         return n
 
 

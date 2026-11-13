@@ -8,6 +8,7 @@
     "zh": "入门"
    },
    "pages": [
+    "project-overview",
     "guide/getting-started",
     "guide/webui",
     "guide/cli",
@@ -86,6 +87,70 @@
   }
  ],
  "pages": {
+  "project-overview": {
+   "group": "start",
+   "title": {
+    "en": "Assay project overview",
+    "zh": "Assay 项目总览"
+   },
+   "headings": {
+    "en": [
+     {
+      "id": "research-workflow",
+      "text": "Research workflow",
+      "level": 2
+     },
+     {
+      "id": "interfaces-and-capabilities",
+      "text": "Interfaces and capabilities",
+      "level": 2
+     },
+     {
+      "id": "version-and-evidence-boundaries",
+      "text": "Version and evidence boundaries",
+      "level": 2
+     }
+    ],
+    "zh": [
+     {
+      "id": "定位与边界",
+      "text": "定位与边界",
+      "level": 2
+     },
+     {
+      "id": "数据和研究流程",
+      "text": "数据和研究流程",
+      "level": 2
+     },
+     {
+      "id": "主要模块",
+      "text": "主要模块",
+      "level": 2
+     },
+     {
+      "id": "接口",
+      "text": "接口",
+      "level": 2
+     },
+     {
+      "id": "关键能力的当前状态",
+      "text": "关键能力的当前状态",
+      "level": 2
+     },
+     {
+      "id": "验证与论文材料",
+      "text": "验证与论文材料",
+      "level": 2
+     },
+     {
+      "id": "版本与后续工作",
+      "text": "版本与后续工作",
+      "level": 2
+     }
+    ]
+   },
+   "updated": "2026-11-13"
+  },
   "guide/getting-started": {
    "group": "start",
    "title": {
@@ -836,6 +901,16 @@
       "level": 2
      },
      {
+      "id": "portfolio-accounting-protocol",
+      "text": "Portfolio accounting protocol",
+      "level": 2
+     },
+     {
+      "id": "account-workspaces-and-shared-resources",
+      "text": "Account workspaces and shared resources",
+      "level": 2
+     },
+     {
       "id": "cancel-asynchronous-research",
       "text": "Cancel asynchronous research",
       "level": 2
@@ -888,13 +963,23 @@
       "level": 2
      },
      {
+      "id": "组合记账协议",
+      "text": "组合记账协议",
+      "level": 2
+     },
+     {
+      "id": "账户工作区与共享资源",
+      "text": "账户工作区与共享资源",
+      "level": 2
+     },
+     {
       "id": "取消异步实验",
       "text": "取消异步实验",
       "level": 2
      }
     ]
    },
-   "updated": "2026-11-10"
+   "updated": "2026-11-13"
   },
   "guide/research-audit": {
    "group": "research",

@@ -19,12 +19,17 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
+from assay.sqlite_util import open_wal
 
 __all__ = ["Registry", "spec_key"]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS research_submissions (
     request_id TEXT PRIMARY KEY, inputs TEXT NOT NULL, receipt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS generic_submissions (
+    owner TEXT NOT NULL, request_id TEXT NOT NULL, inputs TEXT NOT NULL, receipt TEXT NOT NULL,
+    PRIMARY KEY (owner, request_id)
 );
 CREATE TABLE IF NOT EXISTS applied_tasks (task_id TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS factors (
@@ -72,14 +77,23 @@ class Registry:
         self._lock = threading.RLock()
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            c.execute('BEGIN IMMEDIATE')
             if "version" not in {r[1] for r in c.execute("PRAGMA table_info(jobs)")}:
                 c.execute("ALTER TABLE jobs ADD COLUMN version TEXT")
 
     def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.path, timeout=30)
-        c.row_factory = sqlite3.Row
-        c.execute("PRAGMA journal_mode=WAL")
-        return c
+        return open_wal(self.path)
+
+    def generic_submission(self, owner, request_id):
+        with self._conn() as c:
+            row = c.execute('SELECT inputs, receipt FROM generic_submissions WHERE owner=? AND request_id=?',
+                            (owner or 'anonymous', request_id)).fetchone()
+        return None if row is None else {'inputs': row['inputs'], 'receipt': json.loads(row['receipt'])}
+
+    def is_idempotent_job(self, job_id):
+        with self._conn() as c:
+            return c.execute("SELECT 1 FROM generic_submissions WHERE json_extract(receipt,'$.job_id')=? LIMIT 1",
+                             (job_id,)).fetchone() is not None
 
     # ── factors ──────────────────────────────────────────────────────────────
     def add_factor(self, fid: str, canonical: str, expr: str, owner: str | None,
@@ -212,6 +226,12 @@ class Registry:
                              "FROM jobs" + (" WHERE owner = ?" if owner else "") + " ORDER BY created DESC LIMIT ?",
                              ((owner, limit) if owner else (limit,))).fetchall()
         return [dict(r) for r in rows]
+
+    def pending_dispatches(self):
+        """Durable generic jobs that may still need queue dispatch."""
+        with self._conn() as c:
+            rows = c.execute("SELECT * FROM jobs WHERE status IN ('queued','running') AND id LIKE 'job_%' AND done=0 AND failed=0").fetchall()
+        return [{**dict(r), 'factor_ids': json.loads(r['factor_ids']), 'exprs': json.loads(r['exprs'])} for r in rows]
 
     def apply_task_results(self, task, results, seconds):
         """Atomically retain scores, progress and usage once per durable task receipt."""

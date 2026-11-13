@@ -9,7 +9,7 @@ Assay 为外部 Agent 提供持久研究状态与因子执行工具。模型、�
 | Research Session | 研究目标、发起 Agent、尝试次数预算、持久笔记和实验历史 |
 | Experiment | 独立尝试 ID、请求 ID、假设、表达式、父实验、状态、完整评估报告或异常 |
 
-工作区位于 `<data_dir>/research/workspace.sqlite3`。现有 `assay.Session` 是临时计算面板缓存，
+本地或服务密钥工作区位于 `<data_dir>/research/workspace.sqlite3`。现有 `assay.Session` 是临时计算面板缓存，
 研究会话独立于该缓存，重启服务后仍可读取。
 
 ## Python 示例
@@ -221,7 +221,17 @@ SDK 使用 `target.import_session(manifest)`，MCP 使用 `assay_research_import
 
 组合目标权重以交易前净值为基准。成交数量确定后，交易成本从现金扣除，持仓权重按扣费后的净值重新计算。不加杠杆的多头组合会预留交易费用；明确启用杠杆或多空交易的组合可以借款。新建组合评估数据集和实验记录 `portfolio_accounting_protocol: cash-funded-v1`，Agent 也可以从 Assay 后端能力中发现该协议。旧 session 可继续使用原数据集：历史记录保持不变，新实验记录当前协议。不同成本协议的结果会标记为不可直接比较；重放要求使用原协议。
 
-将 `portfolio.initial_capital` 设为市场货币计价的正数，即可按货币金额应用 `commission_min` 最低佣金；组合价值变化时，成本模型会同步更新货币净值。未提供本金时，非零最低佣金不会生效，报告会提示；显式提供的本金会参与数据集和回测身份计算。研究评估目前不自动根据市场成交量计算订单参与率；缺少参与率输入时，容量上限和市场冲击不生效。
+新注册的数据集将 `portfolio.initial_capital` 设为市场货币计价的正数后，会自动启用历史流动性模型。每次调仓时，以当时组合净值计算订单金额，除以前 `adv_window` 个交易日（默认 20 日）未复权收盘价与成交量乘积的均值，得到订单参与率；执行日行情不参与计算。系统按 `max_adv_fraction` 限制成交，并根据实际成交参与率计算所配置的市场冲击。历史数据不足或缺失时，受影响订单会被阻断。`partial_fill_handling="force"` 会绕过容量上限，报告会提示。流动性记录包括数据覆盖、阻断订单和冲击是否生效。数据商可能修订历史行情，这一计算本身不保证历史版本的时点正确性。
+
+美股和港股默认成交量单位为股；A 股必须显式填写 `liquidity_volume_multiplier`：Tushare 的手为 100，数据已按股计时为 1。例如 `portfolio={"initial_capital": 1000000, "liquidity_volume_multiplier": 100}`。显式设置 `liquidity_model: null` 可关闭自动流动性模型；未提供本金或参与率时，容量和市场冲击不生效，报告会提示。已有冻结数据集保持原设置。REST 组合回测的平铺参数在提供本金时自动启用；嵌套 `config` 按原配置重放，需要显式提供 `liquidity_model` 和成交量倍率。
+
+## 账户工作区与共享资源
+
+启用账户认证后，REST 和 HTTP MCP 根据认证账户选择独立的持久研究工作区；同一用户的登录和个人 API 密钥访问同一工作区。服务密钥继续访问原有共享服务工作区，应作为特权集成凭据保管。首次升级会为已有账户生成持久随机身份，原浏览器登录需重新登录；账户数据库和工作区数据应一起备份和恢复。此前实验版本中按数字用户 ID 建立的私人目录不会自动分配给新身份，需要管理员核实归属后迁移所需记录。历史共享会话仍保留在原工作区；管理员核实归属后，可以逐个导出并导入相应账户。本地 Python 和未启用认证的部署仍使用本地共享工作区。
+
+研究数据集、会话、实验、笔记、研究因子注册表、因子库、已保存组合、临时面板会话和计算缓存按账户隔离。私人工作区可以复用本账户的研究面板和计算缓存。市场行情和物理计算资源仍共享。原有共享因子库及组合仍可由服务密钥访问，账户工作区使用各自的新存储。配置 FactorDB 与 ADES 后，个人账户可使用自己的 FactorDB 注册库及 `factordb_ades` 研究后端。任务、评分、因子元数据、相似度指纹和计算用量按账户隔离；ADES 队列及 worker 共享。执行任务的 worker 和服务器运维人员可以看到因子表达式，必须属于可信执行环境。`ASSAY_FACTORDB_BUDGET_S` 可设置每个账户的每日计算预算，在提交前检查；系统尚未提供硬性 CPU、内存和存储配额。临时面板 session 保存在单个进程中：同一 session 的请求需要路由到同一个 worker，服务重启后需重新创建；持久研究 session、已保存因子和组合可以跨进程及重启读取。
+
+启用私人分布式研究时，在控制器配置 `ASSAY_FACTORDB_DIR`、`ASSAY_QFV_PANEL_DIR` 和 `ASSAY_ADES=1`，并通过 `ASSAY_WORKER_KEYS` 配置可信 worker。个人账户可用 `/v1/fdb/markets` 或 `assay_backend_list(probe=true)` 获取数据版本，再注册 `backend="factordb_ades"`、`snapshot_id` 为该版本、`adj="total"` 且 `as_of` 等于结束日的数据集，通过研究 REST 或 MCP 工具提交与恢复实验。个人 `/v1/fdb/*` 和 `fdb_*` 使用同一私有计算注册库；未启用 ADES 时，这些计算操作会提示私人后端不可用，本地 Assay 研究后端仍可使用。 私人 ADES 任务需要支持租约 token 的新版 worker。普通 ADES `fdb_submit` 可由客户端提供 `request_id`；重试时复用同一 ID 和完全相同的输入。REST `POST /v1/fdb/submit` 与 MCP `fdb_submit` 共用账户级请求记录，同一 ID 对应不同输入会返回冲突。不提供 ID 时重试可能产生第二个任务；非 ADES 模式暂不支持该参数。
 
 ## 取消异步实验
 

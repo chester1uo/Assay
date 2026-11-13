@@ -26,6 +26,29 @@ RESEARCH_TOOLS = {
     'assay_experiment_replay', 'assay_lint',
 }
 
+MODEL_PRESETS = {
+    'deepseek-flash': {
+        'base_url': 'https://api.deepseek.com',
+        'model': 'deepseek-flash',
+        'api_key_env': 'DEEPSEEK_API_KEY',
+        'extra_body': {'thinking': {'type': 'disabled'}},
+    },
+}
+
+
+def model_options(preset=None, *, base_url=None, model=None, api_key_env=None, extra_body=None):
+    """Resolve explicit provider settings and an optional reference-client preset."""
+    if preset is not None and preset not in MODEL_PRESETS:
+        raise ValueError('unknown model preset')
+    defaults = MODEL_PRESETS.get(preset, {})
+    url = base_url or defaults.get('base_url')
+    model_name = model or defaults.get('model')
+    if not url or not model_name:
+        raise ValueError('specify --base-url and --model, or choose --preset')
+    return dict(base_url=url, model=model_name,
+                api_key_env=api_key_env or defaults.get('api_key_env', 'ASSAY_AGENT_API_KEY'),
+                extra_body=extra_body if extra_body is not None else defaults.get('extra_body', {}))
+
 
 def normalize_tool_result(result):
     """Decode a single JSON text result as well as structured MCP objects.
@@ -280,16 +303,17 @@ async def run_agent(session, model, *, task: str, output: Path, max_turns=8,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--base-url', required=True)
-    parser.add_argument('--model', required=True)
-    parser.add_argument('--api-key-env', default='ASSAY_AGENT_API_KEY')
+    parser.add_argument('--preset', choices=sorted(MODEL_PRESETS), help='Optional model provider preset')
+    parser.add_argument('--base-url', help='Chat Completions provider base URL')
+    parser.add_argument('--model', help='Provider model identifier')
+    parser.add_argument('--api-key-env', help='Environment variable holding the provider key')
     parser.add_argument('--task-file', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True, help='New directory for receipts and conversation')
     parser.add_argument('--max-turns', type=int, default=8)
     parser.add_argument('--max-tool-calls', type=int, default=16)
     parser.add_argument('--max-tokens', type=int, default=4096)
     parser.add_argument('--temperature', type=float, default=.7)
-    parser.add_argument('--extra-body', type=json.loads, default={})
+    parser.add_argument('--extra-body', type=json.loads, help='Additional provider request settings as JSON')
     parser.add_argument('--allow-returned-model', action='append')
     transport = parser.add_mutually_exclusive_group(required=True)
     transport.add_argument('--mcp-url', help='Remote Streamable HTTP URL, e.g. https://assay.qfinverse.com/mcp/')
@@ -299,11 +323,16 @@ def main():
     args = parser.parse_args()
     if args.server_command is not None and not args.server_command:
         parser.error('server command is empty')
-    key = os.environ.get(args.api_key_env)
+    try:
+        options = model_options(args.preset, base_url=args.base_url, model=args.model,
+                                api_key_env=args.api_key_env, extra_body=args.extra_body)
+    except ValueError as exc:
+        parser.error(str(exc))
+    key = os.environ.get(options['api_key_env'])
     if not key:
         parser.error('API key environment variable is unset')
-    model = ChatModel(args.base_url, key, args.model, temperature=args.temperature,
-                      max_tokens=args.max_tokens, extra_body=args.extra_body,
+    model = ChatModel(options['base_url'], key, options['model'], temperature=args.temperature,
+                      max_tokens=args.max_tokens, extra_body=options['extra_body'],
                       allowed_returned_models=args.allow_returned_model)
 
     async def execute():

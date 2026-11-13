@@ -211,10 +211,11 @@ class SessionRegistry:
 
     _ID_PREFIX = "sess_"
 
-    def __init__(self) -> None:
+    def __init__(self, *, id_prefix: str | None = None) -> None:
         self._sessions: dict[str, SessionCache] = {}
         self._counter: int = 0
         self._lock = threading.Lock()
+        self._id_prefix = id_prefix or self._ID_PREFIX
 
     def create_session(
         self,
@@ -225,7 +226,7 @@ class SessionRegistry:
         """Build a :class:`SessionCache` from ``panel`` and return its session id."""
         with self._lock:
             self._counter += 1
-            session_id = f"{self._ID_PREFIX}{self._counter}"
+            session_id = f"{self._id_prefix}{self._counter}"
             self._sessions[session_id] = SessionCache(session_id, panel, dates, symbols)
             return session_id
 

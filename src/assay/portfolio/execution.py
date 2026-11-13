@@ -94,6 +94,7 @@ class ExecutionSimulator:
         limit_up: np.ndarray | None = None,
         limit_down: np.ndarray | None = None,
         adv_fraction: np.ndarray | None = None,
+        liquidity_mask: np.ndarray | None = None,
         tradable_mask: np.ndarray | None = None,
         acquired_step: dict[int, int] | None = None,
         acquired_units: dict | None = None,
@@ -223,7 +224,9 @@ class ExecutionSimulator:
             untradable = active & (~np.isfinite(price) | (price <= 0.0))
             if tradable_mask is not None:
                 untradable |= active & ~np.asarray(tradable_mask, dtype=bool)
-            live = active & ~untradable
+            missing_liquidity = (active & ~np.asarray(liquidity_mask, dtype=bool)
+                                 if liquidity_mask is not None else np.zeros(n, dtype=bool))
+            live = active & ~(untradable | missing_liquidity)
 
             up_hit = np.zeros(n, dtype=bool)
             down_hit = np.zeros(n, dtype=bool)
@@ -356,12 +359,14 @@ class ExecutionSimulator:
         # Fees-only cash scaling is a completed feasible allocation, not an order
         # to borrow the fee back tomorrow. Retry cash buys when pending sales can
         # actually release funds on a later session.
-        want = untradable | up_hit | down_hit | missing_limits | held | cash_deferred | (cancelled & ~cash_limited & defer) | (traded & capped & defer)
+        want = untradable | missing_liquidity | up_hit | down_hit | missing_limits | held | cash_deferred | (cancelled & ~cash_limited & defer) | (traded & capped & defer)
         residual[want] = tgt[want]
         filled = traded & ~(held | cash_deferred | (capped & defer))
         residual[filled] = new_w[filled]
 
-        diag["blocked_suspended"] = float(untradable.sum())
+        diag["blocked_suspended"] = float((untradable & ~missing_liquidity).sum())
+        if liquidity_mask is not None:
+            diag['blocked_liquidity_data'] = float(missing_liquidity.sum())
         diag["limit_hit_count"] = float(up_hit.sum() + down_hit.sum())
         diag["forced_hold_count"] = float(held.sum())
         diag["blocked_adv"] = float((cancelled & ~held & ~cash_limited).sum())
@@ -376,9 +381,9 @@ class ExecutionSimulator:
         kind = np.zeros(n, dtype=np.int8)
         for code, mask in enumerate((untradable, up_hit, down_hit, held & cancelled,
                                      cancelled & ~held & ~cash_limited, missing_limits,
-                                     cash_limited & cancelled), start=1):
+                                     cash_limited & cancelled, missing_liquidity), start=1):
             kind[mask] = code
-        reasons = (None, "suspended", "limit_up", "limit_down", "t_plus_1", "adv_cap", "limit_data_missing", "cash")
+        reasons = (None, "suspended", "limit_up", "limit_down", "t_plus_1", "adv_cap", "limit_data_missing", "cash", "liquidity_data_missing")
         cur_l, tgt_l, px_l, new_l, fill_l, cost_l = (v.tolist() for v in (cur, tgt, price, new_w, fill, cost))
         kind_l, buy_l = kind.tolist(), buy.tolist()
         for i in np.flatnonzero(active).tolist():
@@ -396,6 +401,8 @@ class ExecutionSimulator:
                     price=float(px_l[i]),
                     qty_frac=float(fill_l[i]),
                     cost=float(cost_l[i]),
+                    participation=(float(advf_filled[i]) if liquidity_mask is not None and advf_filled is not None and
+                                   np.isfinite(advf_filled[i]) else None),
                     blocked_reason=None,
                     deferred_reason="t_plus_1" if held[i] else "cash" if cash_deferred[i] else None,
                 )

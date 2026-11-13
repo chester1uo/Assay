@@ -32,6 +32,7 @@ LANGS = {"en": "en", "zh": "cn"}          # UI language -> docs folder
 # Navigation: (group id, {lang: label}, [(slug, source path under docs/<lang>/)]).
 NAV = [
     ("start", {"en": "Get started", "zh": "入门"}, [
+        ("project-overview", "project-overview.md"),
         ("guide/getting-started", "guide/getting-started.md"),
         ("guide/webui", "guide/webui.md"),
         ("guide/cli", "guide/cli.md"),

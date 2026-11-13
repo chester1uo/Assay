@@ -117,9 +117,23 @@ class ResearchExecutionPool:
     """
     def __init__(self, service, *, max_entries=4, max_bytes=256*1024**2):
         self.service, self.max_entries, self.max_bytes = service, max_entries, max_bytes
+        # The registry is bound to the pool's owner, even if another account
+        # later retires this pool while evicting workspace objects.
+        self.sessions = service.sessions
         self.entries = OrderedDict()
         self.lock = threading.RLock()
+        self.retired = False
         self.hits = self.builds = self.evictions = 0
+
+    def retire(self):
+        """Release idle panels; active leases are released when they finish."""
+        with self.lock:
+            self.retired = True
+            for key, entry in list(self.entries.items()):
+                if not entry['users']:
+                    self.entries.pop(key)
+                    self.sessions.expire(entry['sid'])
+                    self.evictions += 1
 
     def stats(self):
         with self.lock:
@@ -132,7 +146,7 @@ class ResearchExecutionPool:
     def _size(self, entry):
         """Estimated retained panels/arrays, including additional forward horizons."""
         engine=entry['engine']
-        sess=self.service.sessions.get(entry['sid'])
+        sess=self.sessions.get(entry['sid'])
         seen=set()
         def arrays(value):
             if isinstance(value,np.ndarray):
@@ -184,7 +198,7 @@ class ResearchExecutionPool:
                     self.entries[key] = entry
                     self.builds += 1
                 except BaseException:
-                    self.service.expire_session(sid)
+                    self.sessions.expire(sid)
                     raise
             else:
                 self.hits += 1
@@ -205,7 +219,7 @@ class ResearchExecutionPool:
                 for old_key, old in list(self.entries.items()):
                     over = len(self.entries)>self.max_entries or sum(e['bytes'] for e in self.entries.values())>self.max_bytes
                     replaced = old_key[0] == spec and old_key != key
-                    if not old['users'] and (over or replaced or old_key==key and stale):
+                    if not old['users'] and (self.retired or over or replaced or old_key==key and stale):
                         self.entries.pop(old_key)
-                        self.service.expire_session(old['sid'])
+                        self.sessions.expire(old['sid'])
                         self.evictions += 1

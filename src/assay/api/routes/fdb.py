@@ -17,12 +17,17 @@ def _svc():
     from assay.factordb import service
 
     try:
-        return service.get()
+        return service.for_current()
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
 
 def _owner(request: Request) -> str:
+    from assay.research_tenant import current_tenant
+    from assay.factordb.service import owner_for_tenant
+    tenant = current_tenant.get()
+    if tenant is not None:
+        return owner_for_tenant(tenant)
     user = getattr(request.state, "user", None)
     return user.username if user is not None else "anonymous"
 
@@ -48,13 +53,22 @@ def submit(request: Request, body: dict = Body(...), _k=Depends(get_api_key)):
     if len(exprs) > 5000:
         raise HTTPException(413, "at most 5000 expressions per submit")
     svc, owner = _svc(), _owner(request)
-    if svc.over_budget(owner):
+    request_id = body.get('request_id')
+    saved = svc.reg.generic_submission(owner, request_id) if isinstance(request_id, str) else None
+    if svc.over_budget(owner) and saved is None:
         raise HTTPException(429, "daily compute budget used up; already-scored factors stay queryable")
     if not body.get("universe") or not body.get("start"):
         raise HTTPException(422, "universe and start are required")
-    return _call(svc.submit, owner, exprs, universe=body["universe"], start=body["start"], end=body.get("end"),
-                      horizons=body.get("horizons") or (1, 5, 10, 20), execution=body.get("execution", "next_open"),
-                      tags=body.get("tags") or (), parents=body.get("parents") or (), label=str(body.get("label", "")))
+    from assay.factordb.agent import SubmissionConflict
+    try:
+        return svc.submit(owner, exprs, universe=body["universe"], start=body["start"], end=body.get("end"),
+                          horizons=body.get("horizons") or (1, 5, 10, 20), execution=body.get("execution", "next_open"),
+                          tags=body.get("tags") or (), parents=body.get("parents") or (),
+                          label=str(body.get("label", "")), request_id=request_id)
+    except SubmissionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.get("/jobs/{job_id}")

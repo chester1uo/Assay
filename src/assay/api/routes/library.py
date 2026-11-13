@@ -105,9 +105,9 @@ async def save_factor(
     svc = get_service()
     try:
         fr = FactorReport.from_dict(report)
+        fid = svc.library.save(fr)
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"invalid FactorReport body: {exc}") from exc
-    fid = svc.library.save(fr)
     return SaveFactorResponse(factor_id=fid, saved=True)
 
 

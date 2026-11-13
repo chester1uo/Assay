@@ -188,7 +188,36 @@ class PortfolioBacktester:
         warnings: list[str] = []
         if config.commission_min and config.initial_capital is None:
             warnings.append("No initial capital supplied; minimum commission is not applied.")
-        if adv is None:
+        liquidity = None
+        adv_notional = None
+        if config.liquidity_model is not None:
+            if adv is not None:
+                raise ValueError('explicit adv cannot be combined with liquidity_model')
+            from assay.portfolio.liquidity import trailing_notional
+            try:
+                if self.store is None:
+                    raise ValueError('raw market data store is unavailable')
+                adv_notional = trailing_notional(self.store, dates, symbols, as_of=cutoff,
+                    window=config.adv_window, volume_multiplier=config.liquidity_volume_multiplier,
+                    calendar={'US': 'XNYS', 'A': 'XSHG', 'HK': 'XHKG'}[config.market])
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                adv_notional = np.full((T, N), np.nan)
+                warnings.append(f'Trailing liquidity data unavailable ({type(exc).__name__}: {exc}); affected orders are blocked.')
+            liquidity = dict(model=config.liquidity_model, window=config.adv_window,
+                             volume_multiplier=config.liquidity_volume_multiplier,
+                             calendar={'US': 'XNYS', 'A': 'XSHG', 'HK': 'XHKG'}[config.market],
+                             price_basis='unadjusted close', excludes_execution_day=True,
+                             missing_data='block order', valid_entries=int(np.isfinite(adv_notional).sum()),
+                             capacity_enabled=config.partial_fill_handling != 'force')
+            import hashlib
+            canonical = np.array(adv_notional, dtype='<f8', order='C', copy=True)
+            canonical[np.isnan(canonical)] = np.nan
+            liquidity['notional_sha256'] = hashlib.sha256(canonical.tobytes()).hexdigest()
+            if config.market == 'A' and config.liquidity_volume_multiplier == 100:
+                warnings.append('A-share liquidity assumes volume is in 100-share lots; verify the data source units.')
+            if config.partial_fill_handling == 'force':
+                warnings.append('partial_fill_handling=force bypasses the participation capacity limit.')
+        elif adv is None:
             warnings.append("No order participation supplied; capacity limits and market impact are not applied.")
         elif not np.all(np.isfinite(adv) & (np.asarray(adv) > 0)):
             warnings.append("Some order participation inputs are missing or nonpositive; capacity and impact are not applied to those entries.")
@@ -277,6 +306,7 @@ class PortfolioBacktester:
             limit_ups=cn_up,
             limit_downs=cn_dn,
             adv_fractions=adv_mat,
+            adv_notional=adv_notional,
             tradable_masks=mask_mat,
             dates=date_lbls,
             symbols=[str(s) for s in symbols],
@@ -288,6 +318,8 @@ class PortfolioBacktester:
 
         if acct.diag.get("blocked_limit_data", 0):
             warnings.append(f"{int(acct.diag['blocked_limit_data'])} orders blocked: missing A-share price-limit data.")
+        if acct.diag.get('blocked_liquidity_data', 0):
+            warnings.append(f"{int(acct.diag['blocked_liquidity_data'])} orders blocked: insufficient trailing liquidity data.")
 
         # --- 9. benchmark series ------------------------------------------------
         # The equal-weight index proxy must be *factor-independent* — keyed off
@@ -302,7 +334,7 @@ class PortfolioBacktester:
         )
 
         # --- 10. assemble the report -------------------------------------------
-        return self._assemble(
+        report = self._assemble(
             run_id=run_id,
             factor_id=factor_id,
             config=config,
@@ -314,6 +346,15 @@ class PortfolioBacktester:
             adj=self._adj(config),
             warnings=warnings,
         )
+        if liquidity is not None:
+            liquidity['blocked_orders'] = int(acct.diag.get('blocked_liquidity_data', 0))
+            liquidity['filled_orders_with_participation'] = int(acct.diag.get('n_trades', 0))
+            liquidity['impact_applied'] = bool(
+                liquidity['filled_orders_with_participation'] and
+                config.slippage_model != 'zero' and config.slippage_k > 0
+            )
+            report.attribution['liquidity'] = liquidity
+        return report
 
     # ================================================================= helpers ==
 

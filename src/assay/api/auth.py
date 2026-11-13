@@ -138,7 +138,8 @@ def resolve_user(request: Request, presented: str | None = None) -> User | None:
     if not data:
         return None
     user = account_store().get_user(int(data.get("u", 0)))
-    if user is None or user.disabled or user.session_version != data.get("v"):
+    if (user is None or user.disabled or user.session_version != data.get("v")
+            or not user.workspace_id or user.workspace_id != data.get("w")):
         return None
     # A cookie rides along with cross-site requests; changes must come from this site.
     if request.method not in ("GET", "HEAD", "OPTIONS") and not _same_origin(request):
