@@ -55,6 +55,51 @@
 <td>执行实验／追加笔记</td>
 </tr>
 <tr>
+<td>GET / POST</td>
+<td><code>/sessions/{id}/checkpoints</code></td>
+<td>列出搜索状态／按版本保存</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/sessions/{id}/checkpoints/{name}</code></td>
+<td>恢复搜索状态并检查期间的新实验</td>
+</tr>
+<tr>
+<td>GET / POST</td>
+<td><code>/programs</code></td>
+<td>查找／创建跨窗口研究任务</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/programs/import</code></td>
+<td>原子恢复完整研究任务</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/programs/{id}/manifest</code></td>
+<td>导出任务及关联会话</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/programs/{id}</code> · <code>/factors/{factor_id}</code></td>
+<td>检查关联 session／因子历史</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/programs/{id}/candidates</code></td>
+<td>查看规范因子池及各 session 的决策</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/programs/{id}/sessions</code> · <code>/reassessments</code></td>
+<td>关联 session／在另一窗口重新评估</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/programs/{id}/window-comparisons</code></td>
+<td>比较兼容且不重叠窗口的 RankIC 变化</td>
+</tr>
+<tr>
 <td>GET</td>
 <td><code>/experiments/{id}</code></td>
 <td>摘要，或用 <code>section</code>、<code>offset</code>、<code>limit</code> 分页</td>

@@ -37,6 +37,7 @@ def apply_score_window(report: dict, dataset: dict) -> dict:
         "universe_as_of", "universe_symbols_hash", "data_as_of", "execution", "adj",
         "neutralize", "lineage", "duration_ms", "failure_mode", "suggestion",
         "lookahead_detected", "diagnostics", "schema_version", "granularity",
+        "rank_ic_definition",
     )
     result = {key: report[key] for key in metadata if key in report}
     expected = dataset["score_dates"]

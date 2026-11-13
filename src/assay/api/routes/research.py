@@ -39,6 +39,38 @@ class NoteRequest(ResearchRequest):
     text: str = Field(min_length=1)
 
 
+class CheckpointRequest(ResearchRequest):
+    name: str = Field(min_length=1, max_length=100)
+    algorithm: str = Field(min_length=1, max_length=100)
+    state: dict
+    request_id: str = Field(min_length=1, max_length=200)
+    expected_revision: int = Field(ge=0, strict=True)
+    expected_state_revision: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
+
+
+class ProgramRequest(ResearchRequest):
+    name: str = Field(min_length=1, max_length=200)
+    goal: str = Field(min_length=1, max_length=4000)
+    request_id: str = Field(min_length=1, max_length=200)
+
+
+class ProgramSessionRequest(ResearchRequest):
+    session_id: str = Field(min_length=1)
+    label: str = Field(default='', max_length=200)
+
+
+class ReassessmentRequest(ResearchRequest):
+    source_experiment_id: str = Field(min_length=1)
+    target_session_id: str = Field(min_length=1)
+    request_id: str = Field(min_length=1, max_length=200)
+
+
+class WindowComparisonRequest(ResearchRequest):
+    baseline_experiment_id: str = Field(min_length=1)
+    target_experiment_id: str = Field(min_length=1)
+    drop_threshold: float = Field(gt=0, allow_inf_nan=False)
+
+
 class DatasetRequest(ResearchRequest):
     name: str = Field(min_length=1)
     universe: str = Field(min_length=1)
@@ -118,6 +150,72 @@ def evaluate(session_id: str, req: ExperimentRequest):
 @router.post('/sessions/{session_id}/notes')
 def note(session_id: str, req: NoteRequest):
     return invoke('add_note', session_id, req.text, agent='human:webui')
+
+
+@router.post('/sessions/{session_id}/checkpoints')
+def save_checkpoint(session_id: str, req: CheckpointRequest):
+    return invoke('save_checkpoint', session_id, **req.model_dump())
+
+
+@router.get('/sessions/{session_id}/checkpoints')
+def list_checkpoints(session_id: str):
+    return {'checkpoints': invoke('list_checkpoints', session_id)}
+
+
+@router.get('/sessions/{session_id}/checkpoints/{name}')
+def get_checkpoint(session_id: str, name: str, revision: int | None = Query(None, ge=1)):
+    return invoke('get_checkpoint', session_id, name, revision=revision)
+
+
+@router.post('/programs')
+def create_program(req: ProgramRequest):
+    return invoke('create_program', **req.model_dump())
+
+
+@router.post('/programs/import')
+def import_program(manifest: dict):
+    return invoke('import_program', manifest)
+
+
+@router.get('/programs')
+def list_programs():
+    return {'programs': invoke('list_programs')}
+
+
+@router.get('/programs/{program_id}')
+def get_program(program_id: str):
+    return invoke('get_program', program_id)
+
+
+@router.get('/programs/{program_id}/manifest')
+def export_program(program_id: str):
+    return invoke('export_program', program_id)
+
+
+@router.post('/programs/{program_id}/sessions')
+def attach_program_session(program_id: str, req: ProgramSessionRequest):
+    return invoke('attach_program_session', program_id, **req.model_dump())
+
+
+@router.get('/programs/{program_id}/factors/{factor_id}')
+def program_factor_history(program_id: str, factor_id: str, offset: int = Query(0, ge=0),
+                           limit: int = Query(20, ge=1, le=100)):
+    return invoke('program_factor_history', program_id, factor_id, offset=offset, limit=limit)
+
+
+@router.get('/programs/{program_id}/candidates')
+def program_candidates(program_id: str, offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100)):
+    return invoke('program_candidates', program_id, offset=offset, limit=limit)
+
+
+@router.post('/programs/{program_id}/reassessments')
+def reassess_program_factor(program_id: str, req: ReassessmentRequest):
+    return invoke('reassess_program_factor', program_id, **req.model_dump(), agent='rest')
+
+
+@router.post('/programs/{program_id}/window-comparisons')
+def compare_program_windows(program_id: str, req: WindowComparisonRequest):
+    return invoke('compare_program_windows', program_id, **req.model_dump())
 
 
 @router.get('/experiments/{experiment_id}')

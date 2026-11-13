@@ -66,6 +66,31 @@ def test_account_workspaces_are_isolated_across_rest_and_mcp(tmp_path, monkeypat
             assert _mcp(client,alice_key,'assay_research_session_list',{})['sessions'][0]['id']==sid
             assert _mcp(client,bob_key,'assay_research_session_list',{})['sessions']==[]
             assert _mcp(client,bob_key,'assay_dataset_list',{})['datasets']==[]
+            program = client.post('/v1/research/programs', headers=a,
+                json={'name':'Private mining','goal':'Persist search','request_id':'program-1'}).json()
+            pid = program['id']
+            assert client.post('/v1/research/programs/'+pid+'/sessions', headers=a,
+                               json={'session_id':sid,'label':'train'}).status_code == 200
+            context = client.get('/v1/research/sessions/'+sid+'/context', headers=a).json()
+            checkpoint = client.post('/v1/research/sessions/'+sid+'/checkpoints', headers=a, json={
+                'name':'mcts','algorithm':'mcts','state':{'visits':5},'request_id':'save-1',
+                'expected_revision':0,'expected_state_revision':context['state_revision']})
+            assert checkpoint.status_code == 200, checkpoint.text
+            assert _mcp(client,alice_key,'assay_checkpoint_get',{'session_id':sid,'name':'mcts'})['checkpoint']['state'] == {'visits':5}
+            assert _mcp(client,alice_key,'assay_program_list',{})['programs'][0]['id'] == pid
+            assert _mcp(client,bob_key,'assay_program_list',{})['programs'] == []
+            assert client.get('/v1/research/programs/'+pid,headers=b).status_code == 400
+            program_manifest = client.get('/v1/research/programs/'+pid+'/manifest', headers=a).json()
+            assert len(program_manifest['sessions'][0]['checkpoints']) == 1
+            assert _mcp(client,alice_key,'assay_program_export',{'program_id':pid}) == program_manifest
+            assert client.post('/v1/research/programs/import',headers=a,json=program_manifest).json() == program_manifest
+            assert client.get('/v1/research/programs/'+pid+'/manifest',headers=b).status_code == 400
+            assert client.get('/v1/research/sessions/'+sid+'/checkpoints/mcts',headers=b).status_code == 400
+            manifest = client.get('/v1/research/sessions/'+sid+'/manifest',headers=a).json()
+            assert len(manifest['state']['checkpoints']) == 1
+            audit = client.get('/v1/research/sessions/'+sid+'/audit',headers=a,
+                               params={'expected_manifest_hash':manifest['manifest_hash']}).json()
+            assert audit['manifest_hash'] == manifest['manifest_hash']
             assert _mcp(client,alice_key,'fdb_query',{'source':'research'})['count'] > 0
             assert _mcp(client,bob_key,'fdb_query',{'source':'research'})['count'] == 0
             assert _mcp(client,bob_key,'fdb_factor',{'factor_id':result.json()['factor_id'],

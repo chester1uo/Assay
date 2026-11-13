@@ -26,5 +26,5 @@ def test_api_instances_have_independent_mcp_http_lifespans(monkeypatch):
         assert tools(first) == initial
     with TestClient(create_app()) as restarted:
         assert tools(restarted) == initial
-    assert len(initial) == 40
+    assert len(initial) == 53
     assert {'fdb_submit', 'assay_experiment_run', 'assay_evaluate', 'assay_experiment_cancel'} <= initial

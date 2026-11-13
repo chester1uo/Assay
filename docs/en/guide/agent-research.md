@@ -137,9 +137,68 @@ claim for recursive filters such as EMA. The same contract applies through SDK
 and MCP. Dataset registration specifies warmup/buffer bounds; it does not infer
 or download extra history automatically.
 
+## Search checkpoints and multi-window programs
+
+Clients can save their own MCTS tree, EA population, generation and random state
+as a JSON object. Assay stores an append-only checkpoint stream per session and
+name. This is storage for a client-defined algorithm, not automatic serialization
+or execution of arbitrary Python objects. Save only JSON data, never credentials.
+
+```python
+context = ws.research_context(session_id)
+saved = ws.save_checkpoint(session_id, 'search', 'mcts',
+    {'nodes': [{'experiment_id': experiment_id, 'visits': 3}], 'rng': [1, 2]},
+    request_id='checkpoint-1', expected_revision=0,
+    expected_state_revision=context['state_revision'])
+restored = ws.get_checkpoint(session_id, 'search')
+```
+
+`expected_revision` fences conflicting writers. The optional state revision fences
+changes between reading the session and saving. Retry a timed-out save with the
+same request ID and inputs. `get_checkpoint` reports changes to the session plus
+new attempts and status changes; clients must reconcile those records before continuing. A checkpoint
+can be saved during an in-flight attempt, but it does not resolve that attempt.
+Individual JSON states are limited to 1 MiB. Session manifests include checkpoints
+when present; older manifests remain importable. Checkpoint content is client-supplied
+and its watermark cannot prove that the algorithm state incorporated every attempt.
+
+A research program links separate sessions while preserving their individual dataset
+specifications and budgets. Evaluate a completed factor again with
+`reassess_program_factor`, then inspect `program_factor_history`:
+
+```python
+program = ws.create_program('momentum', 'Study signal persistence', request_id='program-1')
+ws.attach_program_session(program['id'], train_session_id, label='train')
+ws.attach_program_session(program['id'], later_session_id, label='later')
+result = ws.reassess_program_factor(program['id'], source_experiment_id,
+                                    later_session_id, request_id='later-1')
+history = ws.program_factor_history(program['id'], result['attempt']['factor_id'])
+pool = ws.program_candidates(program['id'])
+comparison = ws.compare_program_windows(program['id'], source_experiment_id,
+    result['attempt']['id'], drop_threshold=0.02)
+```
+
+Reassessment uses the target session's settings and budget. The history preserves
+window, settings, metrics and source links. The comparison uses a caller-selected
+RankIC drop threshold and requires ordered, non-overlapping scoring windows and
+matching settings. Non-overlapping scoring dates do not verify forward-label availability
+or a trading-session embargo. Its flag is descriptive, not a statistical decay test.
+Program membership and cross-session links are stored in the workspace database;
+session manifests transfer individual sessions and checkpoints; program manifests also
+transfer membership and reassessment links. Market snapshots remain a separate responsibility.
+
+The corresponding MCP tools are `assay_checkpoint_save`, `assay_checkpoint_get`,
+`assay_checkpoint_list`, `assay_program_create`, `assay_program_list`,
+`assay_program_get`, `assay_program_export`, `assay_program_import`,
+`assay_program_attach_session`, `assay_program_reassess` and
+`assay_program_factor_history`, `assay_program_candidates` and
+`assay_program_compare_windows`. Factor decisions remain scoped to each session.
+REST routes are
+listed in the [REST guide](rest-api.md).
+
 ## MCP workflow
 
-Start `assay serve-mcp`. Twenty research tools complement the existing eleven evaluation/library tools:
+Start `assay serve-mcp`. The research operations include:
 
 | Tool | Purpose |
 |---|---|
@@ -363,3 +422,12 @@ does not cache a failed evaluation. Daily compute usage counts accepted result
 receipts; discarded in-flight computation is not metered. Synchronous backends
 return `CANCELLATION_UNSUPPORTED`; inspect the worker before explicitly abandoning
 an interrupted synchronous record.
+
+### Moving a research program
+
+Use `assay_program_export` to capture the program, linked sessions, checkpoints,
+decisions and reassessment links in one manifest. Use `assay_program_import` to
+restore it atomically into another workspace. Identical imports can be retried;
+conflicting identities and running attempts are rejected. The manifest records
+dataset specifications, not market files or backend software. Arrange those
+separately before running new experiments. The digest checks integrity, not origin.

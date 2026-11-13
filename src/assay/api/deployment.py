@@ -6,7 +6,7 @@ import os
 from urllib.parse import urlsplit
 from fastapi import Request
 
-INTERFACE_VERSION = "2026-11-10.1"
+INTERFACE_VERSION = "2026-11-14.1"
 
 
 def _origin_aliases(origin):

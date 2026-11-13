@@ -5,6 +5,112 @@ from __future__ import annotations
 def register_research_tools(mcp, get_service):
     from mcp.types import ToolAnnotations
 
+    @mcp.tool()
+    def assay_checkpoint_save(session_id: str, name: str, algorithm: str, state: dict,
+                              request_id: str, expected_revision: int,
+                              expected_state_revision: str | None = None) -> dict:
+        """Save JSON search state under a versioned name without spending evaluation budget.
+
+        Use expected_revision=0 for a new stream; later writes compare the last
+        revision. Reuse the same request_id and inputs after a timeout. The state
+        can contain a tree, population and random-generator state, but must not
+        include API keys. Payloads are limited to 1 MiB. Attempt IDs and statuses
+        are captured so a later reader can detect intervening research changes.
+        Set expected_state_revision from research_context for atomic state checking.
+        """
+        return get_service().research.save_checkpoint(session_id, name, algorithm, state,
+            request_id=request_id, expected_revision=expected_revision, expected_state_revision=expected_state_revision)
+
+    @mcp.tool()
+    def assay_checkpoint_get(session_id: str, name: str, revision: int | None = None) -> dict:
+        """Get a checkpoint and report research-state changes since it was saved.
+
+        A stale checkpoint may need reconciliation before the client resumes.
+        Its JSON is caller-supplied algorithm state, not executable code.
+        """
+        return get_service().research.get_checkpoint(session_id, name, revision=revision)
+
+    @mcp.tool()
+    def assay_checkpoint_list(session_id: str) -> dict:
+        """List the latest metadata for each checkpoint stream without returning state payloads."""
+        return {'checkpoints': get_service().research.list_checkpoints(session_id)}
+
+    @mcp.tool()
+    def assay_program_create(name: str, goal: str, request_id: str) -> dict:
+        """Create an idempotent research program for linked sessions across data windows."""
+        return get_service().research.create_program(name, goal, request_id=request_id)
+
+    @mcp.tool()
+    def assay_program_attach_session(program_id: str, session_id: str, label: str = '') -> dict:
+        """Link an existing session and its fixed dataset to a program; identical retries are safe."""
+        return get_service().research.attach_program_session(program_id, session_id, label=label)
+
+    @mcp.tool()
+    def assay_program_get(program_id: str) -> dict:
+        """Inspect a program and its linked sessions and dataset specifications."""
+        return get_service().research.get_program(program_id)
+
+    @mcp.tool()
+    def assay_program_list() -> dict:
+        """Discover durable research programs in the current workspace."""
+        return {'programs': get_service().research.list_programs()}
+
+    @mcp.tool()
+    def assay_program_export(program_id: str) -> dict:
+        """Export a consistent program and its sessions, checkpoints, and reassessment links.
+
+        Market data and backend code are separate; the hash does not authenticate authorship.
+        """
+        return get_service().research.export_program(program_id)
+
+    @mcp.tool()
+    def assay_program_import(manifest: dict) -> dict:
+        """Atomically restore a program manifest. Identical retries are idempotent.
+
+        All attempts must be terminal. Existing conflicting identities are rejected.
+        """
+        return get_service().research.import_program(manifest)
+
+    @mcp.tool()
+    def assay_program_factor_history(program_id: str, factor_id: str, offset: int = 0, limit: int = 20) -> dict:
+        """Inspect a canonical factor's recorded attempts across a program's windows.
+
+        Settings and exact windows are returned per attempt. Different windows
+        do not establish point-in-time validity or statistical factor decay.
+        """
+        return get_service().research.program_factor_history(program_id, factor_id, offset=offset, limit=limit)
+
+    @mcp.tool()
+    def assay_program_candidates(program_id: str, offset: int = 0, limit: int = 20) -> dict:
+        """List canonical factors across a program and their session-specific decisions.
+
+        Decision states are not automatically propagated between evaluation windows.
+        """
+        return get_service().research.program_candidates(program_id, offset=offset, limit=limit)
+
+    @mcp.tool()
+    def assay_program_reassess(program_id: str, source_experiment_id: str, target_session_id: str,
+                               request_id: str, agent: str = 'unspecified') -> dict:
+        """Evaluate a completed factor in another linked session and retain the source link.
+
+        The target uses its own dataset and consumes its own budget. Reuse the
+        request_id after a timeout. A changed dataset is not an identical replay.
+        """
+        return get_service().research.reassess_program_factor(program_id, source_experiment_id,
+            target_session_id, request_id=request_id, agent=agent)
+
+    @mcp.tool()
+    def assay_program_compare_windows(program_id: str, baseline_experiment_id: str, target_experiment_id: str,
+                                      drop_threshold: float) -> dict:
+        """Compare a factor's signed RankIC on ordered, non-overlapping windows.
+
+        Uses the baseline sign and caller's positive absolute RankIC drop threshold.
+        The flag is descriptive, not a statistical or causal decay determination.
+        Non-overlapping score dates do not verify label availability or an embargo.
+        """
+        return get_service().research.compare_program_windows(program_id, baseline_experiment_id,
+            target_experiment_id, drop_threshold=drop_threshold)
+
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True,destructiveHint=False,
                                          idempotentHint=True,openWorldHint=False))
     def assay_research_audit(session_id: str, offset: int = 0, limit: int = 20,

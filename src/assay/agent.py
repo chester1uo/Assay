@@ -17,6 +17,11 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 RESEARCH_TOOLS = {
+    'assay_checkpoint_save', 'assay_checkpoint_get', 'assay_checkpoint_list',
+    'assay_program_create', 'assay_program_attach_session', 'assay_program_get', 'assay_program_list',
+    'assay_program_export', 'assay_program_import',
+    'assay_program_factor_history', 'assay_program_candidates', 'assay_program_reassess', 'assay_program_compare_windows',
+    'fdb_query', 'fdb_factor', 'fdb_novelty',
     'assay_research_audit',
     'assay_candidate_decide', 'assay_candidate_list', 'assay_factor_history',
     'assay_backend_list', 'assay_dataset_register', 'assay_dataset_list',

@@ -93,6 +93,39 @@ Workbench 可查看组合指标并通过同一 REST 状态记录人工决定。
 完整研究实验耗时、首次因子矩阵计算、共享面板/CSE 批量计算和精确缓存命中分别报告。
 矩阵计算吞吐不等同于完整回测吞吐；独立账本验证已记录成交下的净值核算，选股规则和供应商数据完整性需另行检验。
 
+## 搜索 checkpoint 与跨窗口任务
+
+Agent 可以将自己的 MCTS 树、EA 种群、代数和随机状态组织为 JSON，按 session 和名称保存为追加式 checkpoint。Assay 保存数据，不自动序列化或执行客户端的算法对象。状态中不要保存密钥。
+
+```python
+context = ws.research_context(session_id)
+saved = ws.save_checkpoint(session_id, 'search', 'mcts',
+    {'nodes': [{'experiment_id': experiment_id, 'visits': 3}], 'rng': [1, 2]},
+    request_id='checkpoint-1', expected_revision=0,
+    expected_state_revision=context['state_revision'])
+restored = ws.get_checkpoint(session_id, 'search')
+```
+
+`expected_revision` 防止并发覆盖；可选的 `expected_state_revision` 防止读取后研究状态已变化。超时后复用相同请求 ID 和输入。恢复结果会指出 session 状态是否改变，以及新增或改变状态的实验；运行中实验需要单独恢复或取消。单个状态上限为 1 MiB，session 导出包含 checkpoint。记录的实验水位不能证明算法状态已处理了所有实验。
+
+Program 将不同数据窗口的 session 关联到一个研究任务，每个 session 保留自己的数据配置和预算：
+
+```python
+program = ws.create_program('momentum', 'Study signal persistence', request_id='program-1')
+ws.attach_program_session(program['id'], train_session_id, label='train')
+ws.attach_program_session(program['id'], later_session_id, label='later')
+result = ws.reassess_program_factor(program['id'], source_experiment_id,
+                                    later_session_id, request_id='later-1')
+history = ws.program_factor_history(program['id'], result['attempt']['factor_id'])
+pool = ws.program_candidates(program['id'])
+comparison = ws.compare_program_windows(program['id'], source_experiment_id,
+    result['attempt']['id'], drop_threshold=0.02)
+```
+
+重新评估使用目标 session 的数据与预算，并记录来源；历史列表返回每次的窗口、设置和指标。跨窗口比较要求时间有序、评分窗口不重叠及设置一致，并按调用方指定的 RankIC 下降阈值给出提示。评分日期不重叠不代表前向收益标签在后续窗口前已经可用，也不能证明设置了交易日缓冲；提示不构成统计意义上的衰减检验。Program 关联保存在工作区数据库中；单个 session 的导出只包含该 session 和 checkpoint，不含 program 关联。行情快照需要单独保存。
+
+Program 因子池按规范因子身份汇总尝试，保留各 session 独立的接受／拒绝决策。MCP 对应 `assay_checkpoint_save/get/list` 和 `assay_program_create/list/get/attach_session/candidates/reassess/factor_history/compare_windows`；REST 路径见 [REST API](rest-api.md)。
+
 ## MCP 研究工具
 
 运行 `assay serve-mcp`。20 个研究工具如下，与原有 11 个评估/因子库工具共存：
@@ -247,3 +280,9 @@ SDK：`ws.cancel_experiment(experiment_id, "研究方向改变")`；MCP：
 `cancelled` 是可导出、可作为修订父节点的终态，尝试预算不退还，不产生因子评分或失败缓存。
 每日计算用量按已接受结果回执计入，已运行但被丢弃的计算时间尚未计量。
 同步后端返回 `CANCELLATION_UNSUPPORTED`，需确认 worker 停止后再显式 abandon。
+
+### 迁移完整研究任务
+
+使用 `assay_program_export` 导出任务、关联 session、checkpoint、因子决策和跨窗口重评关系；
+使用 `assay_program_import` 在另一工作区原子恢复。相同内容可安全重试，身份冲突或仍在运行的实验会被拒绝。
+清单记录数据集配置，不包含行情文件或后端软件，继续执行前需另行准备。摘要用于完整性检查，不证明来源。

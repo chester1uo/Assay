@@ -416,7 +416,8 @@ def audit_session(workspace, session_id, *, offset=0, limit=20, expected_manifes
     with workspace._db() as db:
         db.execute('PRAGMA query_only=ON')
         db.execute('BEGIN')
-        state = workspace._session_state(db,session_id)
+        from assay.research_checkpoints import add_to_state
+        state = add_to_state(db, workspace._session_state(db,session_id))
         registry = dict(links=[dict(r) for r in db.execute(
             'SELECT a.experiment_id,a.factor_id,f.canonical FROM research_factor_attempts a '
             'JOIN experiments e ON e.id=a.experiment_id LEFT JOIN factors f ON f.id=a.factor_id '

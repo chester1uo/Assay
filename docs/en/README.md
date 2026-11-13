@@ -17,7 +17,7 @@ New here? Start with **[Getting Started](guide/getting-started.md)**.
 | [Python SDK](guide/python-sdk.md) | `backtest`, `Session`, `batch_backtest`, `library`, `stream`, `backtest_portfolio` |
 | [CLI](guide/cli.md) | Every `python -m assay.cli` subcommand |
 | [REST API](guide/rest-api.md) | `/v1/*` endpoints, SSE streaming, lint, auth |
-| [MCP Server](guide/mcp-server.md) | 40 tools, authenticated remote MCP and client setup |
+| [MCP Server](guide/mcp-server.md) | Research tools, authenticated remote MCP and client setup |
 | [Agent Research](guide/agent-research.md) | Datasets, persistent sessions, experiment records and execution backends |
 | [Research Audit](guide/research-audit.md) | Read-only evidence packets for human and agent judges |
 | [Deployment](guide/deployment.md) | Public endpoint, proxy, persistent storage and release checks |

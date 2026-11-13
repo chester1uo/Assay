@@ -19,7 +19,7 @@ not a service that must be installed for the offline research workflow.
 3. **Persistent research:** dataset specifications, goals, attempt budgets,
    successful/failed experiments, revisions, notes, context, explicit replay, and
    integrity-checked export/import.
-4. **Agent access:** 40 MCP tools, a replaceable reference client with request/tool
+4. **Agent access:** 53 MCP tools, a replaceable reference client with request/tool
    limits and raw receipts, SDK and REST. The agent supplies the research policy.
 5. **Human access:** the four-area workbench in the integrated sidebar, accounts
    and keys, Doc Hub, and existing factor and portfolio pages.
@@ -46,11 +46,11 @@ a session attempt to a durable FactorDB job and its versioned result receipt.
 | Factor infrastructure | Canonical factor identities, stored values, novelty queries, asynchronous jobs | Upstream FactorDB and its eight MCP operations; private accounts use separate registries |
 | Distributed execution | Lease factor-computation slices to workers | Upstream ADES controller, worker, heartbeat and task queue |
 | Research workspace | Dataset specifications, goals, attempt budgets, hypotheses, failed evaluations, parent links, notes, manifests | Persistent SQLite workspace and backend protocol |
-| Agent and human clients | Choose research actions, inspect outcomes and continue sessions | Reference agent, 21 research MCP operations, SDK/REST and browser workbench |
+| Agent and human clients | Choose research actions, inspect outcomes and continue sessions | Reference agent, 34 research MCP operations, SDK/REST and browser workbench |
 | Application shell | Authentication, navigation and documentation | Upstream account/session authentication and sidebar, with the research page added |
 
-The MCP server has 40 operations: 11 evaluation/library tools, eight FactorDB tools,
-and 21 research tools. HTTP MCP is mounted at `/mcp/`; each API application owns
+The MCP server has 53 operations: 11 evaluation/library tools, eight FactorDB tools,
+and 34 research tools. HTTP MCP is mounted at `/mcp/`; each API application owns
 an independent HTTP lifecycle. Stdio remains available for local agent clients.
 
 ## Distinct records and budgets

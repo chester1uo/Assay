@@ -56,6 +56,51 @@
 <td>Evaluate an attempt / append a note</td>
 </tr>
 <tr>
+<td>GET / POST</td>
+<td><code>/sessions/{id}/checkpoints</code></td>
+<td>List checkpoint streams / save a version with compare-and-set</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/sessions/{id}/checkpoints/{name}</code></td>
+<td>Restore a checkpoint and inspect intervening attempts</td>
+</tr>
+<tr>
+<td>GET / POST</td>
+<td><code>/programs</code></td>
+<td>Discover / create a multi-window research program</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/programs/import</code></td>
+<td>Atomically restore a program manifest</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/programs/{id}/manifest</code></td>
+<td>Export the program with its sessions and links</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/programs/{id}</code> · <code>/factors/{factor_id}</code></td>
+<td>Inspect linked sessions / factor history</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/programs/{id}/candidates</code></td>
+<td>Canonical factor pool with session-scoped decisions</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/programs/{id}/sessions</code> · <code>/reassessments</code></td>
+<td>Link a session / evaluate a factor on another window</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/programs/{id}/window-comparisons</code></td>
+<td>Descriptive RankIC change across compatible non-overlapping windows</td>
+</tr>
+<tr>
 <td>GET</td>
 <td><code>/experiments/{id}</code></td>
 <td>Summary or paginated <code>section</code>, <code>offset</code>, <code>limit</code></td>

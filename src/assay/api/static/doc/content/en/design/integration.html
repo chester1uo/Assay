@@ -18,7 +18,7 @@ job slices with leases and heartbeats.</li>
 <li><strong>Persistent research:</strong> dataset specifications, goals, attempt budgets,
 successful/failed experiments, revisions, notes, context, explicit replay, and
 integrity-checked export/import.</li>
-<li><strong>Agent access:</strong> 40 MCP tools, a replaceable reference client with request/tool
+<li><strong>Agent access:</strong> 53 MCP tools, a replaceable reference client with request/tool
 limits and raw receipts, SDK and REST. The agent supplies the research policy.</li>
 <li><strong>Human access:</strong> the four-area workbench in the integrated sidebar, accounts
 and keys, Doc Hub, and existing factor and portfolio pages.</li>
@@ -97,7 +97,7 @@ a session attempt to a durable FactorDB job and its versioned result receipt.</p
 <tr>
 <td>Agent and human clients</td>
 <td>Choose research actions, inspect outcomes and continue sessions</td>
-<td>Reference agent, 21 research MCP operations, SDK/REST and browser workbench</td>
+<td>Reference agent, 34 research MCP operations, SDK/REST and browser workbench</td>
 </tr>
 <tr>
 <td>Application shell</td>
@@ -106,8 +106,8 @@ a session attempt to a durable FactorDB job and its versioned result receipt.</p
 </tr>
 </tbody>
 </table></div>
-<p>The MCP server has 40 operations: 11 evaluation/library tools, eight FactorDB tools,
-and 21 research tools. HTTP MCP is mounted at <code>/mcp/</code>; each API application owns
+<p>The MCP server has 53 operations: 11 evaluation/library tools, eight FactorDB tools,
+and 34 research tools. HTTP MCP is mounted at <code>/mcp/</code>; each API application owns
 an independent HTTP lifecycle. Stdio remains available for local agent clients.</p>
 <h2 id="distinct-records-and-budgets">Distinct records and budgets</h2>
 <p>A FactorDB factor is a canonical expression and its computed evidence. Service keys

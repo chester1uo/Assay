@@ -26,6 +26,15 @@ All routes below use the same workspace as MCP and require the configured API cr
 | GET | `/sessions/{id}` · `/manifest` · `/context` | State, export and compact context |
 | GET | `/sessions/{id}/audit` | Read-only judge packet; `offset`, `limit`, `expected_manifest_hash` |
 | POST | `/sessions/{id}/experiments` · `/notes` | Evaluate an attempt / append a note |
+| GET / POST | `/sessions/{id}/checkpoints` | List checkpoint streams / save a version with compare-and-set |
+| GET | `/sessions/{id}/checkpoints/{name}` | Restore a checkpoint and inspect intervening attempts |
+| GET / POST | `/programs` | Discover / create a multi-window research program |
+| POST | `/programs/import` | Atomically restore a program manifest |
+| GET | `/programs/{id}/manifest` | Export the program with its sessions and links |
+| GET | `/programs/{id}` · `/factors/{factor_id}` | Inspect linked sessions / factor history |
+| GET | `/programs/{id}/candidates` | Canonical factor pool with session-scoped decisions |
+| POST | `/programs/{id}/sessions` · `/reassessments` | Link a session / evaluate a factor on another window |
+| POST | `/programs/{id}/window-comparisons` | Descriptive RankIC change across compatible non-overlapping windows |
 | GET | `/experiments/{id}` | Summary or paginated `section`, `offset`, `limit` |
 | POST | `/experiments/compare` | Compare at least two attempts |
 | POST | `/experiments/{id}/replay` · `/reconcile` · `/cancel` · `/abandon` | Explicit execution recovery |

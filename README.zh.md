@@ -24,7 +24,7 @@ Agent 自行选择模型和搜索策略；工作区跨重启保存数据集设�
 - **Dataset：** 固定股票池、读取/评分区间、交易日、执行设置和表达式约束。
 - **持久 Session：** 使用 SQLite 保存目标、笔记、尝试历史和评估次数预算。
 - **Experiment：** 成功和失败均独立保存，支持父子修订关系和配置一致性比较。
-- **MCP：** 共 40 个工具，包含 8 个 FactorDB 工具及 21 个 backend/dataset/session/experiment 工具，与 SDK 共用研究状态。
+- **MCP：** 共 53 个工具，涵盖 FactorDB、研究 session、搜索 checkpoint 与跨窗口研究任务，与 SDK 共用状态。
 - **研究审计：** 通过 MCP、REST、工作台或离线 manifest，向 judge 提供预算、来源关系、指标序列与生命周期证据的只读检查。见[审计指南](docs/cn/guide/research-audit.md)。
 - **公开入口：** `https://assay.qfinverse.com/mcp/`，使用 Streamable HTTP 和 Bearer／API key 鉴权；配置与发布验收见[部署指南](docs/cn/guide/deployment.md)。
 - **后端接口：** 通过 Python 协议接入其他评估器，研究状态不绑定特定 LLM。

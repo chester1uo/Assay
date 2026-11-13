@@ -1,6 +1,6 @@
 # MCP Server
 
-服务现有 **40 个工具**，含 8 个 FactorDB 工具及 21 个后端发现、持久数据集、研究会话与实验工具。
+当前源码提供 **53 个工具**，含 8 个 FactorDB 工具及 34 个数据集、研究会话、实验、搜索 checkpoint 和研究任务工具；线上工具数以发现接口为准。
 使用流程与恢复语义见 [Agent 研究指南](agent-research.md)。
 
 `assay_research_audit` 向人或 Agent judge 返回只读的证据检查；范围、分页和版本锁定见[研究审计](research-audit.md)。

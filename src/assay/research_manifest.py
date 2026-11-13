@@ -17,8 +17,9 @@ def validate_state(state, *, allow_running=False):
         require(isinstance(value, str), "timestamp must be a string")
         datetime.fromisoformat(value)
 
-    require(set(state) == {"id", "dataset_id", "goal", "agent", "budget", "created_at",
-                           "dataset", "experiments", "notes", "remaining_experiments", "decisions"}, "state fields")
+    fields = {"id", "dataset_id", "goal", "agent", "budget", "created_at",
+              "dataset", "experiments", "notes", "remaining_experiments", "decisions"}
+    require(fields <= set(state) <= fields | {'checkpoints'}, "state fields")
     strings(state, ("id", "dataset_id", "goal"))
     require(isinstance(state["agent"], str), "agent must be a string")
     timestamp(state["created_at"])
@@ -168,6 +169,8 @@ def validate_state(state, *, allow_running=False):
         source_id = attempt.get("replay_of")
         if source_id in positions:
             require(positions[source_id] < positions[attempt["id"]], "replay must reference earlier attempt")
+    from assay.research_checkpoints import validate_checkpoints
+    validate_checkpoints(state)
     for note in notes:
         require(isinstance(note, dict) and set(note) == {"text", "agent", "created_at"}, "note fields")
         strings(note, ("text",))

@@ -871,6 +871,11 @@
       "level": 2
      },
      {
+      "id": "search-checkpoints-and-multi-window-programs",
+      "text": "Search checkpoints and multi-window programs",
+      "level": 2
+     },
+     {
       "id": "mcp-workflow",
       "text": "MCP workflow",
       "level": 2
@@ -914,6 +919,11 @@
       "id": "cancel-asynchronous-research",
       "text": "Cancel asynchronous research",
       "level": 2
+     },
+     {
+      "id": "moving-a-research-program",
+      "text": "Moving a research program",
+      "level": 3
      }
     ],
     "zh": [
@@ -930,6 +940,11 @@
      {
       "id": "因子选择与组合回测",
       "text": "因子选择与组合回测",
+      "level": 2
+     },
+     {
+      "id": "搜索-checkpoint-与跨窗口任务",
+      "text": "搜索 checkpoint 与跨窗口任务",
       "level": 2
      },
      {
@@ -976,6 +991,11 @@
       "id": "取消异步实验",
       "text": "取消异步实验",
       "level": 2
+     },
+     {
+      "id": "迁移完整研究任务",
+      "text": "迁移完整研究任务",
+      "level": 3
      }
     ]
    },
@@ -1452,7 +1472,7 @@
      }
     ]
    },
-   "updated": "2026-11-10"
+   "updated": "2026-11-13"
   },
   "guide/rest-api": {
    "group": "api",

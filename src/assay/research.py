@@ -173,6 +173,23 @@ class ResearchWorkspace:
                     experiment_id TEXT NOT NULL REFERENCES experiments(id),
                     request_id TEXT NOT NULL, payload TEXT NOT NULL,
                     UNIQUE(session_id, request_id));
+                CREATE TABLE IF NOT EXISTS research_checkpoints (
+                    id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id),
+                    name TEXT NOT NULL, revision INTEGER NOT NULL, request_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    UNIQUE(session_id, name, revision), UNIQUE(session_id, name, request_id));
+                CREATE TABLE IF NOT EXISTS research_programs (
+                    id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS research_program_sessions (
+                    program_id TEXT NOT NULL REFERENCES research_programs(id),
+                    session_id TEXT NOT NULL REFERENCES sessions(id),
+                    label TEXT NOT NULL, linked_at TEXT NOT NULL,
+                    PRIMARY KEY(program_id, session_id));
+                CREATE TABLE IF NOT EXISTS research_reassessments (
+                    program_id TEXT NOT NULL REFERENCES research_programs(id),
+                    target_session_id TEXT NOT NULL REFERENCES sessions(id),
+                    request_id TEXT NOT NULL, source_experiment_id TEXT NOT NULL REFERENCES experiments(id),
+                    PRIMARY KEY(target_session_id, request_id));
                 PRAGMA user_version=1;
             """)
             from assay.research_lifecycle import register_attempt
@@ -382,6 +399,11 @@ class ResearchWorkspace:
         Exact repeated imports are idempotent; conflicting identities are rejected.
         Backend registration and market data are separate from record migration.
         """
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            return self._import_session_transaction(db, manifest)
+
+    def _import_session_transaction(self, db, manifest):
         if not self.verify_manifest(manifest):
             raise ValueError("invalid session manifest integrity or version")
         from assay.research_manifest import validate_state
@@ -393,61 +415,70 @@ class ResearchWorkspace:
         except (TypeError, KeyError, OverflowError) as exc:
             raise ValueError("invalid session manifest structure") from exc
         dataset = state["dataset"]
-        with self._db() as db:
-            db.execute("BEGIN IMMEDIATE")
-            if db.execute("SELECT 1 FROM sessions WHERE id=?", (state["id"],)).fetchone():
-                if self._session_state(db, state["id"]) != state:
-                    raise ValueError("session identity conflicts with existing state")
-                return state
-            existing = db.execute("SELECT payload FROM datasets WHERE id=?", (dataset["id"],)).fetchone()
-            if existing and json.loads(existing[0]) != dataset:
-                raise ValueError("dataset identity conflicts with existing state")
-            for attempt in state["experiments"]:
-                if db.execute("SELECT 1 FROM experiments WHERE id=?", (attempt["id"],)).fetchone():
-                    raise ValueError("experiment identity conflicts with existing state")
-            for event in state['decisions']:
-                if db.execute('SELECT 1 FROM research_decisions WHERE id=?', (event['id'],)).fetchone():
-                    raise ValueError('decision identity conflicts with existing state')
-            incoming = {a["id"]: a for a in state["experiments"]}
-            local = {r["id"]: json.loads(r["payload"]) for r in db.execute("SELECT id, payload FROM experiments")}
-            from assay.research_portfolio import accounting_protocol
-            # Resolve cross-session replay links in either import order. Missing
-            # sources remain references; known conflicting sources are rejected.
-            for attempt in [*incoming.values(), *local.values()]:
-                source_id = attempt.get("replay_of")
-                if not source_id or (attempt["id"] not in incoming and source_id not in incoming):
-                    continue
-                source = incoming.get(source_id) or local.get(source_id)
-                if source is not None and (source["status"] == "running" or any(
-                    attempt[k] != source[k] for k in ("expr", "hypothesis", "spec_hash")
-                ) or accounting_protocol(attempt, dataset) != accounting_protocol(source, dataset)):
-                    raise ValueError("replay source conflicts with imported or existing state")
-            graph = {**local, **incoming}
-            resolved = set()
-            for start in incoming:
-                current, visiting = start, set()
-                while current in graph and current not in resolved:
-                    if current in visiting:
-                        raise ValueError("cyclic replay provenance in session manifest")
-                    visiting.add(current)
-                    current = graph[current].get("replay_of")
-                resolved.update(visiting)
-            if not existing:
-                db.execute("INSERT INTO datasets VALUES (?, ?)", (dataset["id"], _json(dataset)))
-            db.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?)",
-                       tuple(state[k] for k in ("id", "dataset_id", "goal", "agent", "budget", "created_at")))
-            for attempt in state["experiments"]:
-                db.execute("INSERT INTO experiments VALUES (?, ?, ?, ?)",
-                           (attempt["id"], state["id"], attempt["request_id"], _json(attempt)))
-                from assay.research_lifecycle import register_attempt
-                register_attempt(db, attempt)
-            for event in state['decisions']:
-                db.execute('INSERT INTO research_decisions VALUES (?,?,?,?,?,?)',
-                           (event['id'], state['id'], event['factor_id'], event['experiment_id'],
-                            event['request_id'], _json(event)))
-            for note in state["notes"]:
-                db.execute("INSERT INTO notes(session_id, payload) VALUES (?, ?)", (state["id"], _json(note)))
-            return self._session_state(db, state["id"])
+        if db.execute("SELECT 1 FROM sessions WHERE id=?", (state["id"],)).fetchone():
+            from assay.research_checkpoints import add_to_state
+            if add_to_state(db, self._session_state(db, state["id"])) != state:
+                raise ValueError("session identity conflicts with existing state")
+            return state
+        existing = db.execute("SELECT payload FROM datasets WHERE id=?", (dataset["id"],)).fetchone()
+        if existing and json.loads(existing[0]) != dataset:
+            raise ValueError("dataset identity conflicts with existing state")
+        for attempt in state["experiments"]:
+            if db.execute("SELECT 1 FROM experiments WHERE id=?", (attempt["id"],)).fetchone():
+                raise ValueError("experiment identity conflicts with existing state")
+            if db.execute("SELECT 1 FROM jobs WHERE id=?", (attempt["id"],)).fetchone():
+                raise ValueError("experiment identity conflicts with an existing FactorDB job")
+        for event in state['decisions']:
+            if db.execute('SELECT 1 FROM research_decisions WHERE id=?', (event['id'],)).fetchone():
+                raise ValueError('decision identity conflicts with existing state')
+        for checkpoint in state.get('checkpoints', []):
+            if db.execute('SELECT 1 FROM research_checkpoints WHERE id=?', (checkpoint['id'],)).fetchone():
+                raise ValueError('checkpoint identity conflicts with existing state')
+        incoming = {a["id"]: a for a in state["experiments"]}
+        local = {r["id"]: json.loads(r["payload"]) for r in db.execute("SELECT id, payload FROM experiments")}
+        from assay.research_portfolio import accounting_protocol
+        # Resolve cross-session replay links in either import order. Missing
+        # sources remain references; known conflicting sources are rejected.
+        for attempt in [*incoming.values(), *local.values()]:
+            source_id = attempt.get("replay_of")
+            if not source_id or (attempt["id"] not in incoming and source_id not in incoming):
+                continue
+            source = incoming.get(source_id) or local.get(source_id)
+            if source is not None and (source["status"] == "running" or any(
+                attempt[k] != source[k] for k in ("expr", "hypothesis", "spec_hash")
+            ) or accounting_protocol(attempt, dataset) != accounting_protocol(source, dataset)):
+                raise ValueError("replay source conflicts with imported or existing state")
+        graph = {**local, **incoming}
+        resolved = set()
+        for start in incoming:
+            current, visiting = start, set()
+            while current in graph and current not in resolved:
+                if current in visiting:
+                    raise ValueError("cyclic replay provenance in session manifest")
+                visiting.add(current)
+                current = graph[current].get("replay_of")
+            resolved.update(visiting)
+        if not existing:
+            db.execute("INSERT INTO datasets VALUES (?, ?)", (dataset["id"], _json(dataset)))
+        db.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?)",
+                   tuple(state[k] for k in ("id", "dataset_id", "goal", "agent", "budget", "created_at")))
+        for attempt in state["experiments"]:
+            db.execute("INSERT INTO experiments VALUES (?, ?, ?, ?)",
+                       (attempt["id"], state["id"], attempt["request_id"], _json(attempt)))
+            from assay.research_lifecycle import register_attempt
+            register_attempt(db, attempt)
+        for event in state['decisions']:
+            db.execute('INSERT INTO research_decisions VALUES (?,?,?,?,?,?)',
+                       (event['id'], state['id'], event['factor_id'], event['experiment_id'],
+                        event['request_id'], _json(event)))
+        for note in state["notes"]:
+            db.execute("INSERT INTO notes(session_id, payload) VALUES (?, ?)", (state["id"], _json(note)))
+        for checkpoint in state.get('checkpoints', []):
+            db.execute('INSERT INTO research_checkpoints VALUES (?,?,?,?,?,?)',
+                       (checkpoint['id'], state['id'], checkpoint['name'], checkpoint['revision'],
+                        checkpoint['request_id'], _json(checkpoint)))
+        from assay.research_checkpoints import add_to_state
+        return add_to_state(db, self._session_state(db, state["id"]))
 
     def research_context(self, session_id: str, *, limit: int = 10) -> dict:
         """Compact, evidence-linked context for another agent, excluding metric series."""
@@ -457,12 +488,74 @@ class ResearchWorkspace:
 
         state = self.get_session(session_id)
         backend = next(r for r in self.list_backends() if r["name"] == state["dataset"]["backend"])
-        return build_context(state, backend, limit)
+        context = build_context(state, backend, limit)
+        checkpoints = self.list_checkpoints(session_id)
+        if checkpoints:
+            context['checkpoints'] = checkpoints[:limit]
+            context['truncated']['checkpoints'] = len(checkpoints) > limit
+        return context
 
     def export_session(self, session_id: str) -> dict:
         """Export a consistent full research-state manifest; no market data or credentials."""
-        payload = dict(schema_version=1, kind="assay_research_session_manifest", state=self.get_session(session_id))
+        from assay.research_checkpoints import add_to_state
+        with self._db() as db:
+            db.execute('BEGIN')
+            state = add_to_state(db, self._session_state(db, session_id))
+        payload = dict(schema_version=1, kind="assay_research_session_manifest", state=state)
         return dict(payload, manifest_hash=hashlib.sha256(_json(payload).encode()).hexdigest())
+
+    def save_checkpoint(self, session_id, name, algorithm, state, *, request_id, expected_revision,
+                        expected_state_revision=None):
+        from assay.research_checkpoints import save
+        return save(self, session_id, name, algorithm, state, request_id, expected_revision, expected_state_revision)
+
+    def get_checkpoint(self, session_id, name, *, revision=None):
+        from assay.research_checkpoints import get
+        return get(self, session_id, name, revision)
+
+    def list_checkpoints(self, session_id):
+        from assay.research_checkpoints import list_latest
+        return list_latest(self, session_id)
+
+    def create_program(self, name, goal, *, request_id):
+        from assay.research_programs import create
+        return create(self, name, goal, request_id)
+
+    def attach_program_session(self, program_id, session_id, *, label=''):
+        from assay.research_programs import attach
+        return attach(self, program_id, session_id, label)
+
+    def get_program(self, program_id):
+        from assay.research_programs import get
+        return get(self, program_id)
+
+    def list_programs(self):
+        from assay.research_programs import list_programs
+        return list_programs(self)
+
+    def export_program(self, program_id):
+        from assay.research_program_manifest import export
+        return export(self, program_id)
+
+    def import_program(self, manifest):
+        from assay.research_program_manifest import restore
+        return restore(self, manifest)
+
+    def program_factor_history(self, program_id, factor_id, *, offset=0, limit=20):
+        from assay.research_programs import factor_history
+        return factor_history(self, program_id, factor_id, offset, limit)
+
+    def program_candidates(self, program_id, *, offset=0, limit=20):
+        from assay.research_programs import candidates
+        return candidates(self, program_id, offset, limit)
+
+    def reassess_program_factor(self, program_id, source_experiment_id, target_session_id, *, request_id, agent='unspecified'):
+        from assay.research_programs import reassess
+        return reassess(self, program_id, source_experiment_id, target_session_id, request_id, agent)
+
+    def compare_program_windows(self, program_id, baseline_experiment_id, target_experiment_id, *, drop_threshold):
+        from assay.research_programs import compare_windows
+        return compare_windows(self, program_id, baseline_experiment_id, target_experiment_id, drop_threshold)
 
     def audit_session(self, session_id: str, *, offset: int = 0, limit: int = 20,
                       expected_manifest_hash: str | None = None) -> dict:

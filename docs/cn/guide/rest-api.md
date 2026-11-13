@@ -25,6 +25,15 @@ python -m assay.cli serve-api --port 8000      # or: uvicorn assay.api.app:app -
 | GET | `/sessions/{id}` · `/manifest` · `/context` | 完整状态、导出和紧凑 context |
 | GET | `/sessions/{id}/audit` | 只读 judge 报告；`offset`、`limit`、`expected_manifest_hash` |
 | POST | `/sessions/{id}/experiments` · `/notes` | 执行实验／追加笔记 |
+| GET / POST | `/sessions/{id}/checkpoints` | 列出搜索状态／按版本保存 |
+| GET | `/sessions/{id}/checkpoints/{name}` | 恢复搜索状态并检查期间的新实验 |
+| GET / POST | `/programs` | 查找／创建跨窗口研究任务 |
+| POST | `/programs/import` | 原子恢复完整研究任务 |
+| GET | `/programs/{id}/manifest` | 导出任务及关联会话 |
+| GET | `/programs/{id}` · `/factors/{factor_id}` | 检查关联 session／因子历史 |
+| GET | `/programs/{id}/candidates` | 查看规范因子池及各 session 的决策 |
+| POST | `/programs/{id}/sessions` · `/reassessments` | 关联 session／在另一窗口重新评估 |
+| POST | `/programs/{id}/window-comparisons` | 比较兼容且不重叠窗口的 RankIC 变化 |
 | GET | `/experiments/{id}` | 摘要，或用 `section`、`offset`、`limit` 分页 |
 | POST | `/experiments/compare` | 比较至少两次实验 |
 | POST | `/experiments/{id}/replay` · `/reconcile` · `/cancel` · `/abandon` | 显式恢复与管理实验 |

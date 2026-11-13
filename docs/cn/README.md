@@ -16,7 +16,7 @@ Assay 是面向 Agent 的因子研究框架，提供行情处理、因子评估�
 | [Python SDK](guide/python-sdk.md) | `backtest`、`Session`、`batch_backtest`、`library`、`stream`、`backtest_portfolio` |
 | [CLI](guide/cli.md) | 每一个 `python -m assay.cli` 子命令 |
 | [REST API](guide/rest-api.md) | `/v1/*` 端点、SSE 流式、lint、鉴权 |
-| [MCP 服务器](guide/mcp-server.md) | 40 个工具、鉴权远程 MCP 与客户端配置 |
+| [MCP 服务器](guide/mcp-server.md) | 研究工具、鉴权远程 MCP 与客户端配置 |
 | [Agent 研究](guide/agent-research.md) | 数据集、持久研究会话、实验记录与执行后端 |
 | [研究审计](guide/research-audit.md) | 面向人工与 Agent judge 的只读证据报告 |
 | [部署](guide/deployment.md) | 公开入口、代理、持久状态与发布验收 |

@@ -1,7 +1,8 @@
 # MCP Server
 
-The server now has **40 tools**, including eight FactorDB tools and 21 durable backend/dataset/session/experiment
-tools. See the [agent research guide](agent-research.md) for their workflow and recovery semantics.
+The source server has **53 tools**, including eight FactorDB tools and 34 research
+tools for datasets, sessions, experiments, search checkpoints and programs. The
+deployed service can run a different version. See the [agent research guide](agent-research.md).
 
 `assay_research_audit` returns read-only, evidence-linked checks for a human or agent
 judge. See [research audit](research-audit.md) for its scope, paging and snapshot pinning.
