@@ -45,7 +45,6 @@ an explicit release before they are available on that service. Account-level
 hard CPU, memory, and storage quotas are not implemented.
 
 Dataset configuration hashes do not freeze a physical market-data snapshot.
-The published benchmarks and agent studies each record their version and scope:
-fixed-order replay is not a complete autonomous workflow, and synthetic agent
-traces do not establish trading profitability. See the [Chinese project status
-overview](../cn/project-overview.md) for the detailed local evidence inventory.
+The repository provides automated tests and [performance commands](guide/performance.md).
+Component timings depend on inputs and execution assumptions and do not establish
+the performance of a complete autonomous workflow.

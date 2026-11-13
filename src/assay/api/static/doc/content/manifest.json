@@ -138,8 +138,8 @@
       "level": 2
      },
      {
-      "id": "验证与论文材料",
-      "text": "验证与论文材料",
+      "id": "验证",
+      "text": "验证",
       "level": 2
      },
      {
@@ -415,7 +415,7 @@
      }
     ]
    },
-   "updated": "2026-11-10"
+   "updated": "2026-11-13"
   },
   "guide/qfv-data": {
    "group": "data",
@@ -593,7 +593,7 @@
      }
     ]
    },
-   "updated": "2026-07-04"
+   "updated": "2026-11-13"
   },
   "guide/data-pipeline": {
    "group": "data",
@@ -1072,7 +1072,7 @@
      }
     ]
    },
-   "updated": "2026-11-10"
+   "updated": "2026-11-13"
   },
   "guide/research-workbench": {
    "group": "research",
@@ -1424,11 +1424,6 @@
       "level": 3
      },
      {
-      "id": "measured-workloads",
-      "text": "Measured workloads",
-      "level": 2
-     },
-     {
       "id": "alpha-101-cache-microbenchmark",
       "text": "Alpha-101 cache microbenchmark",
       "level": 2
@@ -1449,11 +1444,6 @@
       "id": "查看复用情况",
       "text": "查看复用情况",
       "level": 3
-     },
-     {
-      "id": "实测工作负载",
-      "text": "实测工作负载",
-      "level": 2
      },
      {
       "id": "alpha-101-缓存微基准",
@@ -1788,7 +1778,7 @@
      }
     ]
    },
-   "updated": "2026-11-10"
+   "updated": "2026-11-13"
   },
   "design/factordb": {
    "group": "design",
@@ -1922,7 +1912,7 @@
      }
     ]
    },
-   "updated": "2026-11-03"
+   "updated": "2026-11-13"
   },
   "design/architecture": {
    "group": "design",

@@ -115,15 +115,8 @@
 <li><strong>账户隔离（本地）</strong>：启用账户认证后，个人账户使用独立研究、因子库、组合及 FactorDB 注册数据；服务密钥仍访问共享工作区。行情、ADES 队列和可信 worker 等资源仍共享，账户级 CPU、内存、存储硬配额尚未实现。升级前需备份账户与工作区，用户需重新登录；历史共享数据不会自动划归个人。当前线上发现文档仍标记为共享研究工作区。</li>
 <li><strong>复现与审计</strong>：数据集哈希固定配置，并不自动冻结供应商行情、后端代码或模型；清单哈希可检查记录完整性，但不是真实性证明，也不自动重跑实验。</li>
 </ul>
-<h2 id="验证与论文材料">验证与论文材料</h2>
-<p>当前源码最近一次完整自动化回归为 <strong>1,348 通过、3 跳过</strong>，日志见 <code>artifacts/liquidity-tenant-20261113/idempotent-full-after-owner.log</code>；这是本地工作树结果，不等于线上版本已通过相同测试。</p>
-<ul>
-<li><a href="https://github.com/QFinVerse/Assay/blob/main/experiments/efficiency/README.md" target="_blank" rel="noopener noreferrer">效率测试</a> 包含固定因子研究任务优化前后、因子执行组件和固定订单回放；不同计时范围、缓存、输入及费用条件需要分别解读，不能推出完整系统全面优于其他框架。</li>
-<li><a href="https://github.com/QFinVerse/Assay/blob/main/experiments/roadmap-baselines/README.md" target="_blank" rel="noopener noreferrer">回测引擎对照</a> 包含 Qlib、vectorbt 的固定订单回放和 Alphalens 的 RankIC 比较；费用场景存在口径差异，不能用于直接报告统一加速比。</li>
-<li><a href="https://github.com/QFinVerse/Assay/blob/main/experiments/workflow-comparison/README.md" target="_blank" rel="noopener noreferrer">Agent 工作流试验</a> 使用真实模型和合成数据，对比相同 Assay 工具下的原生与受限 Qlib 适配后端；它不是原生 RD-Agent 的完整研究流程。</li>
-<li><a href="https://github.com/QFinVerse/Assay/blob/main/experiments/baseline-acceptance/README.md" target="_blank" rel="noopener noreferrer">基线接入验收</a> 复用部分本地策略和接口，验证接入与恢复；不同方法预算不一致，不用于方法排名。</li>
-<li>论文源码和当前 PDF 分别位于 <code>manuscript/main.tex</code> 和 <code>manuscript/assay.pdf</code>。稿件需要按最终发布版本和实际实验结果重新核对；完整系统级效率优势、真实用户节时和更广泛任务覆盖仍需进一步证据。</li>
-</ul>
+<h2 id="验证">验证</h2>
+<p>项目提供自动化测试和<a href="/doc/guide/performance">性能测试命令</a>。运行结果取决于测试版本、数据与环境；组件级测试不能直接推断完整系统的效率。</p>
 <h2 id="版本与后续工作">版本与后续工作</h2>
-<p>2026-11-13 的只读健康检查显示，线上构建为 <code>03bab24</code>，其研究工作区是共享的。本地当前分支为 <code>codex/agent-native-deployment-20261110</code>，基于该提交但有尚未提交的源码、文档、测试和论文改动；本地能力不能直接当作线上能力。发布前应完成回归、备份、账户迁移与重新登录提示，并对 REST、MCP、行情及 worker 进行线上验收。</p>
+<p>2026-11-13 的只读健康检查显示，线上构建为 <code>03bab24</code>，其研究工作区是共享的。仓库中的后续能力需要部署后才能在线上使用。发布前应完成回归、备份、账户迁移与重新登录提示，并对 REST、MCP、行情及 worker 进行线上验收。</p>
 <p>接下来优先处理：完善并验收账户级资源隔离；核对尚未发布的改动及历史数据迁移；按最终版本补充系统级效率和用户工作流证据。当前项目已经具备 Agent 调用、持久状态、闭环实验与审计的主要结构，但不能将已有工程能力直接表述为完整生产隔离或已证明的全面性能优势。</p>

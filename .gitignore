@@ -10,6 +10,13 @@
 # (and its vendored YAML) is NOT ignored — only the top-level parquet stores are.
 /data/
 /artifacts/
+# Submission drafts and study outputs are maintained locally.
+/manuscript/
+/experiments/*
+!/experiments/baseline-acceptance/
+/experiments/baseline-acceptance/*
+!/experiments/baseline-acceptance/adapters.py
+/scripts/draw_assay_architecture.py
 # Additional pipeline-managed data folders (e.g. a separate full-history pull)
 /data_*/
 

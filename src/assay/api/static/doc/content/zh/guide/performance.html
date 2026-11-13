@@ -45,63 +45,6 @@ print(backend.execution_pool.stats())
 # factor_computations, factor_disk_hits, subtree_hits
 </code></pre>
 <p>面板命中和构建计数覆盖复用池的整个生命周期；因子计数只统计当前保留的条目，条目淘汰后相应计数也会移除。</p>
-<h2 id="实测工作负载">实测工作负载</h2>
-<p>在本地 NASDAQ-100 的 2023 年日线数据上重复三轮，取中位耗时。完整研究任务包含 24 个固定因子的诊断、带成本的周频组合回测和 SQLite 写入，不包含模型生成。</p>
-<div class="table-wrap"><table class="doc-table">
-<thead>
-<tr>
-<th>完整 Assay 研究任务</th>
-<th style="text-align:right">优化前</th>
-<th style="text-align:right">当前</th>
-<th style="text-align:right">提速</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>24 个新表达式</td>
-<td style="text-align:right">9.451 s</td>
-<td style="text-align:right">3.969 s</td>
-<td style="text-align:right">2.38×</td>
-</tr>
-<tr>
-<td>24 个重复表达式，独立新实验</td>
-<td style="text-align:right">9.194 s</td>
-<td style="text-align:right">3.715 s</td>
-<td style="text-align:right">2.47×</td>
-</tr>
-</tbody>
-</table></div>
-<p>288 次实验全部完成，144 组优化前后实验的 IC、RankIC 和 NAV 完全一致。每轮当前实现对 48 次实验只构建一次面板，24 个表达式各计算一次。</p>
-<p>单独的因子执行对照使用 250 个交易日 × 111 个历史成员、24 个公式、单线程、预备好的数据，以及完全相同的 float32 可表示输入：</p>
-<div class="table-wrap"><table class="doc-table">
-<thead>
-<tr>
-<th>原生因子执行路径</th>
-<th style="text-align:right">24 个新公式</th>
-<th style="text-align:right">同一批 24 个公式，缓存命中</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Assay 因子引擎</td>
-<td style="text-align:right">0.0538 s</td>
-<td style="text-align:right">0.0122 s</td>
-</tr>
-<tr>
-<td>Qlib 0.9.7 <code>D.features</code></td>
-<td style="text-align:right">1.1887 s</td>
-<td style="text-align:right">0.4424 s</td>
-</tr>
-<tr>
-<td>RD-Agent <code>FactorFBWorkspace.execute</code></td>
-<td style="text-align:right">11.7185 s</td>
-<td style="text-align:right">0.0688 s</td>
-</tr>
-</tbody>
-</table></div>
-<p>Qlib 原生特征缓存扩容至 20,000 条，足够容纳该工作负载；未配置外部 Redis 磁盘缓存。RD-Agent 原生签名结果缓存保持启用，重复运行确实命中缓存。数据准备和进程级导入单独记录。三者都应用相同的完整窗口与历史成员掩码，并将适配开销计入耗时。数值通过 <code>rtol=3e-5, atol=3e-5</code> 检查；同时保留原始掩码，因为原生缺失值规则存在差异。该结果对应执行组件，不是 Qlib 或 RD-Agent 完整研究循环的耗时。</p>
-<p>另一个固定日频执行回放使用 249 个交易日、90 只报价完整的证券、整股目标数量和零成本。Assay 记账器耗时 0.00914 s，Qlib 原生模拟器耗时 0.72349 s，两者相对独立现金／股数账本的 NAV 最大误差均不超过 <code>2.45e-15</code>。Qlib 报价构建耗时 0.29270 s，未计入执行时间。两条原生路径输出的报告结构不同，此回放只衡量共同的固定成交工作负载。</p>
-<p>复现命令与计时范围见<a href="https://github.com/QFinVerse/Assay/blob/main/experiments/efficiency/README.md" target="_blank" rel="noopener noreferrer">效率测试说明</a>。</p>
 <h2 id="alpha-101-缓存微基准">Alpha-101 缓存微基准</h2>
 <p>独立的 Alpha-101 脚本仍支持合成面板和实际行情：</p>
 <pre><code class="language-bash">PYTHONPATH=src python scripts/bench_alpha101.py --synthetic --n 200 --t 504

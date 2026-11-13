@@ -59,46 +59,6 @@ print(backend.execution_pool.stats())
 Hit and build counters span the pool lifetime. Factor counters describe currently
 retained entries and reset when those entries are evicted.
 
-## Measured workloads
-
-Three repetitions on a local NASDAQ-100 2023 daily panel gave these median times.
-The complete research task evaluates 24 fixed factors with diagnostics, weekly
-cost-adjusted portfolio reports and SQLite writes; model generation is excluded.
-
-| Complete Assay research task | Before reuse | Current | Speedup |
-|---|---:|---:|---:|
-| 24 new expressions | 9.451 s | 3.969 s | 2.38× |
-| 24 repeated expressions, new attempts | 9.194 s | 3.715 s | 2.47× |
-
-All 288 attempts completed. The 144 before/after pairs had identical IC, RankIC and NAV.
-Each current run built one panel for 48 attempts and computed each of the 24 expressions once.
-
-The separate factor-execution comparison uses 250 dates × 111 historical members,
-24 formulas, one thread, prepared data and matched float32-representable inputs:
-
-| Native factor-execution path | 24 new formulas | Same 24 formulas, cached |
-|---|---:|---:|
-| Assay factor engine | 0.0538 s | 0.0122 s |
-| Qlib 0.9.7 `D.features` | 1.1887 s | 0.4424 s |
-| RD-Agent `FactorFBWorkspace.execute` | 11.7185 s | 0.0688 s |
-
-Qlib's native feature cache is expanded to 20,000 entries, sufficient for this workload;
-an external Redis disk cache is not configured. RD-Agent's native signed result cache is
-enabled and its repeated runs hit that cache. Preparation and process-wide imports are
-recorded separately. Full-window and historical-membership masks are applied to every
-implementation and included in timing. Values pass `rtol=3e-5, atol=3e-5`; raw masks are
-also retained because native missing-value conventions differ. These are component
-measurements, not complete Qlib or RD-Agent research-loop timings.
-
-A separate fixed daily execution replay uses 249 dates, 90 fully observed securities,
-whole-share target quantities and zero costs. Assay's accountant took 0.00914 s versus
-0.72349 s for Qlib's native simulator. Both matched an independent cash/share NAV ledger
-within `2.45e-15`. Qlib quote construction (0.29270 s) is excluded. The native paths produce
-different report structures; this replay measures the shared fixed execution workload.
-
-Reproduction commands and measurement boundaries:
-[efficiency benchmarks](../../../experiments/efficiency/README.md).
-
 ## Alpha-101 cache microbenchmark
 
 The standalone Alpha-101 benchmark remains available for synthetic and real panels:
