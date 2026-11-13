@@ -63,7 +63,7 @@ def register_research_tools(mcp, get_service):
     def assay_experiment_replay(
         experiment_id: str, session_id: str, request_id: str, agent: str = "unspecified",
     ) -> dict:
-        """Rerun a terminal attempt with its original expression and identical dataset spec.
+        """Rerun a terminal attempt with its original dataset and accounting protocol.
 
         Creates a linked attempt and consumes budget. Reusing request_id is
         idempotent. Mutable market data may produce different results.
@@ -199,8 +199,8 @@ def register_research_tools(mcp, get_service):
     def assay_experiment_compare(experiment_ids: list[str]) -> dict:
         """Compare attempts, retaining failed rows and flagging mismatched evaluation specs.
 
-        Comparable means identical registered settings; it does not certify immutable
-        data, absence of selection bias, or out-of-sample performance.
+        Comparable requires identical registered settings and accounting protocols; it
+        does not certify immutable data, absence of selection bias, or out-of-sample performance.
         """
         return get_service().research.compare_experiments(experiment_ids)
 

@@ -480,7 +480,7 @@ class ResearchWorkspace:
 
     def replay_experiment(self, experiment_id: str, session_id: str, *, request_id: str,
                           agent: str = "unspecified") -> dict:
-        """Explicitly rerun a saved attempt under an identical dataset specification.
+        """Explicitly rerun an attempt under an identical dataset and accounting protocol.
 
         This consumes a new attempt. Equal configuration does not imply frozen
         data or equal results. Original records are never overwritten.
