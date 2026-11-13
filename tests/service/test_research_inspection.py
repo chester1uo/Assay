@@ -71,3 +71,10 @@ def test_factor_history_pages_attempts_and_decisions_without_full_reports():
     end=inspect_factor_history(history,offset=200,limit=2)
     assert end['experiments']==end['decisions']==[] and not end['history_page']['has_more']
     assert len(a['report']['portfolio']['trade_log'])==5000
+
+
+def test_backend_metric_definitions_are_never_invented():
+    attempt = {'id': 'external', 'status': 'completed', 'report': {'rank_ic': .1}}
+    assert 'rank_ic_definition' not in inspect_experiment(attempt)['report']
+    attempt['report']['rank_ic_definition'] = 'Custom backend metric.'
+    assert inspect_experiment(attempt)['report']['rank_ic_definition'] == 'Custom backend metric.'

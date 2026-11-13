@@ -260,6 +260,19 @@ def test_backtest_declares_a_constraint_it_could_not_apply(client):
     assert any("sector_neutral" in w for w in body["warnings"])
 
 
+def test_backtest_accepts_initial_capital_and_minimum_commission(client):
+    response = client.post('/v1/portfolio/backtest', json={
+        'expr': EXPR, 'universe': 'HK100', 'period_start': PERIOD[0], 'period_end': PERIOD[1],
+        'initial_capital': 10000., 'commission_min': 5., 'slippage_model': 'zero',
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert body['config']['initial_capital'] == 10000.
+    assert body['config']['commission_min'] == 5.
+    assert any('participation' in warning for warning in body['warnings'])
+    assert not any('minimum commission' in warning for warning in body['warnings'])
+
+
 def test_backtest_allows_long_short_on_hk(client):
     """The A-share long-only rule must not leak onto HK."""
     r = client.post(

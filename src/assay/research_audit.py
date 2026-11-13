@@ -117,6 +117,7 @@ def _series(audit, report, path, experiment_id, *, portfolio=False, period=None,
 
 def _attempts(audit, state, external_sources):
     from assay.research_lifecycle import identity
+    from assay.research_portfolio import accounting_protocol
 
     dataset = state['dataset']
     started_session = audit.timestamp(state['created_at'], '/state/created_at')
@@ -149,7 +150,8 @@ def _attempts(audit, state, external_sources):
                           base+'/replay_of', severity='warning', experiment_id=eid)
             elif (not isinstance(source,dict) or source.get('status') not in {'completed','failed','abandoned','cancelled'}
                     or any(source.get(k) != attempt[k]
-                    for k in ['expr','hypothesis','spec_hash'])):
+                    for k in ['expr','hypothesis','spec_hash'])
+                    or accounting_protocol(source, dataset) != accounting_protocol(attempt, dataset)):
                 audit.add('provenance', 'REPLAY_SOURCE_MISMATCH', 'Replay differs from its stored source.',
                           base+'/replay_of', experiment_id=eid)
             elif isinstance(source.get('finished_at'),str):
@@ -234,12 +236,26 @@ def _attempts(audit, state, external_sources):
         assumptions = portfolio.get('cost_assumptions')
         if required and not isinstance(assumptions,dict):
             audit.add('portfolio', 'COST_ASSUMPTIONS_MISSING', 'Cost assumptions are not recorded.',
-                      ppath, severity='warning', experiment_id=eid)
+                      ppath, severity='error' if dataset['portfolio'].get('initial_capital') is not None else 'warning', experiment_id=eid)
         if isinstance(assumptions,dict) and required:
             for name in ['commission_rate', 'slippage_model']:
                 if assumptions.get(name) != dataset['portfolio'].get(name):
                     audit.add('portfolio', 'COST_CONFIG_MISMATCH', f'Recorded {name} differs from the portfolio configuration.',
                               ppath+'/cost_assumptions/'+name, '/state/dataset/portfolio/'+name, experiment_id=eid)
+            capital = dataset['portfolio'].get('initial_capital')
+            if capital is not None and not {'initial_capital', 'commission_min', 'minimum_commission_capital_supplied'} <= assumptions.keys():
+                audit.add('portfolio', 'COST_ASSUMPTIONS_MISSING', 'The minimum-commission capital assumptions are incomplete.',
+                          ppath+'/cost_assumptions', '/state/dataset/portfolio/initial_capital', experiment_id=eid)
+            if 'commission_min' in assumptions and assumptions['commission_min'] != dataset['portfolio'].get('commission_min'):
+                audit.add('portfolio', 'COST_CONFIG_MISMATCH', 'Recorded minimum commission differs from the portfolio configuration.',
+                          ppath+'/cost_assumptions/commission_min', '/state/dataset/portfolio/commission_min', experiment_id=eid)
+            if 'initial_capital' in assumptions and assumptions['initial_capital'] != capital:
+                audit.add('portfolio', 'COST_CONFIG_MISMATCH', 'Recorded initial capital differs from the portfolio configuration.',
+                          ppath+'/cost_assumptions/initial_capital', '/state/dataset/portfolio/initial_capital', experiment_id=eid)
+            if ('minimum_commission_capital_supplied' in assumptions and
+                    assumptions['minimum_commission_capital_supplied'] is not (capital is not None)):
+                audit.add('portfolio', 'COST_CONFIG_MISMATCH', 'Minimum commission capital flag differs from the portfolio configuration.',
+                          ppath+'/cost_assumptions/minimum_commission_capital_supplied', '/state/dataset/portfolio/initial_capital', experiment_id=eid)
         if portfolio.get('warnings'):
             audit.add('portfolio', 'PORTFOLIO_WARNINGS', 'The portfolio report contains execution or cost limitations.',
                       ppath+'/warnings', severity='warning', experiment_id=eid)
@@ -252,6 +268,12 @@ def _attempts(audit, state, external_sources):
                       f'/state/decisions/{i}', experiment_id=decision['experiment_id'])
     if len(panels) > 1:
         audit.add('provenance', 'MULTIPLE_PANEL_REVISIONS', 'Completed attempts used different observed panels.',
+                  '/state/experiments', severity='warning')
+    protocols = {accounting_protocol(a, dataset) for a in state['experiments']}
+    protocols.discard(None)
+    if len(protocols) > 1:
+        audit.add('portfolio', 'MULTIPLE_ACCOUNTING_PROTOCOLS',
+                  'Portfolio attempts use different accounting protocols and are not directly comparable.',
                   '/state/experiments', severity='warning')
 
 

@@ -321,6 +321,12 @@ cannot be abandoned; use tracked cancellation instead. Keep registry, queue and 
 when restarting; exporting a completed manifest preserves records, not worker
 processes or physical market data.
 
+## Portfolio accounting protocol
+
+Portfolio targets are fractions of pre-trade NAV. Executed quantities are preserved when transaction costs are charged to cash; resulting weights are recalculated against post-fee NAV. Long-only, unlevered books reserve cash for costs. Explicitly leveraged or long-short books can borrow. New datasets and portfolio attempts record `portfolio_accounting_protocol: cash-funded-v1`, also discoverable in the Assay backend capabilities. Existing sessions can continue using their original dataset: historical records remain unchanged and new attempts record the current protocol. Comparisons flag different accounting protocols as not directly comparable; replay requires the original protocol.
+
+Set `portfolio.initial_capital` to a positive amount in the market currency to apply `commission_min` in currency units. The cost model updates the currency NAV as the portfolio value changes. Without initial capital, a nonzero minimum is not applied and the report includes a warning. Dataset specifications and portfolio run identities include explicitly supplied capital. Research evaluations do not currently derive order participation from market volume; without participation inputs, capacity limits and market impact are not applied.
+
 ## Cancel asynchronous research
 
 ```python

@@ -78,6 +78,10 @@ def index_attempt(db, attempt, dataset, fid=None):
     if not terminal or report is None:
         return
     version = (attempt.get('execution') or {}).get('data_version') or dataset.get('snapshot_id') or 'mutable:' + dataset['as_of']
+    from assay.research_portfolio import accounting_protocol
+    protocol = accounting_protocol(attempt, dataset)
+    if not dataset.get('portfolio_accounting_protocol') and protocol not in (None, 'legacy-unversioned'):
+        version += '|portfolio:' + protocol
     metrics = dict(report, turnover=report.get('turnover_1d'), coverage=report.get('coverage'),
                    long_short=report.get('long_short'), decay_halflife=report.get('decay_halflife_days'))
     # A late import of an older attempt must not replace a newer discovery score.

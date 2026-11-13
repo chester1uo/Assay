@@ -54,7 +54,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from assay.portfolio.accounting import PortfolioAccountant
+from assay.portfolio.accounting import PORTFOLIO_ACCOUNTING_PROTOCOL, PortfolioAccountant
 from assay.portfolio.config import PortfolioBacktestConfig
 from assay.portfolio.constraints import apply_constraints
 from assay.portfolio.costs import TransactionCostModel
@@ -142,7 +142,7 @@ class PortfolioBacktester:
             ``attribution['note']``.
         """
         canonical, factor_id = self._identity(expr)
-        run_id = PortfolioReport.compute_run_id(factor_id, config.config_hash())
+        run_id = PortfolioReport.compute_run_id(factor_id, config.config_hash(), PORTFOLIO_ACCOUNTING_PROTOCOL)
 
         # --- 1. engine + matrices (PIT universe + adj versioning => §7.1/§7.2) ---
         try:
@@ -186,6 +186,12 @@ class PortfolioBacktester:
         # sector-balanced.
         cutoff = as_of or config.as_of_date or config.period_end
         warnings: list[str] = []
+        if config.commission_min and config.initial_capital is None:
+            warnings.append("No initial capital supplied; minimum commission is not applied.")
+        if adv is None:
+            warnings.append("No order participation supplied; capacity limits and market impact are not applied.")
+        elif not np.all(np.isfinite(adv) & (np.asarray(adv) > 0)):
+            warnings.append("Some order participation inputs are missing or nonpositive; capacity and impact are not applied to those entries.")
         if groups is None and config.sector_neutral:
             groups = self._load_groups(symbols, cutoff)
             if groups is None:
@@ -219,6 +225,11 @@ class PortfolioBacktester:
         prev_mat = self._as_tn(prev_close, T, N)
         adv_mat = self._as_tn(adv, T, N)
         mask_mat = self._as_tn_bool(tradable_mask, T, N)
+        for name, supplied, aligned in (('prev_close', prev_close, prev_mat),
+                                        ('adv', adv, adv_mat),
+                                        ('tradable_mask', tradable_mask, mask_mat)):
+            if supplied is not None and aligned is None:
+                raise ValueError(f'{name} shape {np.shape(supplied)} must be ({N},) or ({T}, {N})')
         pre_returns, post_returns = None, None
         if config.execution_price == 'next_open' or (config.market == 'A' and config.execution_price == 'arrival'):
             previous = np.vstack([marked_close[:1], marked_close[:-1]])
@@ -764,6 +775,7 @@ class PortfolioBacktester:
             bench_nav=bench_nav,
             config=config,
             gross_nav=gross,
+            initial_nav=1.0,
             one_way_per_rebal=one_way if n_rebal > 0 else None,
             n_rebalances=n_rebal if n_rebal > 0 else None,
         )
@@ -828,6 +840,7 @@ class PortfolioBacktester:
                 data_snapshot=self._data_snapshot(),
                 eval_timestamp=None,  # the caller (service) stamps wall-clock time
                 adj_version=adj,
+                accounting_protocol=PORTFOLIO_ACCOUNTING_PROTOCOL,
             ),
         )
 
@@ -987,6 +1000,7 @@ class PortfolioBacktester:
                 data_snapshot=self._data_snapshot(),
                 eval_timestamp=None,
                 adj_version=self._adj(config),
+                accounting_protocol=PORTFOLIO_ACCOUNTING_PROTOCOL,
             ),
         )
 

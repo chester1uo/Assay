@@ -252,6 +252,9 @@ rerun = ws.replay_experiment(experiment_id, session_id,
 <p>错误含 <code>code</code>、<code>retryable</code>、<code>recommended_action</code>。暂时故障保留运行状态；确定性输入错误结束当前尝试，
 可创建带父实验关联的新修订。异步任务支持保存原因后取消，见下文。版本是逻辑标识，不认证物理数据内容；
 结果是 FactorDB 聚合诊断。重启时应保留研究、registry 和 queue 数据库，导出记录不会复制行情或运行中的 worker。</p>
+<h2 id="组合记账协议">组合记账协议</h2>
+<p>组合目标权重以交易前净值为基准。成交数量确定后，交易成本从现金扣除，持仓权重按扣费后的净值重新计算。不加杠杆的多头组合会预留交易费用；明确启用杠杆或多空交易的组合可以借款。新建组合评估数据集和实验记录 <code>portfolio_accounting_protocol: cash-funded-v1</code>，Agent 也可以从后端能力中发现该协议。旧 session 可继续使用原数据集，历史记录保持不变，新实验记录当前协议。不同成本协议的结果不可直接比较；重放要求使用原协议。</p>
+<p>设置市场货币计价的正数 <code>portfolio.initial_capital</code>，即可按货币金额应用最低佣金 <code>commission_min</code>；成本模型会随组合价值更新货币净值。未提供本金时，非零最低佣金不生效并在报告中提示。显式本金参与数据集和回测身份计算。研究评估目前不会从市场成交量自动计算订单参与率；缺少参与率时容量上限和市场冲击不生效。</p>
 <h2 id="取消异步实验">取消异步实验</h2>
 <p>SDK：<code>ws.cancel_experiment(experiment_id, &quot;研究方向改变&quot;)</code>；MCP：
 <code>assay_experiment_cancel(experiment_id, reason)</code>；REST：

@@ -48,6 +48,8 @@ def test_restart_and_agent_handoff_preserve_history(workspace):
     assert resumed.list_sessions()[0]["attempts"] == 3
     comparison = resumed.compare_experiments([first["id"], failed["id"]])
     assert comparison["comparable"]
+    assert 'rank_ic_definition' not in comparison
+    assert 'portfolio_cost_drag_definition' not in comparison
     assert comparison["experiments"][1]["failure_mode"] == "SYNTAX_ERROR"
 
 
@@ -86,6 +88,17 @@ def test_fixed_specs_comparison_and_validation(workspace):
                             horizons=[0], backend="test")
     with pytest.raises(ValueError, match="unknown research session"):
         ws.add_note("missing", "note")
+
+
+def test_comparison_only_exposes_common_backend_metric_definitions(workspace):
+    ws, backend, _, sid = workspace
+    backend.evaluate = lambda expr, dataset: {'failure_mode': None, 'rank_ic': .1,
+        'rank_ic_definition': 'shared' if expr != 'c' else 'different'}
+    a = ws.evaluate(sid, 'a', 'one', request_id='a')
+    b = ws.evaluate(sid, 'b', 'two', request_id='b')
+    c = ws.evaluate(sid, 'c', 'three', request_id='c')
+    assert ws.compare_experiments([a['id'], b['id']])['rank_ic_definition'] == 'shared'
+    assert 'rank_ic_definition' not in ws.compare_experiments([a['id'], c['id']])
 
 
 def test_concurrent_retry_and_budget_across_connections(workspace):

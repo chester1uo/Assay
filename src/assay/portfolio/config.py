@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
@@ -152,6 +153,7 @@ class PortfolioBacktestConfig:
     stamp_duty_rate: float = 0.001   # 0.0–0.003; sell side only (印花税)
     commission_rate: float = 0.0003  # 0.0001–0.001; both sides (佣金)
     commission_min: float = 5.0      # 0.0–10.0; min commission per trade (CNY)
+    initial_capital: float | None = None  # currency units; required for absolute minimum fees
     transfer_fee_rate: float = 0.00002  # 0.00001–0.0001; both sides, SSE only (过户费)
     # Data-dependent filters (INERT without A-share data — no-op gracefully):
     st_filter: bool = True           # exclude ST/*ST stocks (needs ST flags)
@@ -290,6 +292,12 @@ class PortfolioBacktestConfig:
         _rng("stamp_duty_rate", self.stamp_duty_rate, 0.0, 0.003)
         _rng("commission_rate", self.commission_rate, 0.0, 0.001)
         _rng("commission_min", self.commission_min, 0.0, 10.0)
+        if self.initial_capital is not None and (isinstance(self.initial_capital, bool) or
+                not isinstance(self.initial_capital, (int, float)) or
+                not math.isfinite(self.initial_capital) or self.initial_capital <= 0):
+            raise ValueError("initial_capital must be a positive finite amount")
+        if self.initial_capital is not None:
+            self.initial_capital = float(self.initial_capital)
         _rng("transfer_fee_rate", self.transfer_fee_rate, 0.0, 0.0001)
         _enum("suspend_handling", self.suspend_handling, _SUSPEND_HANDLING)
         _rng("inclusion_anticipation", self.inclusion_anticipation, 0, 5)
@@ -419,6 +427,8 @@ class PortfolioBacktestConfig:
         preimage = {k: v for k, v in d.items() if k in _HASH_FIELDS_V1}
         if self.adjustment is not None:
             preimage['adjustment'] = self.adjustment
+        if self.initial_capital is not None:
+            preimage['initial_capital'] = self.initial_capital
         payload = json.dumps(preimage, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
@@ -428,6 +438,8 @@ class PortfolioBacktestConfig:
         d = asdict(self)
         if self.adjustment is None:
             d.pop('adjustment')  # preserve the original default payload and hash
+        if self.initial_capital is None:
+            d.pop('initial_capital')
         # asdict already deep-copies lists/dicts; ensure JSON-roundtrippable types.
         return {k: (list(v) if isinstance(v, tuple) else v) for k, v in d.items()}
 

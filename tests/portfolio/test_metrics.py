@@ -52,6 +52,15 @@ def test_total_and_annualized_return():
     assert ann == pytest.approx(tot, rel=1e-6)
 
 
+def test_metrics_include_fee_on_first_observed_day():
+    result = m.compute_metrics([0.99, 0.99], ['2023-01-02', '2023-01-03'],
+                               gross_nav=[1.0, 1.0], initial_nav=1.0)
+    assert result['total_return'] == pytest.approx(-0.01)
+    assert result['cost_drag'] == pytest.approx(0.01)
+    assert result['max_drawdown'] == pytest.approx(0.01)
+    assert result['monthly_returns']['2023-01'] == pytest.approx(-0.01)
+
+
 def test_annualized_return_scales_with_period():
     half = _nav_from_returns(np.full(126, 0.001))  # half a trading year
     ann = m.annualized_return(half)

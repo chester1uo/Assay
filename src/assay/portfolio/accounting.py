@@ -9,9 +9,10 @@ emit the series the :class:`~assay.portfolio.report.PortfolioReport` is built fr
 NAV-fraction space, not in integer share lots. Each day every held weight grows by
 that name's simple return; the portfolio's gross daily return is
 ``sum_i w_i,t * r_i,t`` (cash earns 0). On a rebalance day the target weights are
-applied through the simulator *at that day's drifted weights*, costs are deducted
-as a one-off NAV haircut (``nav *= 1 - total_cost``), and the post-trade weights
-become the base that drifts forward. This is exact for a continuously-divisible
+expressed relative to the pre-trade NAV. The simulator determines filled
+notionals and fees, which are paid from cash. Holdings are then re-expressed
+relative to the post-fee NAV without changing the filled quantities. This is
+exact for a continuously-divisible
 portfolio and is the standard factor-backtest convention; it omits share-lot
 rounding and odd-lot effects (immaterial at index scale, and Assay has no lot-size
 data). Both **long-only** and **long/short** books are supported — weights may be
@@ -20,7 +21,7 @@ gross-return dot product handles shorts naturally (a short's positive return is 
 loss).
 
 Two NAV paths are kept in lockstep on the *same* drifted weights: ``nav_series``
-(net — costs deducted) and ``gross_nav`` (cost-free). Their terminal ratio is the
+(net — costs deducted) and ``gross_nav`` (cost-free). Their terminal difference is the
 ``cost_drag`` of section 4.3. Per-rebalance realised one-way turnover
 (``sum|w_new - w_old| / 2``) is recorded for the annual-turnover metric.
 """
@@ -28,12 +29,15 @@ Two NAV paths are kept in lockstep on the *same* drifted weights: ``nav_series``
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from copy import copy
 
 import numpy as np
 
 from assay.portfolio.config import PortfolioBacktestConfig
 from assay.portfolio.costs import TransactionCostModel
 from assay.portfolio.execution import ExecutionSimulator
+
+PORTFOLIO_ACCOUNTING_PROTOCOL = "cash-funded-v1"
 
 
 @dataclass
@@ -155,6 +159,17 @@ class PortfolioAccountant:
         nav_val = 1.0
         gross_val = 1.0
 
+        # Capital-dependent fees use the current monetary NAV, not the initial
+        # capital on every day. Work on local copies to keep runs independent.
+        simulator = self.simulator
+        run_cost_model = None
+        if self.config.initial_capital is not None:
+            if not isinstance(simulator.cost_model, TransactionCostModel):
+                raise ValueError("initial_capital requires a TransactionCostModel")
+            simulator = copy(simulator)
+            run_cost_model = copy(simulator.cost_model)
+            simulator.cost_model = run_cost_model
+
         trades: list = []
         turnover_per_rebalance: list[float] = []
         rebalance_idx: list[int] = []
@@ -202,7 +217,9 @@ class PortfolioAccountant:
                     mask = tradable_masks[t] if tradable_masks is not None else None
                     d_lbl = dates[t] if dates is not None else ""
 
-                    res = self.simulator.execute(
+                    if run_cost_model is not None:
+                        run_cost_model.nav_capital = self.config.initial_capital * nav_val
+                    res = simulator.execute(
                         target,
                         cur_w,
                         exec_price=px,
@@ -224,19 +241,22 @@ class PortfolioAccountant:
                     turnover_per_rebalance.append(turnover)
                     rebalance_idx.append(t)
 
-                    # Cost is a one-off NAV haircut on the *net* path only.
+                    # Executed weights and fees share the pre-trade NAV as their
+                    # denominator. Fees are paid from cash, so the same filled
+                    # holdings must be divided by the post-fee NAV, not silently
+                    # reduced in quantity along with the cash account.
+                    if not np.isfinite(res.total_cost) or not 0.0 <= res.total_cost < 1.0:
+                        raise ValueError("transaction costs must be finite and below portfolio NAV")
                     nav_val *= 1.0 - res.total_cost
-                    cur_w = res.executed_weights
-                    if self.config.market == "A":
-                        cur_w = cur_w / (1 - res.total_cost)
-                        if self.config.partial_fill_handling == "defer":
-                            # Keep only unfilled names. Already-filled positions
-                            # drift naturally instead of being repeatedly reset.
-                            wanted = ((np.abs(res.residual_targets - res.executed_weights) > 1e-10)
-                                      & (np.abs(res.residual_targets - cur_w) > 1e-10))
-                            pending = np.where(wanted, res.residual_targets, np.nan) if wanted.any() else None
-                        else:
-                            pending = None
+                    cur_w = res.executed_weights / (1.0 - res.total_cost)
+                    if self.config.partial_fill_handling == "defer":
+                        # Keep only unfilled names. Already-filled positions
+                        # drift naturally instead of being repeatedly reset.
+                        wanted = ((np.abs(res.residual_targets - res.executed_weights) > 1e-10)
+                                  & (np.abs(res.residual_targets - cur_w) > 1e-10))
+                        pending = np.where(wanted, res.residual_targets, np.nan) if wanted.any() else None
+                    else:
+                        pending = None
                     trades.extend(res.trades)
                     for k in diag:
                         diag[k] += res.diag.get(k, 0.0)
@@ -274,9 +294,7 @@ class PortfolioAccountant:
     # -- diagnostics -------------------------------------------------------
     @staticmethod
     def cost_drag(net_nav: np.ndarray, gross_nav: np.ndarray) -> float:
-        """Total return lost to costs = gross total return - net total return (4.3)."""
+        """Difference in final NAVs, with both accounts starting at 1.0 (4.3)."""
         if net_nav.size == 0 or gross_nav.size == 0:
             return float("nan")
-        net_tot = float(net_nav[-1] / net_nav[0] - 1.0)
-        gross_tot = float(gross_nav[-1] / gross_nav[0] - 1.0)
-        return gross_tot - net_tot
+        return float(gross_nav[-1] - net_nav[-1])

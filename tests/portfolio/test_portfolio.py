@@ -578,6 +578,10 @@ def test_cost_drag_non_negative_gross_minus_net():
     assert drag >= -1e-12  # net <= gross; costs only ever drag NAV down
 
 
+def test_cost_drag_includes_initial_trade_fee():
+    assert PortfolioAccountant.cost_drag(np.array([0.99, 0.99]), np.array([1.0, 1.0])) == pytest.approx(0.01)
+
+
 def test_monthly_returns_keys_are_yyyy_mm():
     rng = np.random.default_rng(9)
     r = rng.normal(0.0005, 0.005, 74)
@@ -617,6 +621,23 @@ def test_backtester_run_produces_well_formed_report(patched_engine):
     # identity is a stable function of factor + config
     rep2 = PortfolioBacktester(store=None).run("close", cfg)
     assert rep2.run_id == rep.run_id
+
+
+@pytest.mark.parametrize('name', ['adv', 'prev_close', 'tradable_mask'])
+def test_backtester_rejects_misaligned_execution_inputs(patched_engine, name):
+    cfg = _cfg(period_start='2021-01-01', period_end='2021-03-31', market='US')
+    with pytest.raises(ValueError, match=name + ' shape'):
+        PortfolioBacktester(store=None).run('close', cfg, **{name: np.ones((80, 9))})
+
+
+def test_aligned_order_participation_changes_portfolio_costs(patched_engine):
+    cfg = _cfg(period_start='2021-01-01', period_end='2021-03-31', market='US',
+               rebalance_type='weekly', slippage_model='linear')
+    bt = PortfolioBacktester(store=None)
+    without = bt.run('close', cfg)
+    with_participation = bt.run('close', cfg, adv=np.full((80, 10), .5))
+    assert any('participation' in warning for warning in without.warnings)
+    assert with_participation.cost_drag > without.cost_drag
 
 
 def test_backtester_long_short_and_mv_paths(patched_engine):
@@ -725,7 +746,7 @@ def test_sector_neutral_without_group_data_is_reported_not_silent(patched_engine
         "close", _cfg(period_start="2021-01-04", period_end="2021-06-30",
                       market="HK", benchmark="none")
     )
-    assert plain.warnings == []
+    assert not any("sector_neutral" in w for w in plain.warnings)
 
 
 def test_turnover_cap_enforced_against_drifted_book(patched_engine, monkeypatch):

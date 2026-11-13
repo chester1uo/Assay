@@ -453,13 +453,14 @@ def _to_pydate(d: Any) -> dt.date | None:
 
 
 def monthly_returns(
-    nav: Sequence[float] | np.ndarray, dates: Sequence[Any]
+    nav: Sequence[float] | np.ndarray, dates: Sequence[Any], *, initial_nav: float | None = None
 ) -> dict[str, float]:
     """Calendar-month returns keyed ``'YYYY-MM' -> return`` for the heatmap (4.x).
 
     Each month's return is ``NAV_last(month) / NAV_last(prev period) - 1``, i.e.
     the compounded daily return within the month, chained off the last NAV of the
-    preceding calendar month (or the period's opening NAV for the first month).
+    preceding calendar month (or ``initial_nav`` for the first month when given,
+    otherwise the first observed NAV).
     NaN NAVs are skipped; a month with no finite NAV is omitted. ``dates`` aligns
     1:1 with ``nav``; unparseable dates drop their NAV from the grouping.
     """
@@ -481,7 +482,7 @@ def monthly_returns(
     if not vals:
         return {}
     out: dict[str, float] = {}
-    prev_close = vals[0]  # opening reference for the very first month
+    prev_close = vals[0] if initial_nav is None else float(initial_nav)
     cur_key = keys[0]
     cur_last = vals[0]
     for k, val in zip(keys[1:], vals[1:]):
@@ -506,6 +507,7 @@ def compute_metrics(
     gross_nav: Sequence[float] | np.ndarray | None = None,
     one_way_per_rebal: float | None = None,
     n_rebalances: int | None = None,
+    initial_nav: float | None = None,
 ) -> dict[str, Any]:
     """Reduce a NAV series to every section-4 metric as a flat, NaN-safe dict.
 
@@ -521,23 +523,38 @@ def compute_metrics(
     given (else 0.0). Turnover/cost inputs are optional: pass ``gross_nav`` to get
     ``cost_drag``/``gross_return``; pass ``one_way_per_rebal`` and
     ``n_rebalances`` (with ``dates`` to infer the year-fraction) to get
-    ``annual_turnover``/``avg_holding_days``. Anything not derivable is ``NaN``.
+    ``annual_turnover``/``avg_holding_days``. ``initial_nav`` supplies the
+    pre-observation capital for both portfolio and benchmark; it adds the first
+    observed day as a return period to the risk and annualization metrics.
+    Anything not derivable is ``NaN``.
     """
     rf = float(getattr(config, "risk_free_rate", 0.0) or 0.0) if config is not None else 0.0
-    v = _as_nav(nav)
+    observed = _as_nav(nav)
+    v = np.concatenate(([float(initial_nav)], observed)) if initial_nav is not None and observed.size else observed
+    benchmark = _as_nav(bench_nav) if bench_nav is not None else None
+    gross = _as_nav(gross_nav) if gross_nav is not None else None
+    if initial_nav is not None and observed.size:
+        if benchmark is not None:
+            benchmark = np.concatenate(([float(initial_nav)], benchmark))
+        if gross is not None:
+            gross = np.concatenate(([float(initial_nav)], gross))
     port_ret = returns_from_nav(v)
-    bench_ret = returns_from_nav(bench_nav) if bench_nav is not None else None
+    bench_ret = returns_from_nav(benchmark) if benchmark is not None else None
 
     ann_ret = annualized_return(v)
     mdd, peak_i, trough_i, rec_i = max_drawdown(v)
+    if initial_nav is not None and observed.size:
+        peak_i = peak_i - 1 if peak_i >= 0 else peak_i
+        trough_i = trough_i - 1 if trough_i >= 0 else trough_i
+        rec_i = rec_i - 1 if rec_i is not None else None
 
     out: dict[str, Any] = {
         # 4.1
         "total_return": total_return(v),
         "annual_return": ann_ret,
         "log_return": log_return(v),
-        "gross_return": (total_return(gross_nav) if gross_nav is not None else float("nan")),
-        "excess_return": excess_return(v, bench_nav),
+        "gross_return": (total_return(gross) if gross is not None else float("nan")),
+        "excess_return": excess_return(v, benchmark),
         # 4.2
         "sharpe": sharpe(port_ret, rf),
         "sortino": sortino(port_ret, rf),
@@ -557,7 +574,7 @@ def compute_metrics(
         "cost_drag": float("nan"),
         "avg_holding_days": float("nan"),
         # display
-        "monthly_returns": monthly_returns(v, dates),
+        "monthly_returns": monthly_returns(observed, dates, initial_nav=initial_nav),
     }
 
     # cost drag from a parallel gross NAV (4.3)

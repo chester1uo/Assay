@@ -15,7 +15,8 @@ def register_research_tools(mcp, get_service):
         portfolio assumptions and local registry links. Failed experiments remain
         in the counts. Findings and candidate evidence are paginated (limit 1–100);
         overall errors cover the full snapshot. Pin expected_manifest_hash when
-        reading further pages. Does not prove authorship, replay or profitability.
+        reading further pages. Free-text notes and conclusions are not fact-checked;
+        the audit does not prove authorship, replay or profitability.
         """
         return get_service().research.audit_session(session_id,offset=offset,limit=limit,
                                                     expected_manifest_hash=expected_manifest_hash)
@@ -130,7 +131,10 @@ def register_research_tools(mcp, get_service):
 
     @mcp.tool()
     def assay_research_note(session_id: str, text: str, agent: str = "unspecified") -> dict:
-        """Append a durable research decision, failed direction, or next-step handoff note."""
+        """Append a durable research decision, failed direction, or next-step handoff note.
+
+        ``agent`` is a caller-supplied label, not an authenticated model identity.
+        """
         return get_service().research.add_note(session_id, text, agent=agent)
 
     @mcp.tool()

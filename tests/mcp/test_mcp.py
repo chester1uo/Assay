@@ -85,6 +85,25 @@ def _server_module():
     return importlib.import_module("assay.mcp.server")
 
 
+def test_portfolio_tool_exposes_capital_and_cost_warnings(tmp_path, monkeypatch):
+    from assay.demo import prepare_demo
+    service, dataset = prepare_demo(tmp_path / 'market')
+    mod = _server_module()
+    monkeypatch.setattr(mod, 'get_service', lambda: service)
+    tool = _registered_tools(mod)['assay_portfolio_backtest'].fn
+    result = tool('ts_returns(close,3)', universe=dataset['universe'], period=dataset['period'],
+                  initial_capital=10000., commission_min=5.)
+    assert result['config']['initial_capital'] == 10000.
+    assert result['config']['commission_min'] == 5.
+    assert result['cost_assumptions']['minimum_commission_capital_supplied'] is True
+    assert result['cost_assumptions']['impact_participation_supplied'] is False
+    assert 'positive values' in result['cost_drag_definition']
+    assert any('participation' in w for w in result['warnings'])
+    without_capital = tool('ts_returns(close,3)', universe=dataset['universe'], period=dataset['period'],
+                           commission_min=5.)
+    assert any('minimum commission' in w for w in without_capital['warnings'])
+
+
 def _registered_tools(mod):
     """Return ``{name: Tool}`` for every tool registered on the FastMCP server.
 

@@ -172,8 +172,7 @@ export function render(root, ctx) {
   const topNInput = ctx.el("input", { type: "number", className: "input pf-num", value: "1", min: "1", max: "3", step: "1" });
   const topNField = field(ctx, ctx.t("pf.topQuantiles"), topNInput);
   const maxWInput = numInput(ctx, 0.05, 0.01);
-  // Initial capital — drives the absolute Portfolio Value chart & the operations
-  // list amounts (the backtest itself is scale-free; this is a display multiplier).
+  // Initial capital determines absolute commissions and portfolio-value charts.
   const capitalInput = ctx.el("input", { type: "number", className: "input pf-num", value: "1000000", min: "1", step: "100000",
     style: { width: "130px" }, "aria-label": ctx.t("pf.initialCapital") });
 
@@ -319,6 +318,7 @@ export function render(root, ctx) {
       stamp_duty_rate: Number(feeStamp.value),
       transfer_fee_rate: Number(feeTransfer.value),
       commission_min: Number(feeMin.value),
+      initial_capital: Number(capitalInput.value),
       slippage_k: Number(feeSlippage.value),
       // operations list (操作清单): include the trade log when requested
       save_trade_log: tradeLogChk.checked,
@@ -344,6 +344,9 @@ export function render(root, ctx) {
     if (!expr) { toast(ctx, ctx.t("pf.enterExpr"), true); return; }
     if (startInput.value && endInput.value && startInput.value > endInput.value) {
       toast(ctx, ctx.t("pf.badPeriod"), true); return;
+    }
+    if (!Number.isFinite(Number(capitalInput.value)) || Number(capitalInput.value) <= 0) {
+      toast(ctx, ctx.t("pf.badCapital"), true); return;
     }
     if (controller) controller.abort();
     controller = new AbortController();
@@ -416,7 +419,7 @@ export function render(root, ctx) {
         ctx.el("span", { className: "pf-hint" }, ctx.t("pf.summaryHint", { days: r.n_trading_days ?? "—", rebal: r.n_rebalances ?? "—" }))),
       ctx.el("div", { className: "card-body" }, kpis));
 
-    const capital = Number(capitalInput.value) || 0;
+    const capital = Number(r.config?.initial_capital ?? capitalInput.value) || 0;
 
     // Charts: one tabbed panel (Portfolio value / NAV vs benchmark / Daily / Monthly)
     const chartsCard = buildChartTabs(r, capital);
@@ -427,8 +430,11 @@ export function render(root, ctx) {
 
     resultsBody.replaceChildren(
       kpiCard,
+      ...(Array.isArray(r.warnings) && r.warnings.length ? [ctx.el("section", { className: "card" },
+        ctx.el("div", { className: "card-head" }, ctx.el("span", { className: "card-title" }, ctx.t("pf.assumptions"))),
+        ctx.el("div", { className: "card-body" }, ...r.warnings.map((warning) => ctx.el("p", {}, String(warning)))))] : []),
       ctx.el("div", { className: "pf-grid2" }, chartsCard, statsCard),
-      buildTradeCard(r, capital),
+      buildTradeCard(r),
       jsonDetails(r)
     );
   }
@@ -497,7 +503,7 @@ export function render(root, ctx) {
       ctx.t("pf.pvHint", { end: fmtMoney(end), peak: fmtMoney(peak) })));
   }
 
-  function buildTradeCard(r, capital) {
+  function buildTradeCard(r) {
     const trades = r.trade_log || [];
     const body = ctx.el("div", { className: "card-body" });
     const head = ctx.el("div", { className: "card-head" },
@@ -513,11 +519,11 @@ export function render(root, ctx) {
     const shown = trades.slice(-CAP).reverse(); // most recent first
     body.appendChild(ctx.el("div", { className: "pf-hint", style: { marginBottom: "6px" } },
       trades.length > CAP ? ctx.t("pf.tradesCapped", { shown: CAP, total: trades.length }) : ctx.t("pf.tradesCount", { total: trades.length })));
-    body.appendChild(buildTradeTable(shown, capital));
+    body.appendChild(buildTradeTable(shown));
     return ctx.el("section", { className: "card" }, head, body);
   }
 
-  function buildTradeTable(rows, capital) {
+  function buildTradeTable(rows) {
     const t = ctx.t;
     const thead = ctx.el("thead", {}, ctx.el("tr", {},
       ...["pf.thDate", "pf.thSymbol", "pf.thSide", "pf.thWeight", "pf.thPrice", "pf.thAmount", "pf.thCost", "pf.thBlocked"].map((k) => ctx.el("th", {}, t(k)))));
@@ -525,15 +531,14 @@ export function render(root, ctx) {
     for (const tr of rows) {
       const isBuy = tr.side === "buy";
       const w = Number(tr.exec_w);
-      const amount = (capital > 0 && Number.isFinite(w)) ? Math.abs(w) * capital : null;
       tbody.appendChild(ctx.el("tr", {},
         ctx.el("td", {}, tr.date || "—"),
         ctx.el("td", { className: "pf-mono" }, tr.symbol || "—"),
         ctx.el("td", {}, ctx.el("span", { className: "badge " + (isBuy ? "badge--green" : "badge--red") }, isBuy ? t("pf.buy") : t("pf.sell"))),
         ctx.el("td", { className: "pf-mono" }, ctx.pct(w, 2)),
         ctx.el("td", { className: "pf-mono" }, ctx.fmt(tr.price, 2)),
-        ctx.el("td", { className: "pf-mono" }, amount != null ? fmtMoney(amount) : "—"),
-        ctx.el("td", { className: "pf-mono" }, (capital > 0 && Number.isFinite(tr.cost)) ? fmtMoney(tr.cost * capital) : ctx.fmt(tr.cost, 6)),
+        ctx.el("td", { className: "pf-mono" }, tr.qty_frac != null ? ctx.pct(tr.qty_frac, 2) : "—"),
+        ctx.el("td", { className: "pf-mono" }, tr.cost != null ? ctx.pct(tr.cost, 4) : "—"),
         ctx.el("td", {}, tr.blocked_reason ? ctx.el("span", { className: "badge badge--amber" }, tr.blocked_reason) : "—")));
     }
     return ctx.el("div", { className: "pf-table-wrap" }, ctx.el("table", { className: "pf-table" }, thead, tbody));

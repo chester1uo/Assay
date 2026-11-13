@@ -27,7 +27,7 @@ def validate_state(state, *, allow_running=False):
     require(isinstance(dataset, dict), "dataset must be an object")
     metadata = {"id", "name", "description", "spec_hash", "created_at"}
     required = {"backend", "universe", "period", "as_of", "horizons", "execution", "adj", "snapshot_id"}
-    optional = {"backend_options", "score_period", "score_dates", "expression_policy", "portfolio", "evaluation_protocol"}
+    optional = {"backend_options", "score_period", "score_dates", "expression_policy", "portfolio", "evaluation_protocol", "portfolio_accounting_protocol"}
     require(metadata | required <= set(dataset) <= metadata | required | optional, "dataset fields")
     strings(dataset, ("id", "name", "backend", "universe", "spec_hash"))
     require(dataset["id"] == state["dataset_id"], "dataset identity")
@@ -62,6 +62,10 @@ def validate_state(state, *, allow_running=False):
         require(normalize_portfolio(dataset, value, market) == value, 'canonical portfolio configuration')
     if 'evaluation_protocol' in dataset:
         require(dataset['evaluation_protocol'] == 'assay-daily-v2', 'evaluation protocol version')
+    if 'portfolio_accounting_protocol' in dataset:
+        strings(dataset, ('portfolio_accounting_protocol',))
+        require(bool(dataset.get('portfolio')) and dataset['portfolio'].get('enabled') is not False,
+                'portfolio accounting protocol requires an enabled portfolio')
     attempts, notes = state["experiments"], state["notes"]
     require(isinstance(attempts, list) and isinstance(notes, list), "record lists")
     require(len(attempts) <= state["budget"], "attempts exceed budget")
@@ -72,8 +76,25 @@ def validate_state(state, *, allow_running=False):
               "parent_id", "agent", "status", "started_at", "finished_at", "report", "error"}
     for attempt in attempts:
         require(isinstance(attempt, dict), "attempt must be an object")
-        require(fields <= set(attempt) <= fields | {"replay_of", "policy_check", "panel_report", "execution", "cancellation", "factor_id"}, "attempt fields")
+        require(fields <= set(attempt) <= fields | {"replay_of", "policy_check", "panel_report", "execution", "cancellation", "factor_id", "portfolio_accounting_protocol"}, "attempt fields")
         strings(attempt, ("id", "request_id", "expr", "hypothesis"))
+        if 'portfolio_accounting_protocol' in attempt:
+            strings(attempt, ('portfolio_accounting_protocol',))
+            require(bool(dataset.get('portfolio')) and
+                    dataset['portfolio'].get('enabled') is not False, 'attempt accounting requires a portfolio')
+            declared = dataset.get('portfolio_accounting_protocol')
+            require(declared is None or attempt['portfolio_accounting_protocol'] == declared,
+                    'attempt accounting differs from dataset protocol')
+        report = attempt.get('panel_report') or attempt.get('report') or {}
+        evidence = report.get('portfolio') if isinstance(report, dict) else None
+        lineage = evidence.get('lineage') if isinstance(evidence, dict) else None
+        protocol = lineage.get('accounting_protocol') if isinstance(lineage, dict) else None
+        if protocol is not None:
+            require(isinstance(protocol, str) and bool(protocol.strip()), 'report accounting protocol')
+            require(dataset.get('portfolio_accounting_protocol') in (None, protocol),
+                    'report accounting differs from dataset protocol')
+            require(attempt.get('portfolio_accounting_protocol') in (None, protocol),
+                    'attempt accounting differs from report lineage')
         if 'factor_id' in attempt:
             from assay.research_lifecycle import identity
             require(attempt['factor_id'] == identity(attempt['expr'])[0], 'canonical factor identity')
@@ -136,6 +157,9 @@ def validate_state(state, *, allow_running=False):
             source = ids.get(attempt["replay_of"])
             if source:
                 require(all(attempt[k] == source[k] for k in ("expr", "hypothesis", "spec_hash")), "replay source mismatch")
+                from assay.research_portfolio import accounting_protocol
+                require(accounting_protocol(attempt, dataset) == accounting_protocol(source, dataset),
+                        'replay accounting protocol mismatch')
         ids[attempt["id"]] = attempt
         requests.add(attempt["request_id"])
     positions = {a["id"]: i for i, a in enumerate(attempts)}

@@ -4,6 +4,21 @@ from __future__ import annotations
 from dataclasses import fields
 
 
+def accounting_protocol(attempt, dataset):
+    """Identify the accounting used by an attempt without changing old records."""
+    portfolio = dataset.get('portfolio')
+    if not isinstance(portfolio, dict) or not portfolio or portfolio.get('enabled') is False:
+        return None
+    declared = attempt.get('portfolio_accounting_protocol')
+    if declared:
+        return declared
+    report = attempt.get('panel_report') or attempt.get('report') or {}
+    evidence = report.get('portfolio') if isinstance(report, dict) else None
+    lineage = evidence.get('lineage') if isinstance(evidence, dict) else None
+    protocol = lineage.get('accounting_protocol') if isinstance(lineage, dict) else None
+    return protocol or dataset.get('portfolio_accounting_protocol') or 'legacy-unversioned'
+
+
 def normalize_portfolio(dataset, options, market):
     from assay.portfolio import PortfolioBacktestConfig
 
@@ -41,11 +56,10 @@ def evaluate_portfolio(service, expr, dataset, *, engine=None):
     report = service.backtest_portfolio(expr, config, as_of=dataset['as_of'], engine=engine).to_dict()
     report['status'] = 'completed' if report.get('n_trading_days', 0) >= 2 and report.get('nav_series') else 'failed'
     report['spec_hash'] = dataset['spec_hash']
-    report['cost_assumptions'] = dict(commission_rate=config.commission_rate,
+    report['cost_drag_definition'] = ('gross_return minus total_return; positive values represent return lost to costs. '
+                                      'Gross NAV follows the realized net portfolio weights.')
+    report['cost_assumptions'] = dict(commission_rate=config.commission_rate, commission_min=config.commission_min,
         slippage_model=config.slippage_model, impact_participation_supplied=False,
-        minimum_commission_capital_supplied=False)
-    if config.slippage_model != 'zero':
-        report.setdefault('warnings', []).append('No order participation inputs supplied; market impact is zero.')
-    if config.commission_min:
-        report.setdefault('warnings', []).append('No capital scale supplied; the minimum commission floor is not applied.')
+        minimum_commission_capital_supplied=config.initial_capital is not None,
+        initial_capital=config.initial_capital)
     return report

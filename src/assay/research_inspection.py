@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 
-_METRICS = ('failure_mode','suggestion','rank_ic','rank_icir','ic','icir','turnover_1d',
+_METRICS = ('failure_mode','suggestion','rank_ic','rank_ic_definition','rank_icir','ic','icir','turnover_1d',
     'decay_halflife_days','ic_by_horizon','n_dates','n_symbols','eval_period','panel_period',
     'score_period','scoring_complete','universe_id','universe_as_of','universe_symbols_hash',
     'universe_axis','data_as_of','execution','adj','panel_content_hash','lookahead_detected',
     'diagnostics_scope','unavailable_score_metrics')
-_PORTFOLIO = ('status','total_return','annual_return','gross_return','sharpe','max_drawdown',
+_PORTFOLIO = ('status','total_return','annual_return','gross_return','sharpe','max_drawdown','cost_drag_definition',
     'annual_turnover','cost_drag','spec_hash','panel_content_hash','cost_assumptions','warnings',
     'n_trading_days','n_rebalances','period_start','period_end')
 

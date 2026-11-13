@@ -50,11 +50,12 @@ class AssayBackend:
         self.execution_pool = ResearchExecutionPool(service) if reuse_panels else None
 
     def describe(self) -> dict:
+        from assay.portfolio.accounting import PORTFOLIO_ACCOUNTING_PROTOCOL
         return dict(kind="in_process", description="Assay daily factor evaluator",
                     fields=["open", "high", "low", "close", "volume"], frequencies=["1d"],
                     execution_modes=["next_open", "next_close", "close"],
                     known_universes=sorted(self.service._UNIVERSE_MARKET),
-                    supports_portfolio=True,
+                    supports_portfolio=True, portfolio_accounting_protocol=PORTFOLIO_ACCOUNTING_PROTOCOL,
                     supports_universe_freeze=False, supports_immutable_snapshots=False)
 
     def probe(self) -> dict:
@@ -74,6 +75,7 @@ class AssayBackend:
                     markets=markets, scope="file inventory; not a requested-period coverage check")
 
     def evaluate(self, expr: str, dataset: dict) -> dict:
+        self.validate_execution_dataset(dataset)
         if dataset.get("snapshot_id"):
             raise ValueError("the Assay backend cannot resolve immutable snapshot IDs")
         if dataset.get("backend_options"):
@@ -84,6 +86,14 @@ class AssayBackend:
             with self.execution_pool.lease(dataset) as entry:
                 return self._evaluate(expr, dataset, entry)
         return self._evaluate(expr, dataset, None)
+
+    def validate_execution_dataset(self, dataset: dict) -> None:
+        """Reject an explicitly incompatible accounting protocol."""
+        from assay.portfolio.accounting import PORTFOLIO_ACCOUNTING_PROTOCOL
+        portfolio = dataset.get('portfolio')
+        if (portfolio and portfolio.get('enabled') is not False and
+                dataset.get('portfolio_accounting_protocol') not in (None, PORTFOLIO_ACCOUNTING_PROTOCOL)):
+            raise ValueError('This portfolio dataset requires an unsupported accounting protocol.')
 
     def _evaluate(self, expr, dataset, entry):
         enabled = dataset.get('portfolio') and dataset['portfolio'].get('enabled') is not False
@@ -97,6 +107,8 @@ class AssayBackend:
                 as_of=dataset["as_of"], horizons=dataset["horizons"], session_id=session_id,
                 execution=dataset["execution"], adj=dataset["adj"], save=False,
             ).to_dict()
+            report['rank_ic_definition'] = ('Cross-sectional rank correlation of factor values and forward returns; '
+                                            'it is a factor diagnostic, not a cost-adjusted portfolio return.')
             if enabled and not report.get('failure_mode'):
                 from assay.research_portfolio import evaluate_portfolio
                 engine, _ = self.service._session_engine(session_id, dataset['horizons'], dataset['execution'])
@@ -200,7 +212,7 @@ class ResearchWorkspace:
         allowed = {"kind", "description", "endpoint", "fields", "frequencies", "execution_modes",
                    "known_universes", "supports_universe_freeze", "supports_immutable_snapshots", "supports_async", "supports_cancellation",
                    "requires_snapshot_id", "supported_adjustments"}
-        allowed.add('supports_portfolio')
+        allowed.update(('supports_portfolio', 'portfolio_accounting_protocol'))
         rows = []
         for name in names:
             backend = self.backends.get(name)
@@ -284,11 +296,14 @@ class ResearchWorkspace:
             spec["expression_policy"] = normalize_policy(expression_policy)
         if isinstance(self.backends[backend], AssayBackend):
             from assay.research_portfolio import normalize_portfolio
+            from assay.portfolio.accounting import PORTFOLIO_ACCOUNTING_PROTOCOL
             spec['evaluation_protocol'] = 'assay-daily-v2'
             if portfolio is None and (score or execution == 'close'):
                 portfolio = {'enabled': False}
             spec['portfolio'] = normalize_portfolio(spec, {} if portfolio is None else portfolio,
                                                    self.backends[backend].service._market_for(universe))
+            if spec['portfolio'].get('enabled') is not False:
+                spec['portfolio_accounting_protocol'] = PORTFOLIO_ACCOUNTING_PROTOCOL
         elif portfolio is not None:
             raise ValueError('portfolio options require a backend with portfolio evaluation support')
         validator = getattr(self.backends[backend], "validate_dataset", None)
@@ -387,6 +402,7 @@ class ResearchWorkspace:
                     raise ValueError('decision identity conflicts with existing state')
             incoming = {a["id"]: a for a in state["experiments"]}
             local = {r["id"]: json.loads(r["payload"]) for r in db.execute("SELECT id, payload FROM experiments")}
+            from assay.research_portfolio import accounting_protocol
             # Resolve cross-session replay links in either import order. Missing
             # sources remain references; known conflicting sources are rejected.
             for attempt in [*incoming.values(), *local.values()]:
@@ -396,7 +412,7 @@ class ResearchWorkspace:
                 source = incoming.get(source_id) or local.get(source_id)
                 if source is not None and (source["status"] == "running" or any(
                     attempt[k] != source[k] for k in ("expr", "hypothesis", "spec_hash")
-                )):
+                ) or accounting_protocol(attempt, dataset) != accounting_protocol(source, dataset)):
                     raise ValueError("replay source conflicts with imported or existing state")
             graph = {**local, **incoming}
             resolved = set()
@@ -530,6 +546,18 @@ class ResearchWorkspace:
             backend = self.backends.get(dataset["backend"])
             if backend is None:
                 raise ValueError(f"register backend {dataset['backend']!r} in this process before evaluation")
+            validator = getattr(backend, 'validate_execution_dataset', None)
+            if callable(validator):
+                validator(dataset)
+            portfolio_protocol = None
+            if (isinstance(backend, AssayBackend) and dataset.get('portfolio') and
+                    dataset['portfolio'].get('enabled') is not False):
+                from assay.portfolio.accounting import PORTFOLIO_ACCOUNTING_PROTOCOL
+                from assay.research_portfolio import accounting_protocol
+                portfolio_protocol = PORTFOLIO_ACCOUNTING_PROTOCOL
+                if replay_of is not None and accounting_protocol(source, dataset) != portfolio_protocol:
+                    raise ValueError('replay requires the same portfolio accounting protocol; '
+                                     'start a new experiment to use the current protocol')
             if parent_id:
                 parent = db.execute("SELECT session_id FROM experiments WHERE id=?", (parent_id,)).fetchone()
                 if parent is None or parent[0] != session_id:
@@ -543,6 +571,8 @@ class ResearchWorkspace:
                           status="running", started_at=_now(), finished_at=None, report=None, error=None)
             from assay.research_lifecycle import identity, register_attempt
             result['factor_id'] = identity(expr)[0]
+            if portfolio_protocol is not None:
+                result['portfolio_accounting_protocol'] = portfolio_protocol
             if replay_of is not None:
                 result["replay_of"] = replay_of
             if callable(getattr(backend, "submit", None)):
@@ -648,21 +678,34 @@ class ResearchWorkspace:
             raise ValueError("provide at least two distinct experiment IDs")
         experiments = [self.get_experiment(eid) for eid in experiment_ids]
         comparable = len({e["spec_hash"] for e in experiments}) == 1
+        from assay.research_portfolio import accounting_protocol
+        protocols = [accounting_protocol(e, self.get_dataset(e['dataset_id'])) for e in experiments]
+        if len(set(protocols)) > 1:
+            comparable = False
         hashes = [(e.get('report') or {}).get('panel_content_hash') for e in experiments]
         data_consistent = len(set(hashes)) == 1 if all(hashes) else None
         if data_consistent is False:
             comparable = False
         metrics = ("rank_ic", "rank_icir", "ic", "icir", "turnover_1d", "decay_halflife_days")
-        return dict(comparable=comparable, observed_data_consistent=data_consistent,
-                    caveat="Matching specs do not certify unchanged underlying data or out-of-sample validity.",
+        rank_definitions = [(e.get('report') or {}).get('rank_ic_definition') for e in experiments]
+        cost_definitions = [((e.get('report') or {}).get('portfolio') or {}).get('cost_drag_definition') for e in experiments]
+        definitions = {}
+        if all(isinstance(v, str) and v == rank_definitions[0] for v in rank_definitions):
+            definitions['rank_ic_definition'] = rank_definitions[0]
+        if all(isinstance(v, str) and v == cost_definitions[0] for v in cost_definitions):
+            definitions['portfolio_cost_drag_definition'] = cost_definitions[0]
+        return dict(comparable=comparable, observed_data_consistent=data_consistent, **definitions,
+                    caveat="Matching specs do not certify unchanged underlying data or out-of-sample validity. "
+                           "Portfolio results using different accounting protocols are not directly comparable.",
                     experiments=[dict(id=e["id"], expr=e["expr"], status=e["status"],
                                       dataset_id=e["dataset_id"], spec_hash=e["spec_hash"],
+                                      portfolio_accounting_protocol=protocol,
                                       failure_mode=(e["report"] or {}).get("failure_mode"), error=e["error"],
                                       factor_id=e.get('factor_id'), execution=e.get('execution'),
                                       portfolio_metrics={k: ((e['report'] or {}).get('portfolio') or {}).get(k) for k in
                                                          ('total_return', 'sharpe', 'max_drawdown', 'annual_turnover', 'cost_drag')},
                                       metrics={k: (e["report"] or {}).get(k) for k in metrics})
-                                 for e in experiments])
+                                 for e, protocol in zip(experiments, protocols)])
 
     def decide_candidate(self, experiment_id: str, decision: str, reason: str, *,
                          request_id: str, agent: str = 'unspecified') -> dict:

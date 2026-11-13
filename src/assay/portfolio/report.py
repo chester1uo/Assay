@@ -166,22 +166,25 @@ class PortfolioLineage:
     data_snapshot: str | None = None
     eval_timestamp: str | None = None  # ISO-8601
     adj_version: str | None = None
+    accounting_protocol: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "data_snapshot": self.data_snapshot,
             "eval_timestamp": self.eval_timestamp,
             "adj_version": self.adj_version,
+            "accounting_protocol": self.accounting_protocol,
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> "PortfolioLineage":
         if not d:
-            return cls()
+            return cls(accounting_protocol="legacy-unversioned")
         return cls(
             data_snapshot=d.get("data_snapshot"),
             eval_timestamp=d.get("eval_timestamp"),
             adj_version=d.get("adj_version"),
+            accounting_protocol=d.get("accounting_protocol", "legacy-unversioned"),
         )
 
 
@@ -253,9 +256,12 @@ class PortfolioReport:
 
     # -- identity helper ---------------------------------------------------
     @staticmethod
-    def compute_run_id(factor_id: str, config_hash: str) -> str:
-        """SHA-256[:12] of ``factor_id + config_hash`` (design-doc section 5)."""
-        return hashlib.sha256(f"{factor_id}{config_hash}".encode("utf-8")).hexdigest()[:12]
+    def compute_run_id(factor_id: str, config_hash: str, accounting_protocol: str | None = None) -> str:
+        """Include the accounting protocol for new reports; preserve legacy IDs."""
+        payload = f"{factor_id}{config_hash}"
+        if accounting_protocol is not None:
+            payload += f"|{accounting_protocol}"
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
     # -- serialisation -----------------------------------------------------
     def to_dict(self) -> dict[str, Any]:

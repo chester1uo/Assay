@@ -334,6 +334,9 @@ new attempt, linking the failed attempt as its parent. Active asynchronous jobs
 cannot be abandoned; use tracked cancellation instead. Keep registry, queue and research databases
 when restarting; exporting a completed manifest preserves records, not worker
 processes or physical market data.</p>
+<h2 id="portfolio-accounting-protocol">Portfolio accounting protocol</h2>
+<p>Portfolio targets are fractions of pre-trade NAV. Executed quantities are preserved when transaction costs are charged to cash; resulting weights are recalculated against post-fee NAV. Long-only, unlevered books reserve cash for costs; explicitly leveraged or long-short books can borrow. New portfolio datasets and attempts record <code>portfolio_accounting_protocol: cash-funded-v1</code>, also discoverable in backend capabilities. Existing sessions can continue with their original datasets; new attempts record the current protocol and historical records remain unchanged. Results using different accounting protocols are not directly comparable; replay requires the original protocol.</p>
+<p>Set <code>portfolio.initial_capital</code> to a positive market-currency amount to apply <code>commission_min</code>. The cost model updates monetary NAV as portfolio value changes. Without capital, a nonzero minimum is not applied and the report warns. Explicit capital participates in dataset and run identities. Research evaluations do not currently derive order participation from volume; capacity limits and impact require participation inputs.</p>
 <h2 id="cancel-asynchronous-research">Cancel asynchronous research</h2>
 <pre><code class="language-python">result = ws.cancel_experiment(attempt[&quot;id&quot;], &quot;Research direction changed&quot;)
 # After an outage/restart, reconciliation resumes the saved cancellation intent.

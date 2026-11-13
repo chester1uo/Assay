@@ -265,14 +265,15 @@ def assay_universes() -> dict[str, Any]:
     description=(
         "Run a FULL portfolio backtest for a factor — the deepest performance test: "
         "it turns the cross-sectional signal into an achievable NET return by "
-        "building a portfolio, rebalancing on a schedule, applying real constraints "
-        "and trading costs (commission / stamp duty / slippage; A-share ±price-limit "
+        "building a portfolio, rebalancing on a schedule, applying constraints "
+        "and configured trading costs (commission / stamp duty; market impact requires "
+        "order participation inputs, which this tool does not supply; A-share ±price-limit "
         "+ T+1 are auto-enforced for CSI* universes), then marking to market daily. "
         "Returns Sharpe / Sortino / Calmar, annual & total return, excess return vs "
         "benchmark, max drawdown, annual turnover, cost_drag, avg holding days, beta/"
         "alpha and (for A-share) limit-hit / suspension stats. Use this on your BEST "
-        "few factors from assay_batch to confirm they survive costs — IC alone does "
-        "not. rebalance: daily|weekly|monthly|quarterly; weight_method: equal|"
+        "few factors from assay_batch to inspect net performance under its stated cost "
+        "assumptions. rebalance: daily|weekly|monthly|quarterly; weight_method: equal|"
         "signal_prop|quintile. A-share is long-only (融券 not modelled)."
     ),
 )
@@ -284,6 +285,8 @@ def assay_portfolio_backtest(
     weight_method: str = "equal",
     long_short: bool = False,
     max_single_weight: float = 0.05,
+    initial_capital: float | None = None,
+    commission_min: float | None = None,
 ) -> dict[str, Any]:
     """Portfolio backtest -> compact performance summary (no heavy NAV/trade series).
 
@@ -298,6 +301,7 @@ def assay_portfolio_backtest(
     period_t = tuple(period) if period else tuple(svc.config.default_period)
     # service market codes are US/CN/HK; the portfolio preset uses US/A/HK.
     market = {"CN": "A"}.get(svc._market_for(universe), svc._market_for(universe))
+    cost_options = {} if commission_min is None else {"commission_min": commission_min}
     cfg = PortfolioBacktestConfig.preset(
         market,
         universe=universe,
@@ -309,6 +313,8 @@ def assay_portfolio_backtest(
         max_single_weight=max_single_weight,
         save_trade_log=False,
         save_position_log=False,
+        initial_capital=initial_capital,
+        **cost_options,
     )
     d = svc.backtest_portfolio(expr, cfg).to_dict()
     keep = [
@@ -316,12 +322,18 @@ def assay_portfolio_backtest(
         "n_rebalances", "total_return", "annual_return", "gross_return", "excess_return",
         "sharpe", "sortino", "calmar", "information_ratio", "max_drawdown",
         "drawdown_recovery_days", "beta", "alpha_capm", "tracking_error",
-        "annual_turnover", "cost_drag", "avg_holding_days", "a_share_metrics",
+        "annual_turnover", "cost_drag", "avg_holding_days", "a_share_metrics", "warnings",
     ]
     out = {k: d.get(k) for k in keep}
     out["monthly_returns"] = d.get("monthly_returns")
     out["config"] = {"universe": universe, "market": market, "rebalance": rebalance,
-                     "weight_method": weight_method, "long_short": cfg.long_short}
+                     "weight_method": weight_method, "long_short": cfg.long_short,
+                     "initial_capital": cfg.initial_capital, "commission_min": cfg.commission_min,
+                     "commission_rate": cfg.commission_rate, "slippage_model": cfg.slippage_model}
+    out["cost_assumptions"] = {"minimum_commission_capital_supplied": cfg.initial_capital is not None,
+                               "impact_participation_supplied": False}
+    out["cost_drag_definition"] = ('gross_return minus total_return; positive values represent return lost to costs. '
+                                   'Gross NAV follows the realized net portfolio weights.')
     return out
 
 

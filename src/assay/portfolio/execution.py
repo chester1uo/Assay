@@ -27,8 +27,9 @@ Constraints, in the order they bind (each can trim or block a name's trade):
    is handled per ``partial_fill_handling``: ``'defer'`` returns the unfilled
    residual, ``'cancel'`` drops it, ``'force'`` ignores the cap. No ADV data
    (``adv_fraction is None``) => no capacity cap.
-5. **A-share cash** — completed sales and existing cash fund buys, with fees
-   reserved. A blocked sale never creates spendable proceeds or implicit leverage.
+5. **Cash-funded books** — completed sales and existing cash fund buys, with fees
+   reserved for A-share and unlevered long-only books. Explicit long-short or
+   leveraged US/HK configurations may use negative cash.
 
 All vectors are 1-D float64 over the *same symbol axis* as the weights; missing
 entries (NaN price / NaN weight) are treated as untradable for that name so one
@@ -162,6 +163,8 @@ class ExecutionSimulator:
         tgt = np.where(np.isfinite(tgt), tgt, cur)
         if self.config.market == "A" and (np.any(cur < -_TRADE_EPS) or np.any(tgt < -_TRADE_EPS)):
             raise ValueError("A-share cash equity execution cannot open short positions")
+        if not self.config.long_short and (np.any(cur < -_TRADE_EPS) or np.any(tgt < -_TRADE_EPS)):
+            raise ValueError("long-only execution cannot hold or target short positions")
         if not np.isfinite(portfolio_value) or portfolio_value <= 0:
             raise ValueError("portfolio_value must be positive")
         desired_delta = tgt - cur  # signed weight change we want this step
@@ -260,32 +263,59 @@ class ExecutionSimulator:
                 fill = np.where(capped, np.sign(fill) * allowed, fill)
 
             cash_limited = np.zeros(n, dtype=bool)
-            if cfg.market == "A":
+            cash_limited_sells = np.zeros(n, dtype=bool)
+            cash_funded = cfg.market == "A" or (not cfg.long_short and cfg.gross_exposure <= 1.0)
+            if cash_funded:
                 # Only completed sells fund buys. Blocked limit-down/T+1 sells
                 # cannot turn into implicit borrowing from the cash account.
                 sells = live & ~buy & (np.abs(fill) >= _TRADE_EPS)
                 sell_adv = None if advf is None else advf * np.divide(np.abs(fill), np.abs(desired_delta),
                     out=np.zeros(n), where=np.abs(desired_delta) > 0)
                 sell_rates = self.cost_model.trade_costs(np.ones(n, dtype=bool), np.abs(fill), sell_adv)
-                cash = max(0.0, 1.0 - float(cur.sum())) + float((-fill[sells] * (1 - sell_rates[sells])).sum())
+                opening_cash = max(0.0, 1.0 - float(cur.sum()))
+                net_proceeds = -fill * (1 - sell_rates)
+                cash = opening_cash + float(net_proceeds[sells].sum())
+                if cash < -_TRADE_EPS:
+                    # Small sales can cost more than they raise under an absolute
+                    # minimum fee. Process cash-generating sales first; cancel
+                    # fee-heavy sales that the resulting cash cannot cover.
+                    cash = opening_cash + float(net_proceeds[sells & (net_proceeds >= 0)].sum())
+                    for i in np.flatnonzero(sells & (net_proceeds < 0)):
+                        if cash + net_proceeds[i] >= -_TRADE_EPS:
+                            cash += float(net_proceeds[i])
+                        else:
+                            fill[i] = 0.0
+                            cash_limited_sells[i] = True
+                    cash_limited |= cash_limited_sells
+                    cash = max(0.0, cash)
                 buys = live & buy & (fill >= _TRADE_EPS)
                 rates = self.cost_model.trade_costs(np.zeros(n, dtype=bool), np.abs(fill), sell_adv)
                 required = float((fill[buys] * (1 + rates[buys])).sum())
                 if required > cash + _TRADE_EPS:
-                    cash_limited = buys.copy()
+                    cash_limited |= buys
                     original = fill.copy()
-                    lo, hi = 0.0, 1.0
-                    for _ in range(45):
-                        mid = (lo + hi) / 2
-                        trial = np.where(buys, original * mid, 0.0)
-                        participation = None if advf is None else advf * np.divide(np.abs(trial), np.abs(desired_delta),
-                            out=np.zeros(n), where=np.abs(desired_delta) > 0)
-                        rates = self.cost_model.trade_costs(np.zeros(n, dtype=bool), trial, participation)
-                        need = float((trial[buys] * (1 + rates[buys])).sum())
-                        if need <= cash:
-                            lo = mid
-                        else:
-                            hi = mid
+                    # With constant proportional rates the required cash scales
+                    # exactly with the fill. Keep the iterative path for minimum
+                    # fees, size-dependent impact and custom cost models.
+                    capital = getattr(self.cost_model, 'nav_capital', None)
+                    proportional = (type(self.cost_model) is TransactionCostModel
+                                    and (cfg.commission_min <= 0 or capital is None or capital <= 0)
+                                    and (cfg.slippage_model == 'zero' or cfg.slippage_k == 0 or advf is None))
+                    if proportional:
+                        lo = np.nextafter(cash / required, 0.0)
+                    else:
+                        lo, hi = 0.0, 1.0
+                        for _ in range(45):
+                            mid = (lo + hi) / 2
+                            trial = np.where(buys, original * mid, 0.0)
+                            participation = None if advf is None else advf * np.divide(np.abs(trial), np.abs(desired_delta),
+                                out=np.zeros(n), where=np.abs(desired_delta) > 0)
+                            rates = self.cost_model.trade_costs(np.zeros(n, dtype=bool), trial, participation)
+                            need = float((trial[buys] * (1 + rates[buys])).sum())
+                            if need <= cash:
+                                lo = mid
+                            else:
+                                hi = mid
                     fill[buys] = original[buys] * lo
 
             cancelled = live & (np.abs(fill) < _TRADE_EPS)
@@ -321,8 +351,8 @@ class ExecutionSimulator:
         # ``blocked_adv`` (fully blocked orders), so the §4.4 attempt denominator
         # never double-counts it.
         defer = cfg.partial_fill_handling == "defer"
-        delayed_sales = ~buy & (untradable | down_hit | missing_limits | held | (capped & defer))
-        cash_deferred = cash_limited & bool(delayed_sales.any())
+        delayed_sales = ~buy & (untradable | down_hit | missing_limits | held | cash_limited_sells | (capped & defer))
+        cash_deferred = cash_limited_sells | (cash_limited & bool(delayed_sales.any()))
         # Fees-only cash scaling is a completed feasible allocation, not an order
         # to borrow the fee back tomorrow. Retry cash buys when pending sales can
         # actually release funds on a later session.

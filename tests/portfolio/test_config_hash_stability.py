@@ -25,6 +25,13 @@ def test_config_hash_preset_us_frozen():
     assert PortfolioBacktestConfig.preset("US").config_hash() == _PINNED_US
 
 
+def test_explicit_initial_capital_changes_run_identity():
+    cfg = PortfolioBacktestConfig.preset('US', initial_capital=1000)
+    assert cfg.config_hash() != _PINNED_US
+    assert cfg.config_hash() != PortfolioBacktestConfig.preset('US', initial_capital=2000).config_hash()
+    assert PortfolioBacktestConfig.from_dict(cfg.to_dict()).initial_capital == 1000.
+
+
 def test_config_payload_byte_shape_frozen():
     payload = json.dumps(
         PortfolioBacktestConfig.preset("US").to_dict(), sort_keys=True, separators=(",", ":")

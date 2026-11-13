@@ -9,6 +9,7 @@ import math
 
 def build_context(state: dict, backend: dict, limit: int) -> dict:
     from assay.engine import parse
+    from assay.research_portfolio import accounting_protocol
 
     groups = {}
     decisions = {d['factor_id']: d for d in state.get('decisions', [])}
@@ -30,6 +31,7 @@ def build_context(state: dict, backend: dict, limit: int) -> dict:
                           status=attempt["status"], agent=attempt["agent"], execution=attempt.get("execution"),
                           parent_id=attempt.get("parent_id"), replay_of=attempt.get("replay_of"),
                           factor_id=attempt.get('factor_id'),
+                          portfolio_accounting_protocol=accounting_protocol(attempt, state['dataset']),
                           failure_mode=reason, suggestion=report.get("suggestion"),
                           metrics={k: report.get(k) for k in ("rank_ic", "rank_icir", "turnover_1d")},
                           portfolio_metrics={k: (report.get('portfolio') or {}).get(k) for k in
@@ -54,6 +56,9 @@ def build_context(state: dict, backend: dict, limit: int) -> dict:
                 for expr, ids in groups.items() if len(ids) > 1]
     repeated.sort(key=lambda r: (-r["count"], r["canonical"]))
     actions = []
+    protocols = {v['portfolio_accounting_protocol'] for v in views} - {None}
+    if len(protocols) > 1:
+        actions.append('Portfolio attempts use different accounting protocols; compare their results with care.')
     if not backend["registered"]:
         actions.append("Register this dataset's backend in the serving process before evaluating.")
     if running:
