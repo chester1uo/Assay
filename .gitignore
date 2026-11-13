@@ -42,3 +42,6 @@ data_cn/
 data_us/
 data_2025_2026h1/
 sparse_cond/
+
+# Local-only submission experiment tests.
+/tests/mcp/test_state_study.py
