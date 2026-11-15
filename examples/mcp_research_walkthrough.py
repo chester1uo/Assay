@@ -55,7 +55,7 @@ async def walkthrough(data_dir):
                 raise RuntimeError('Expected one synthetic-demo dataset; prepare a new workspace first')
             created = await call(session, 'assay_research_session_create', {
                 'dataset_id': matches[0]['id'], 'goal': 'Explore synthetic short-horizon reversal',
-                'agent': 'scripted-walkthrough', 'max_experiments': 3,
+                'agent': 'scripted-walkthrough', 'max_experiments': 5,
             })
             session_id = created['id']
             first = await call(session, 'assay_experiment_run', {
@@ -91,7 +91,7 @@ async def walkthrough(data_dir):
             observed = {item['id']: item['status'] for item in restored['experiments']}
             if (restored['id'] != session_id or observed.get(first['id']) != 'completed'
                     or observed.get(failed['id']) != 'failed' or not restored['notes']
-                    or restored['remaining_experiments'] != 1):
+                    or restored['remaining_experiments'] != 3):
                 raise RuntimeError('The restarted server did not restore the expected history and budget')
             checkpoint = await call(session, 'assay_checkpoint_get', {
                 'session_id': session_id, 'name': 'handoff',
@@ -111,8 +111,12 @@ async def walkthrough(data_dir):
             })
             if not comparison.get('comparable'):
                 raise RuntimeError('The two evaluations were not reported as comparable')
+            final_session = await call(session, 'assay_research_session_get', {'session_id': session_id})
+            if final_session['remaining_experiments'] != 2:
+                raise RuntimeError('The final session did not retain two attempts for further research')
             return {
                 'synthetic': True, 'model_calls': 0, 'session_id': session_id,
+                'remaining_experiments': final_session['remaining_experiments'],
                 'first': first, 'failed': failed, 'restored_session': restored,
                 'checkpoint': checkpoint, 'revision': revision, 'comparison': comparison,
             }

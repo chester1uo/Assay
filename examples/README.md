@@ -25,8 +25,9 @@ python examples/mcp_research_walkthrough.py \
 Both output paths must be new. The second command produces a JSON trace with
 session, experiment, checkpoint, and comparison records. Its internal checks
 verify the retained success, failure, note, budget, checkpoint, and parent link
-across the server restart. Each run creates a fresh session; use a new JSON path
-to rerun it on the same synthetic workspace.
+across the server restart. The session has two attempts left after the script
+finishes, so you can continue from the workbench. Each run creates a fresh
+session; use a new JSON path to rerun it on the same synthetic workspace.
 
 ## Inspect the workbench
 
