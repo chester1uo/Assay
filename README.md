@@ -37,7 +37,7 @@ semantics. External agents drive the planning loop; Assay executes and records i
 experiments. Dataset specifications do not freeze market data or certify out-of-sample validity.
 
 
-Try the [installable offline demo and reference agent](docs/en/guide/reference-agent.md).
+Try the [synthetic MCP research walkthrough](examples/README.md) or the [offline demo and reference agent](docs/en/guide/reference-agent.md).
 
 ## 📚 Documentation
 
