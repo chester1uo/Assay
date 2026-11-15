@@ -35,6 +35,10 @@ def run(tmp_path, monkeypatch):
         response = first.get('/demo', follow_redirects=False)
         assert response.status_code == 303
         assert response.headers['location'] == '/#/research'
+        assert demo._TTL == 15 * 86400
+        session_cookie = next(value for value in response.headers.get_list('set-cookie') if value.startswith('assay_review_session='))
+        max_age = int(session_cookie.split('Max-Age=', 1)[1].split(';', 1)[0])
+        assert demo._TTL - 10 <= max_age <= demo._TTL
         assert first.cookies.get('assay_session') == 'existing-main-session'
         assert first.cookies.get('assay_review_session')
         assert first.cookies.get('assay_review_route') == '1'
@@ -47,7 +51,9 @@ def run(tmp_path, monkeypatch):
         assert first.post('/auth/setup', json={}).status_code == 403
         assert first.get('/v1/admin/config').status_code == 403
         assert first.post('/auth/login', content=b'x' * 65537).status_code == 413
-        assert 'reviewer-demo.js' in first.get('/').text
+        html = first.get('/').text
+        assert 'reviewer-demo.js' in html
+        assert 'window.__ASSAY_REVIEW_DEMO__ = true' in html
         assert first.get('/demo/exit', follow_redirects=False).status_code == 303
         assert first.cookies.get('assay_review_route') is None
         assert first.cookies.get('assay_review_session') is None

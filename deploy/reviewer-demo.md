@@ -35,7 +35,7 @@ handle {
 }
 ```
 
-A guest session expires seven days after creation. Expired guest accounts and
+A guest session expires 15 days after creation. Expired guest accounts and
 workspaces are reclaimed on a subsequent `/demo` visit after an additional
 day's grace. The page links to `/demo/exit`, which removes the routing cookie and
 returns visitors to the main application. Guests can also use MCP with the

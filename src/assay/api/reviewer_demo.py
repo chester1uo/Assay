@@ -43,7 +43,7 @@ def _review_batch(self, *args, **kwargs):
 AssayService.batch = _review_batch
 
 _ROUTE_COOKIE = 'assay_review_route'
-_TTL = 7 * 86400
+_TTL = 15 * 86400
 _CLEANUP_GRACE = 86400
 _MAX_BODY = 65536
 _lock = threading.Lock()
@@ -98,6 +98,7 @@ def _reap_expired(store):
 @app.get('/', include_in_schema=False)
 def demo_index():
     html = (Path(__file__).parent / 'static' / 'index.html').read_text()
+    html = html.replace('</head>', '<script>window.__ASSAY_REVIEW_DEMO__ = true;</script></head>')
     html = html.replace('</body>', '<script type="module" src="/js/reviewer-demo.js"></script></body>')
     return HTMLResponse(html, headers={'Cache-Control': 'no-store'})
 

@@ -9,7 +9,8 @@
 // subscribers (app.js re-renders the active page + re-localizes the static chrome).
 // Missing keys fall back to English, then to the raw key, so the UI never blanks.
 
-const STORAGE_KEY = "assay_lang";
+const REVIEW_DEMO = globalThis.__ASSAY_REVIEW_DEMO__ === true;
+const STORAGE_KEY = REVIEW_DEMO ? "assay_review_lang" : "assay_lang";
 const SUPPORTED = ["en", "zh"];
 
 function detectInitial() {
@@ -19,6 +20,7 @@ function detectInitial() {
   } catch (_) {
     /* storage unavailable */
   }
+  if (REVIEW_DEMO) return "en";
   const nav = (navigator.language || navigator.userLanguage || "en").toLowerCase();
   return nav.startsWith("zh") ? "zh" : "en";
 }

@@ -33,7 +33,7 @@ import * as dom from "./dom.js";
 import { el } from "./dom.js";
 import { store, router } from "./state.js";
 import { charts } from "./charts.js";
-import { api, ApiError } from "./api.js";
+import { api, ApiError, API_KEY_STORAGE } from "./api.js";
 import { openLightbox, makeZoomButton } from "./lightbox.js";
 import { t, getLang, toggleLang, onLang } from "./i18n.js";
 
@@ -448,7 +448,7 @@ function askForKey(rejected) {
     e.preventDefault();
     const v = input.value.trim();
     if (!v) return;
-    try { localStorage.setItem("assay_api_key", v); } catch (_) {}
+    try { localStorage.setItem(API_KEY_STORAGE, v); } catch (_) {}
     box.remove();
     keyDialogOpen = false;
     location.reload();
@@ -493,7 +493,7 @@ async function loadSession() {
     session.user = null;
   }
   if (session.accounts) {
-    try { localStorage.removeItem("assay_api_key"); } catch (_) {}
+    try { localStorage.removeItem(API_KEY_STORAGE); } catch (_) {}
     if (!session.user) { toLogin(); return false; }
   }
   paintUser();

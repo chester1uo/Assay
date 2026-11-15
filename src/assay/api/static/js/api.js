@@ -4,7 +4,8 @@
 // A 401 fires "assay:auth-required" (app.js sends the user to /login). Non-2xx
 // responses throw ApiError carrying the parsed {error:{...}} envelope (§4.6).
 
-const API_KEY_STORAGE = "assay_api_key";
+export const API_KEY_STORAGE = globalThis.__ASSAY_REVIEW_DEMO__ === true
+  ? "assay_review_api_key" : "assay_api_key";
 
 export class ApiError extends Error {
   constructor(message, { status, code, name, envelope } = {}) {
