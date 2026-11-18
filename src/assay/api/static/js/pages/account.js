@@ -6,6 +6,8 @@ registerDict({
   en: {
     "account.title": "Account",
     "account.sub": "Your profile, password and API keys.",
+    "account.noAccounts": "Account management is not enabled on this server.",
+    "account.signInRequired": "Sign in to manage your account.",
     "account.profile": "Profile",
     "account.username": "Username",
     "account.role": "Role",
@@ -39,6 +41,8 @@ registerDict({
   zh: {
     "account.title": "账户",
     "account.sub": "个人资料、密码和 API 密钥。",
+    "account.noAccounts": "此服务未启用账户管理。",
+    "account.signInRequired": "请登录后管理账户。",
     "account.profile": "个人资料",
     "account.username": "用户名",
     "account.role": "角色",
@@ -124,7 +128,8 @@ export function render(root, ctx) {
 
   const user = (ctx.session && ctx.session.user) || null;
   if (!user) {
-    page.appendChild(el("div", { className: "empty-state" }, el("div", { className: "empty-state-title" }, t("common.loadFailed"))));
+    const message = ctx.session?.accounts ? "account.signInRequired" : "account.noAccounts";
+    page.appendChild(el("div", { className: "empty-state" }, el("div", { className: "empty-state-title" }, t(message))));
     return;
   }
 

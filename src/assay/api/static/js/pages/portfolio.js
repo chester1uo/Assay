@@ -129,6 +129,8 @@ function lastHistoryExpr() {
 
 // =================================================================== render ====
 
+let languageReport = null;
+
 export function render(root, ctx) {
   el = ctx.el;
   injectStyle();
@@ -136,6 +138,7 @@ export function render(root, ctx) {
   const { api, store } = ctx;
   const cleanups = [];
   let controller = null;
+  let lastReport = null;
 
   const snap = store.get();
   const globalUniverse = snap.universe;
@@ -292,10 +295,11 @@ export function render(root, ctx) {
   applyMarket();
   topNField.style.display = "none";
   renderIdle();
+  if (languageReport) { const report = languageReport; languageReport = null; renderReport(report); }
 
   // optional prefill from a library factor id (#/portfolio/:id)
   const prefillId = ctx.params && ctx.params.id;
-  if (prefillId) {
+  if (prefillId && !ctx.languageChange) {
     api.libraryGet(prefillId).then((rep) => { if (rep && rep.expr) editor.value = rep.expr; }).catch(() => {});
   }
 
@@ -334,6 +338,7 @@ export function render(root, ctx) {
   }
 
   function setRunning(on) {
+    ctx.setLanguageBusy?.(on);
     runBtn.disabled = on;
     runStatus.className = "pf-latency muted";
     runStatus.textContent = on ? ctx.t("pf.running") : "";
@@ -351,6 +356,7 @@ export function render(root, ctx) {
     if (controller) controller.abort();
     controller = new AbortController();
     setRunning(true);
+    lastReport = null;
     renderLoading();
     const t0 = performance.now();
     try {
@@ -398,6 +404,7 @@ export function render(root, ctx) {
 
   function renderReport(r) {
     if (!r) { renderIdle(); return; }
+    lastReport = r;
 
     // KPI grid
     const kpis = ctx.el("div", { className: "pf-kpis" },
@@ -599,7 +606,11 @@ export function render(root, ctx) {
   }
 
   // expose cleanup
-  return () => { if (controller) controller.abort(); cleanups.forEach((fn) => { try { fn(); } catch (_) {} }); };
+  return ({languageChange} = {}) => {
+    languageReport = languageChange ? lastReport : null;
+    if (controller) controller.abort();
+    cleanups.forEach((fn) => { try { fn(); } catch (_) {} });
+  };
 }
 
 // ----------------------------------------------------------------- small utils ----

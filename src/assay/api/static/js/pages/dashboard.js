@@ -58,7 +58,9 @@ function injectStyle() {
 .dash-statusbar .sb-warn { color: var(--amber); font-weight: 500; }
 .dash-statusbar .sb-strong { color: var(--text); font-weight: 500; }
 
-.dash-split { display: grid; grid-template-columns: 6fr 4fr; gap: var(--sp-4); align-items: start; }
+.dash-split { display: grid; grid-template-columns: minmax(0,6fr) minmax(0,4fr); gap: var(--sp-4); align-items: start; }
+@media (max-width: 800px) { .dash-split { grid-template-columns: minmax(0,1fr); } }
+@media (max-width: 700px) { .dash .grid-4 { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 
 .dash-controls { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3); }
 .dash-controls .ctrl { display: inline-flex; align-items: center; gap: var(--sp-2); }

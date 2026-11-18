@@ -29,6 +29,7 @@ const STANDARDIZE = ["zscore", "rank"];
 const DEFAULT_FACTORS = ["ts_mean(close, 5)", "rank(close)", "delta(close, 10)", "-1 * ts_std(close, 20)"];
 
 let el = (tag) => document.createElement(tag);
+let languageResult = null;
 
 // ----------------------------------------------------------------- styles ----
 function injectStyle() {
@@ -42,9 +43,10 @@ function injectStyle() {
 .cb-form { display: flex; flex-direction: column; gap: var(--sp-3); }
 .cb-row { display: flex; align-items: flex-end; gap: var(--sp-3); flex-wrap: wrap; }
 .cb-field { display: flex; flex-direction: column; gap: var(--sp-1); }
+@media (max-width: 700px) { .cb-field { min-width: 0; max-width: 100%; } .cb-field > .flex { flex-wrap: wrap; } }
 .cb-field > .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); }
 .cb-num { width: 96px; font-family: var(--font-mono); }
-.cb-fieldset { border: 1px solid var(--border); border-radius: var(--radius-card); padding: var(--sp-3); }
+.cb-fieldset { border: 1px solid var(--border); border-radius: var(--radius-card); padding: var(--sp-3); min-width: 0; }
 .cb-fieldset > legend { font-size: 12px; font-weight: 600; padding: 0 var(--sp-1); }
 .cb-hint { font-size: 12px; color: var(--text-muted); }
 .cb-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-3); }
@@ -246,6 +248,7 @@ export function render(root, ctx) {
     resultsBody);
   root.replaceChildren(page);
   renderIdle();
+  if (languageResult) { const result = languageResult; languageResult = null; renderResult(result); }
   loadSaved();
 
   // ---------------------------------------------------------------- run ----
@@ -267,6 +270,7 @@ export function render(root, ctx) {
   }
 
   function setRunning(on) {
+    ctx.setLanguageBusy?.(on);
     runBtn.disabled = on;
     runStatus.className = "cb-latency muted";
     runStatus.textContent = on ? ctx.t("combo.running") : "";
@@ -278,6 +282,7 @@ export function render(root, ctx) {
     if (controller) controller.abort();
     controller = new AbortController();
     setRunning(true);
+    lastResult = null;
     renderLoading();
     const t0 = performance.now();
     try {
@@ -504,7 +509,11 @@ export function render(root, ctx) {
       .catch((err) => toast(ctx, (err && err.message) || "—", true));
   }
 
-  return () => { if (controller) controller.abort(); cleanups.forEach((fn) => { try { fn(); } catch (_) {} }); };
+  return ({languageChange} = {}) => {
+    languageResult = languageChange ? lastResult : null;
+    if (controller) controller.abort();
+    cleanups.forEach((fn) => { try { fn(); } catch (_) {} });
+  };
 }
 
 // ----------------------------------------------------------------- small utils ----

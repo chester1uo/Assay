@@ -380,6 +380,7 @@ html.nav-folded .ico-unfold { display: block; }
 
 /* --------------------------------------------------------------- main / page --- */
 .app-main { padding: 20px var(--sp-6) 40px; width: 100%; max-width: 1360px; margin: 0 auto; }
+@media (max-width: 700px) { .app-main { padding: 16px 12px 32px; } }
 .app-main:focus { outline: none; }
 
 .page { display: flex; flex-direction: column; gap: var(--sp-6); }

@@ -15,6 +15,7 @@ const STYLE_ID = "factor-page-style";
 const HISTORY_KEY = "assay_expr_history";
 const HISTORY_MAX = 20;
 const LINT_DEBOUNCE_MS = 300;
+let languageDraft = null;
 
 const DEFAULT_EXPR = "ts_corr(close, volume, 20)";
 const HORIZONS_ALL = [1, 5, 10, 20];
@@ -160,7 +161,8 @@ function injectStyle() {
 .ast-field { color: var(--teal); }
 .ast-lit { color: var(--amber); }
 .factor-config { display: flex; align-items: flex-end; gap: var(--sp-3); flex-wrap: wrap; }
-.factor-config-field { display: flex; flex-direction: column; gap: var(--sp-1); }
+.factor-config-field { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; max-width: 100%; }
+.factor-config-field select { max-width: 100%; }
 .factor-config-field > .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
 .factor-horizons { display: inline-flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 .factor-horizons label { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; cursor: pointer; }
@@ -511,6 +513,7 @@ export function render(root, ctx) {
 
   // ---------------------------------------------------------------- evaluate ----
   function setEvalRunning(on) {
+    ctx.setLanguageBusy?.(on);
     evalBtn.disabled = on;
     cfg.evalBtn.disabled = on;
     evalStatus.className = "factor-latency muted";
@@ -520,7 +523,7 @@ export function render(root, ctx) {
   function runEvaluate() {
     const expr = editor.value.trim();
     if (!expr) { toast(ctx, ctx.t("factor.enterExprFirst"), true); return; }
-    if (evalController) { evalController.abort(); evalController = null; }
+    if (evalController) return;
 
     pushHistory(expr);
     setEvalRunning(true);
@@ -658,7 +661,22 @@ export function render(root, ctx) {
 
   // ---------------------------------------------------------------- prefill ----
   const prefillId = ctx.params && ctx.params.id;
-  if (prefillId) {
+  if (languageDraft && languageDraft.path === ctx.path) {
+    const draft = languageDraft;
+    languageDraft = null;
+    editor.value = draft.expr;
+    cfg.restore(draft.config);
+    astDetails.open = draft.astOpen;
+    scheduleLint();
+    if (draft.report) {
+      lastReport = draft.report;
+      cards.renderFromReport(lastReport);
+      if (lastReport.failure_mode) renderSummaryError(summaryBody, lastReport, ctx);
+      else renderSummaryReport(summaryBody, lastReport, ctx, {
+        onSave: () => saveReport(lastReport), onCompare: () => compareReport(lastReport),
+      });
+    }
+  } else if (prefillId) {
     editor.value = ctx.t("factor.loadingFactor", { id: prefillId });
     renderSummaryLoading(summaryBody, ctx);
     api.libraryGet(prefillId).then((report) => {
@@ -686,7 +704,11 @@ export function render(root, ctx) {
   }
 
   // expose cleanup (app re-renders fresh per route; transient listeners scoped here)
-  return () => cleanups.forEach((fn) => { try { fn(); } catch (_) {} });
+  return ({languageChange} = {}) => {
+    languageDraft = languageChange ? {path:ctx.path, expr:editor.value, config:cfg.snapshot(),
+      astOpen:astDetails.open, report:lastReport} : null;
+    cleanups.forEach((fn) => { try { fn(); } catch (_) {} });
+  };
 }
 
 // =================================================================== config row ====
@@ -769,6 +791,21 @@ function buildConfigRow(ctx, store, onEvaluate) {
     node,
     evalBtn,
     cleanup: unsub,
+    snapshot() {
+      return {universe:uniSel.value, start:startInput.value, end:endInput.value,
+        execution:execSel.value, horizons:horizonInput.value, neutralize:neutralSel.value};
+    },
+    restore(value) {
+      if (!value) return;
+      if (![...uniSel.options].some(option => option.value === value.universe)) {
+        uniSel.append(ctx.el("option", {value:value.universe}, value.universe));
+      }
+      uniSel.value = value.universe; uniSel.dataset.touched = "1";
+      startInput.value = value.start; endInput.value = value.end;
+      execSel.value = value.execution; horizonInput.value = value.horizons;
+      neutralSel.value = value.neutralize;
+      refreshStars();
+    },
     values() {
       const hz = parseHorizons(horizonInput.value);
       return {

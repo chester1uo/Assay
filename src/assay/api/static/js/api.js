@@ -165,6 +165,12 @@ export class ApiClient {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let completed = false;
+        const deliver = (event) => {
+          if (!event) return;
+          if (event.event === "eval.complete") completed = true;
+          onEvent(event);
+        };
         // SSE frames are separated by a blank line; each carries event:/data: lines.
         // The separator may be "\n\n" or "\r\n\r\n" (sse-starlette emits CRLF), so
         // match either — a plain indexOf("\n\n") never fires on CRLF streams and
@@ -179,11 +185,12 @@ export class ApiClient {
             const frame = buffer.slice(0, m.index);
             buffer = buffer.slice(m.index + m[0].length);
             const parsed = parseSseFrame(frame);
-            if (parsed) onEvent(parsed);
+            deliver(parsed);
           }
         }
         const tail = parseSseFrame(buffer);
-        if (tail) onEvent(tail);
+        deliver(tail);
+        if (!completed) onError && onError(new ApiError("Evaluation stream ended before the final report.", { status: res.status }));
       } catch (err) {
         if (err && err.name === "AbortError") return;
         onError && onError(err);

@@ -337,11 +337,57 @@ async function loadUniverses() {
 
 // ---------------------------------------------------------------- routing ----
 
+let pageCleanup = null;
+let languageRemount = false;
+let pageToken = null;
+let pageBusy = 0;
+
+function captureForm(root) {
+  return [...root.querySelectorAll("input:not([type=file]), textarea, select")].map(node => ({
+    tag:node.tagName, type:node.type, value:node.value, checked:node.checked,
+  }));
+}
+
+function restoreForm(root, saved) {
+  const nodes = [...root.querySelectorAll("input:not([type=file]), textarea, select")];
+  if (nodes.length !== saved.length || nodes.some((node, i) => node.tagName !== saved[i].tag || node.type !== saved[i].type)) return;
+  nodes.forEach((node, i) => {
+    const value = saved[i];
+    if (node.tagName === "SELECT" && ![...node.options].some(option => option.value === value.value)) return;
+    node.value = value.value;
+    if (node.type === "checkbox" || node.type === "radio") node.checked = value.checked;
+    if (node.tagName === "SELECT") node.dispatchEvent(new Event("change"));
+  });
+}
+
+function setLanguageBusy(busy) {
+  const button = document.getElementById("lang-toggle");
+  if (!button) return;
+  button.disabled = busy;
+  button.title = busy ? t("ctrl.langBusy") : t("ctrl.langTitle");
+}
+
 function mount(pageModule, params, path) {
+  const languageChange = languageRemount;
+  const form = languageRemount && (path === "/combination" || path.startsWith("/portfolio")) ? captureForm(appEl) : null;
+  if (pageCleanup) {
+    try { pageCleanup({languageChange: languageRemount}); } catch (err) { console.error("page cleanup failed", err); }
+    pageCleanup = null;
+  }
+  languageRemount = false;
+  pageBusy = 0;
+  setLanguageBusy(false);
+  const token = pageToken = {};
   highlightTab(path);
-  const ctx = makeCtx({ params, path });
+  const ctx = makeCtx({ params, path, languageChange, setLanguageBusy: busy => {
+    if (pageToken !== token) return;
+    pageBusy = Math.max(0, pageBusy + (busy ? 1 : -1));
+    setLanguageBusy(pageBusy > 0);
+  } });
   try {
-    pageModule.render(appEl, ctx);
+    const cleanup = pageModule.render(appEl, ctx);
+    if (typeof cleanup === "function") pageCleanup = cleanup;
+    if (form) restoreForm(appEl, form);
   } catch (err) {
     console.error("page render failed", err);
     appEl.replaceChildren(
@@ -384,6 +430,7 @@ function wireLangToggle() {
     refreshThemeLabel();          // the theme button text is dynamic, not a data-i18n node
     populateUniverseSelect(lastUniverses);
     refreshStatus();
+    languageRemount = true;
     router.navigate("#" + router.current());
   });
 }

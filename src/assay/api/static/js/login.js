@@ -162,10 +162,17 @@ async function show() {
     `<p class="auth-note">${esc(t("noAccount"))}</p>`);
 }
 
-document.getElementById("lang").addEventListener("click", () => {
+document.getElementById("lang").addEventListener("click", async () => {
+  // Keep unsent credentials only in memory while rebuilding the localized form.
+  const values = Object.fromEntries([...card.querySelectorAll("input[name]")].map(input => [input.name, input.value]));
+  const focused = document.activeElement?.name;
   lang = lang === "en" ? "zh" : "en";
   try { localStorage.setItem("assay_lang", lang); } catch (_) {}
-  show();
+  await show();
+  card.querySelectorAll("input[name]").forEach(input => {
+    if (Object.hasOwn(values, input.name)) input.value = values[input.name];
+    if (input.name === focused) input.focus();
+  });
 });
 
 show();

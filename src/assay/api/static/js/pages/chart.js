@@ -69,8 +69,9 @@ function injectStyle(ctx) {
 .chart-indbar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .chart-chip { border: 1px solid var(--border); background: var(--bg); cursor: pointer; font-size: 12px; padding: 3px 9px; border-radius: 999px; color: var(--text-muted); }
 .chart-chip.is-on { background: var(--navy, #1f2937); color: #fff; border-color: var(--navy, #1f2937); }
-.chart-alpha { display: flex; align-items: center; gap: var(--sp-2); flex: 1; min-width: 240px; }
-.chart-alpha input { flex: 1; font-family: var(--font-mono); font-size: 13px; }
+.chart-alpha { display: flex; align-items: center; gap: var(--sp-2); flex: 1; min-width: 0; flex-wrap: wrap; }
+.chart-alpha input { flex: 1 1 120px; min-width: 0; font-family: var(--font-mono); font-size: 13px; }
+@media (max-width: 700px) { .chart-alpha { flex-basis: 100%; } }
 .chart-host { position: relative; width: 100%; }
 .chart-host svg { width: 100%; height: auto; display: block; cursor: crosshair; touch-action: none; }
 .chart-host.is-drag svg { cursor: grabbing; }

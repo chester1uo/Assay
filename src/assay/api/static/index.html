@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=1280, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Assay · QFinVerse</title>
   <link rel="icon" type="image/svg+xml" href="/brand/qfinverse-app-icon.svg" />
   <script>
@@ -11,6 +11,7 @@
     (function () {
       var m = "system", folded = false;
       try { m = localStorage.getItem("qfv-theme") || "system"; folded = localStorage.getItem("assay-sidebar-folded") === "1"; } catch (e) {}
+      if (window.matchMedia("(max-width: 700px)").matches) folded = true;
       var dark = m === "dark" || (m === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
       document.documentElement.classList.toggle("dark", dark);
       document.documentElement.classList.toggle("nav-folded", folded);
