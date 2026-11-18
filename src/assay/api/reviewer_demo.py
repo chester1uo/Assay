@@ -29,6 +29,7 @@ auth.COOKIE = 'assay_review_session'
 from assay.accounts import sign_session  # noqa: E402
 from assay.api.app import app, get_service  # noqa: E402
 from assay.api.routes import account  # noqa: E402
+from assay.library import FactorReport  # noqa: E402
 from assay.research_tenant import current_tenant, tenant_for_user  # noqa: E402
 from assay.service import AssayService  # noqa: E402
 
@@ -47,6 +48,7 @@ _TTL = 15 * 86400
 _CLEANUP_GRACE = 86400
 _MAX_BODY = 65536
 _lock = threading.Lock()
+_seed_lock = threading.Lock()
 _visits: dict[str, deque] = defaultdict(deque)
 _writes: dict[str, deque] = defaultdict(deque)
 _reads: dict[str, deque] = defaultdict(deque)
@@ -95,6 +97,23 @@ def _reap_expired(store):
         shutil.rmtree(root / digest, ignore_errors=True)
 
 
+def _seed_library(service, state):
+    """Initialize once, without overwriting visitor changes on later visits."""
+    root = service._private_resources()['root']
+    marker = root / '.reviewer-library-seeded'
+    with _seed_lock:
+        if marker.exists():
+            return
+        library = service.library
+        for experiment in state.get('experiments', []):
+            report = experiment.get('report')
+            if (experiment.get('status') == 'completed' and isinstance(report, dict)
+                    and not report.get('failure_mode') and report.get('factor_id')
+                    and library.get(report['factor_id']) is None):
+                library.save(FactorReport.from_dict(report))
+        marker.write_text('1\n')
+
+
 @app.get('/', include_in_schema=False)
 def demo_index():
     html = (Path(__file__).parent / 'static' / 'index.html').read_text()
@@ -129,12 +148,50 @@ def enter_demo(request: Request):
                                      display_name='Guest researcher')
         token = current_tenant.set(tenant_for_user(user))
         try:
-            get_service().research.import_session(manifest)
+            service = get_service()
+            state = service.research.import_session(manifest)
+            # Seed the private library from the very same evaluated reports, so
+            # factor identities and metrics agree with the research history.
+            _seed_library(service, state)
         except Exception:
             # Do not leave an unusable account consuming the guest capacity.
             with store._lock, store._conn() as db:
                 db.execute('DELETE FROM users WHERE id=?', (user.id,))
+            tenant = tenant_for_user(user)
+            if 'service' in locals():
+                with service._tenant_resources_lock:
+                    service._tenant_resources.pop(tenant, None)
+                lock = getattr(service, '_research_tenant_lock', None)
+                if lock is not None:
+                    with lock:
+                        service._research_tenants.pop(tenant, None)
+            digest = hashlib.sha256(tenant.encode()).hexdigest()
+            shutil.rmtree(Path(os.environ['ASSAY_DATA_DIR']) / 'research' / 'accounts' / digest,
+                          ignore_errors=True)
             raise
+        finally:
+            current_tenant.reset(token)
+    else:
+        # Upgrade workspaces created before library seeding was added. The
+        # marker prevents deleted or edited factors from being restored later.
+        token = current_tenant.set(tenant_for_user(user))
+        try:
+            service = get_service()
+            root = service._private_resources()['root']
+            if not (root / '.reviewer-library-seeded').exists():
+                seed_path = os.environ.get('ASSAY_DEMO_MANIFEST', '')
+                try:
+                    manifest = json.loads(Path(seed_path).read_text())
+                    from assay.research import ResearchWorkspace
+                    if not ResearchWorkspace.verify_manifest(manifest):
+                        raise ValueError('invalid reviewer manifest')
+                    state = service.research.get_session(manifest['state']['id'])
+                except (OSError, ValueError, KeyError) as exc:
+                    raise HTTPException(503, 'Reviewer example is unavailable') from exc
+                # Only seed the original examples, not later visitor experiments.
+                original = {item['id'] for item in manifest['state']['experiments']}
+                _seed_library(service, {'experiments': [item for item in state['experiments']
+                                                         if item['id'] in original]})
         finally:
             current_tenant.reset(token)
     remaining = max(1, min(_TTL, int(user.created_at + _TTL - time.time())))

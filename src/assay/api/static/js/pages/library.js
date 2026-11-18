@@ -222,7 +222,7 @@ export function render(root, ctx) {
     source: "",           // '' = all
     pool: "",             // '' = all universes; else a universe_id
     sortBy: "rank_icir",
-    minRankIcir: 0,
+    minRankIcir: -1,
     maxRedundancy: 1,
     checked: new Set(),    // factor_ids checked (multi-select)
     activeId: null,        // last-clicked (drives detail panel)
@@ -296,7 +296,7 @@ export function render(root, ctx) {
       if (q && !(f.expr || "").toLowerCase().includes(q)) return false;
       // sliders are also applied server-side, but re-apply client-side so live
       // drag feedback is correct even before a reload completes.
-      if (ui.minRankIcir > 0 && Number(f.rank_icir) < ui.minRankIcir) return false;
+      if (ui.minRankIcir > -1 && Number(f.rank_icir) < ui.minRankIcir) return false;
       if (ui.maxRedundancy < 1) {
         const r = Number(f.redundancy_score);
         if (Number.isFinite(r) && r > ui.maxRedundancy) return false;
@@ -312,7 +312,7 @@ export function render(root, ctx) {
     if (ui.search.trim()) n++;
     if (ui.source) n++;
     if (ui.pool) n++;
-    if (ui.minRankIcir > 0) n++;
+    if (ui.minRankIcir > -1) n++;
     if (ui.maxRedundancy < 1) n++;
     return n;
   }
@@ -418,7 +418,7 @@ export function render(root, ctx) {
       type: "button", className: "btn btn--sm btn--ghost",
       disabled: fcount === 0,
       onClick: () => {
-        ui.search = ""; ui.source = ""; ui.pool = ""; ui.minRankIcir = 0; ui.maxRedundancy = 1;
+        ui.search = ""; ui.source = ""; ui.pool = ""; ui.minRankIcir = -1; ui.maxRedundancy = 1;
         loadList();
       },
     }, fcount ? ctx.t("lib.clearFiltersN", { n: fcount }) : ctx.t("lib.clearFiltersX"));
@@ -509,7 +509,7 @@ export function render(root, ctx) {
       listWrap.appendChild(el("li", { className: "lib-mini-empty" },
         el("div", { className: "empty-state-title" }, ctx.t("lib.noMatch")),
         el("button", { type: "button", className: "btn btn--sm mt-2", onClick: () => {
-          ui.search = ""; ui.source = ""; ui.pool = ""; ui.minRankIcir = 0; ui.maxRedundancy = 1; loadList();
+          ui.search = ""; ui.source = ""; ui.pool = ""; ui.minRankIcir = -1; ui.maxRedundancy = 1; loadList();
         } }, ctx.t("lib.clearFilters"))
       ));
       return;

@@ -9,7 +9,9 @@ market panel may be mounted at `ASSAY_QFV_PANEL_DIR`.
 Set `ASSAY_ACCOUNTS=1`, `ASSAY_DEPLOYMENT=production`, `ASSAY_PUBLIC_URL` to the
 public HTTPS origin, and `ASSAY_DEMO_MANIFEST` to a validated exported research
 session manifest. Each new visitor gets a distinct workspace initialized from
-that manifest. Example launch:
+that manifest. Completed, successful experiments with a factor report also seed
+the visitor's private factor library with the same factor IDs and metrics; failed
+experiments remain visible only in the research history. Example launch:
 
 ```sh
 uvicorn assay.api.reviewer_demo:app --host 127.0.0.1 --port 19421 \
