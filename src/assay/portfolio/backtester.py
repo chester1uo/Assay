@@ -30,12 +30,11 @@ sector / index data (documented per stage in the modules cited above). The bench
 defaults to an ``equal_weight`` eligible-universe proxy because Assay has **no index
 price series** — a true index benchmark needs index data the DataStore lacks.
 
-**Correctness notes** (design-doc section 7). Survivorship bias is handled upstream
-by the PIT universe the :class:`FactorEngine` reads (``get_universe(..., as_of)``);
-corp-action / adjustment versioning is fixed by the engine's ``adj`` parameter
-queried as-of the backtest date — both are properties of the engine the backtester
-builds, not re-derived here. Look-ahead is impossible by construction: the signal
-on date ``t`` is only ever executed on ``t + execution_offset_days`` (>= 1).
+**Correctness notes** (design-doc section 7). A backend with historical membership
+can mask the universe by date; older backends may supply only period-end members.
+The as-of cutoff does not establish when each historical revision became known.
+Signals execute at least one bar later, but input data still requires a separate
+point-in-time check.
 
 The backtester **never raises on a bad factor**: an all-NaN / degenerate signal,
 an empty universe, or a too-short period yields a well-formed report with an empty
@@ -109,8 +108,8 @@ class PortfolioBacktester:
             weights, constraints, costs, benchmark, output flags).
         as_of:
             PIT cutoff for the engine panel; defaults to ``config.as_of_date`` then
-            ``config.period_end``. Guarantees survivorship-bias-free universe and
-            adjustment versioning (design-doc §7.1/§7.2).
+            ``config.period_end``. Historical universe and adjustment coverage
+            depend on the store and the selected knowledge cutoff.
         groups, tradable_mask, prev_close, adv:
             All optional market inputs are aligned to the **engine's symbol axis**
             (``FactorEngine`` sorts symbols ascending, so a caller building these
@@ -260,7 +259,7 @@ class PortfolioBacktester:
             if supplied is not None and aligned is None:
                 raise ValueError(f'{name} shape {np.shape(supplied)} must be ({N},) or ({T}, {N})')
         pre_returns, post_returns = None, None
-        if config.execution_price == 'next_open' or (config.market == 'A' and config.execution_price == 'arrival'):
+        if config.execution_price in ('next_open', 'arrival'):
             previous = np.vstack([marked_close[:1], marked_close[:-1]])
             valid = np.isfinite(open_) & (open_ > 0) & np.isfinite(marked_close) & (marked_close > 0) & (previous > 0)
             with np.errstate(divide='ignore', invalid='ignore'):
@@ -281,9 +280,12 @@ class PortfolioBacktester:
         cn_up, cn_dn = self._cn_limit_matrices(config, close, dates, symbols, cutoff)
 
         if config.market == "A" and config.enforce_limit_price and cn_up is None and cn_dn is None:
-            warnings.append("Official A-share price-limit data unavailable; trades without known limits are blocked.")
-            cn_up = np.full((T, N), np.nan)
-            cn_dn = np.full((T, N), np.nan)
+            if prev_mat is not None and config.price_limit_pct is not None:
+                warnings.append("Official A-share price-limit data unavailable; limits are estimated from "
+                                "the supplied previous close using a uniform percentage, which may not "
+                                "reflect board, ST, or special listing rules. Missing inputs block orders.")
+            else:
+                warnings.append("Official A-share price-limit data unavailable; trades without known limits are blocked.")
         if config.market == "A" and not config.t_plus_1:
             raise ValueError("A-share equity backtests require t_plus_1=True")
         if config.market == "A" and not config.enforce_limit_price:
@@ -397,8 +399,8 @@ class PortfolioBacktester:
     ) -> tuple[Any, np.ndarray, np.ndarray, np.ndarray, list, list]:
         """Build the engine and pull the aligned factor / close / open matrices.
 
-        The engine is constructed point-in-time as-of ``as_of`` (-> survivorship-safe
-        universe + adjustment versioning, design-doc §7.1/§7.2). ``open`` falls back
+        The engine is constructed with an ``as_of`` cutoff; historical membership
+        and revision availability depend on the store. ``open`` falls back
         to ``close`` when the panel has no open column (so ``next_open`` execution
         still has a price).
         """
@@ -618,10 +620,10 @@ class PortfolioBacktester:
         forward factor the engine applied). ``f`` cancels in the inequality, so
         ``exec_price >= up`` is basis-consistent.
 
-        No-ops (``None, None``) unless ``market == 'A'`` and the store exposes a
-        non-empty ``trade_status`` — so US and offline/monkeypatched-engine runs
-        are unaffected. Any failure degrades to ``None`` (the constraint goes
-        inert) rather than breaking the backtest.
+        Returns ``None, None`` unless ``market == 'A'`` and the store exposes a
+        non-empty ``trade_status``. For A shares the caller may use an explicitly
+        supplied previous close and configured flat limit; otherwise missing limits
+        block orders.
         """
         if config.market != "A" or self.store is None:
             return None, None

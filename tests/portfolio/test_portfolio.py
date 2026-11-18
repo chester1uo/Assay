@@ -138,6 +138,31 @@ def test_config_preset_A_sets_a_share_rules():
     assert us.t_plus_1 is False and us.price_limit_pct is None and us.stamp_duty_rate == 0.0
 
 
+@pytest.mark.parametrize("market", ["US", "HK"])
+def test_arrival_matches_open_execution_day_accounting(market, monkeypatch):
+    dates = [dt.date(2021, 1, 1) + dt.timedelta(days=i) for i in range(3)]
+    symbols = [f"S{j}" for j in range(5)]
+    open_ = np.full((3, 5), 100.)
+    close = np.array([[100.] * 5, [200.] * 5, [200.] * 5])
+    panel = pl.DataFrame({
+        'date': np.repeat(np.array(dates), 5), 'symbol': symbols * 3,
+        'open': open_.ravel(), 'close': close.ravel(),
+        'high': np.maximum(open_, close).ravel(), 'low': np.minimum(open_, close).ravel(),
+        'volume': np.full(15, 1e6),
+    })
+    engine = FactorEngine(panel)
+    monkeypatch.setattr(PortfolioBacktester, "_build_schedule",
+                        lambda *args: ({1: np.array([1., 0., 0., 0., 0.])}, 1))
+    common = dict(period_start='2021-01-01', period_end='2021-01-03',
+                  commission_rate=0., commission_min=0., transfer_fee_rate=0.,
+                  stamp_duty_rate=0., slippage_model='zero')
+    bt = PortfolioBacktester()
+    opened = bt.run('close', PortfolioBacktestConfig.preset(market, execution_price='next_open', **common), engine=engine)
+    arrival = bt.run('close', PortfolioBacktestConfig.preset(market, execution_price='arrival', **common), engine=engine)
+    np.testing.assert_allclose(opened.nav_series, [1., 2., 2.])
+    np.testing.assert_allclose(arrival.nav_series, opened.nav_series)
+
+
 def test_config_to_from_dict_round_trip_and_hash_stable():
     c = _cfg(weight_method="mv", long_short=True, net_exposure=0.0, max_single_weight=0.10)
     d = c.to_dict()

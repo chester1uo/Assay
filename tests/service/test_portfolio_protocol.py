@@ -10,6 +10,50 @@ from assay.portfolio.accounting import PORTFOLIO_ACCOUNTING_PROTOCOL
 from assay.portfolio.report import PortfolioLineage, PortfolioReport
 
 
+def test_v1_dataset_continues_under_v2_without_overwriting_history(tmp_path):
+    from assay.research import ResearchWorkspace
+
+    service, dataset = prepare_demo(tmp_path / 'market')
+    workspace = service.research
+    dataset = dict(dataset, portfolio_accounting_protocol='cash-funded-v1')
+    metadata = {'id', 'name', 'description', 'spec_hash', 'created_at'}
+    dataset['spec_hash'] = hashlib.sha256(json.dumps(
+        {k: v for k, v in dataset.items() if k not in metadata},
+        sort_keys=True, allow_nan=False).encode()).hexdigest()
+    with workspace._db() as db:
+        db.execute('UPDATE datasets SET payload=? WHERE id=?', (json.dumps(dataset), dataset['id']))
+    sid = workspace.create_session(dataset['id'], 'Continue v1', max_experiments=4)['id']
+    old = workspace.evaluate(sid, 'ts_returns(close,3)', 'original', request_id='old')
+    old['portfolio_accounting_protocol'] = 'cash-funded-v1'
+    old['report']['portfolio']['lineage']['accounting_protocol'] = 'cash-funded-v1'
+    with workspace._db() as db:
+        db.execute('UPDATE experiments SET payload=? WHERE id=?', (json.dumps(old), old['id']))
+        db.execute('UPDATE scores SET version=? WHERE version LIKE ?',
+                   ('mutable:' + dataset['as_of'], '%|portfolio:cash-funded-v2'))
+    assert workspace.evaluate(sid, old['expr'], old['hypothesis'], request_id='old') == old
+    current = workspace.evaluate(sid, old['expr'], 'revision', request_id='new', parent_id=old['id'])
+    assert current['portfolio_accounting_protocol'] == 'cash-funded-v2'
+    assert workspace.get_experiment(old['id']) == old
+    assert workspace.get_session(sid)['dataset'] == dataset
+    assert not workspace.compare_experiments([old['id'], current['id']])['comparable']
+    with pytest.raises(ValueError, match='same portfolio accounting protocol'):
+        workspace.replay_experiment(old['id'], sid, request_id='old-replay')
+    with workspace._db() as db:
+        versions = {row[0] for row in db.execute('SELECT version FROM scores WHERE factor_id=? AND spec=?',
+                                                 (old['factor_id'], dataset['spec_hash']))}
+    assert versions == {'mutable:' + dataset['as_of'],
+                        'mutable:' + dataset['as_of'] + '|portfolio:cash-funded-v2'}
+    pid = workspace.create_program('migration', 'Continue', request_id='program')['id']
+    workspace.attach_program_session(pid, sid)
+    assert not workspace.program_factor_history(pid, old['factor_id'])['settings_match']
+    with pytest.raises(ValueError, match='portfolio_accounting_protocol'):
+        workspace.compare_program_windows(pid, old['id'], current['id'], drop_threshold=.01)
+    manifest = workspace.export_session(sid)
+    restored = ResearchWorkspace(tmp_path / 'restored-v1.sqlite3')
+    assert restored.import_session(manifest) == manifest['state']
+    assert restored.export_session(sid) == manifest
+
+
 def test_legacy_session_continues_without_confusing_accounting_protocols(tmp_path):
     service, dataset = prepare_demo(tmp_path / 'market')
     assert dataset['portfolio_accounting_protocol'] == PORTFOLIO_ACCOUNTING_PROTOCOL

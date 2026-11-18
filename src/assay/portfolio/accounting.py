@@ -37,7 +37,7 @@ from assay.portfolio.config import PortfolioBacktestConfig
 from assay.portfolio.costs import TransactionCostModel
 from assay.portfolio.execution import ExecutionSimulator
 
-PORTFOLIO_ACCOUNTING_PROTOCOL = "cash-funded-v1"
+PORTFOLIO_ACCOUNTING_PROTOCOL = "cash-funded-v2"
 
 
 @dataclass

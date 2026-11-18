@@ -581,8 +581,10 @@ class FactorEngine:
         """Build an engine from a :class:`DataStore`, fetching a PIT panel.
 
         ``fields`` defaults to the OHLCV fields the store provides; the panel is
-        read point-in-time as-of ``as_of`` (look-ahead bias is impossible by
-        construction — see engineering-docs section 3.4).
+        read with an ``as_of`` knowledge cutoff. Historical membership is applied
+        when the store provides it; older stores fall back to period-end members.
+        The cutoff alone does not prove that every historical observation was
+        available on its signal date.
         """
         fields = fields or ["open", "high", "low", "close", "volume"]
         if hasattr(store, "universe_span"):

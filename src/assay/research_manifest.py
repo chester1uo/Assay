@@ -73,6 +73,7 @@ def validate_state(state, *, allow_running=False):
     require(type(state["remaining_experiments"]) is int and
             state["remaining_experiments"] == state["budget"] - len(attempts), "remaining budget")
     ids, requests = {}, set()
+    from assay.research_portfolio import compatible_accounting_protocol
     fields = {"id", "session_id", "request_id", "dataset_id", "spec_hash", "expr", "hypothesis",
               "parent_id", "agent", "status", "started_at", "finished_at", "report", "error"}
     for attempt in attempts:
@@ -84,7 +85,7 @@ def validate_state(state, *, allow_running=False):
             require(bool(dataset.get('portfolio')) and
                     dataset['portfolio'].get('enabled') is not False, 'attempt accounting requires a portfolio')
             declared = dataset.get('portfolio_accounting_protocol')
-            require(declared is None or attempt['portfolio_accounting_protocol'] == declared,
+            require(compatible_accounting_protocol(declared, attempt['portfolio_accounting_protocol']),
                     'attempt accounting differs from dataset protocol')
         report = attempt.get('panel_report') or attempt.get('report') or {}
         evidence = report.get('portfolio') if isinstance(report, dict) else None
@@ -92,7 +93,7 @@ def validate_state(state, *, allow_running=False):
         protocol = lineage.get('accounting_protocol') if isinstance(lineage, dict) else None
         if protocol is not None:
             require(isinstance(protocol, str) and bool(protocol.strip()), 'report accounting protocol')
-            require(dataset.get('portfolio_accounting_protocol') in (None, protocol),
+            require(compatible_accounting_protocol(dataset.get('portfolio_accounting_protocol'), protocol),
                     'report accounting differs from dataset protocol')
             require(attempt.get('portfolio_accounting_protocol') in (None, protocol),
                     'attempt accounting differs from report lineage')

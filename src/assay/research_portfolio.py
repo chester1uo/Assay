@@ -4,6 +4,12 @@ from __future__ import annotations
 from dataclasses import fields
 
 
+def compatible_accounting_protocol(dataset_protocol, actual_protocol):
+    """Allow a known upgrade without rewriting the historical dataset identity."""
+    return (dataset_protocol is None or dataset_protocol == actual_protocol or
+            (dataset_protocol, actual_protocol) == ('cash-funded-v1', 'cash-funded-v2'))
+
+
 def accounting_protocol(attempt, dataset):
     """Identify the accounting used by an attempt without changing old records."""
     portfolio = dataset.get('portfolio')

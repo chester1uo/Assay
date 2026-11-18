@@ -146,7 +146,7 @@ class PortfolioBacktestConfig:
     # === 2.6  A-share specific constraints (bind only when market == 'A') ====
     # Price-mechanical rules (activate when their OHLC inputs are present):
     t_plus_1: bool = True            # T+1 settlement: same-day-bought shares not sellable
-    price_limit_pct: float | None = 0.10  # daily limit; 0.10 main, 0.20 STAR, null disables
+    price_limit_pct: float | None = 0.10  # flat estimate; None disables the estimate, not official limits
     star_chinext_limit: float | None = 0.20  # STAR/ChiNext limit; null disables
     enforce_limit_price: bool = True  # block buys at limit-up / sells at limit-down
     # Cost model (always computable):

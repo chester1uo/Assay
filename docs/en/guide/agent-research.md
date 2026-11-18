@@ -398,7 +398,11 @@ processes or physical market data.
 
 ## Portfolio accounting protocol
 
-Portfolio targets are fractions of pre-trade NAV. Executed quantities are preserved when transaction costs are charged to cash; resulting weights are recalculated against post-fee NAV. Long-only, unlevered books reserve cash for costs. Explicitly leveraged or long-short books can borrow. New datasets and portfolio attempts record `portfolio_accounting_protocol: cash-funded-v1`, also discoverable in the Assay backend capabilities. Existing sessions can continue using their original dataset: historical records remain unchanged and new attempts record the current protocol. Comparisons flag different accounting protocols as not directly comparable; replay requires the original protocol.
+Portfolio targets are fractions of pre-trade NAV. Executed quantities are preserved when transaction costs are charged to cash; resulting weights are recalculated against post-fee NAV. Long-only, unlevered books reserve cash for costs. Explicitly leveraged or long-short books can borrow. New datasets and portfolio attempts record `portfolio_accounting_protocol: cash-funded-v2`, also discoverable in the Assay backend capabilities. Existing v1 sessions can continue using their original dataset: historical records remain unchanged and new attempts record v2. Comparisons flag different accounting protocols as not directly comparable; replay requires the original protocol.
+
+Portfolio `run_id` identifies the factor, configuration and accounting protocol;
+it does not include the market snapshot or auxiliary execution inputs. Use the
+research experiment ID and recorded provenance to distinguish attempts.
 
 Set `portfolio.initial_capital` to a positive amount in the market currency to apply minimum commissions and enable trailing liquidity for newly registered datasets. At each rebalance, participation is the order value divided by the average unadjusted daily close × volume over the preceding `adv_window` exchange sessions (20 by default); the execution day is excluded. It uses the current portfolio NAV, caps fills at `max_adv_fraction`, and applies the configured slippage model to filled participation. Missing or incomplete history blocks affected orders. `partial_fill_handling="force"` bypasses the capacity cap and produces a warning. Reported liquidity evidence includes coverage, blocked orders and whether impact was applied. Market-data vendors can revise historical bars; this calculation alone does not guarantee point-in-time revision history.
 

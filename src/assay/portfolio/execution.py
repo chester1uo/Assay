@@ -210,8 +210,9 @@ class ExecutionSimulator:
             elif cfg.price_limit_pct is not None and prev_close is not None:
                 prev = np.asarray(prev_close, dtype=np.float64)
                 lim = float(cfg.price_limit_pct)
-                lim_up = prev * (1.0 + lim)
-                lim_down = prev * (1.0 - lim)
+                valid_prev = np.isfinite(prev) & (prev > 0)
+                lim_up = np.where(valid_prev, prev * (1.0 + lim), np.nan)
+                lim_down = np.where(valid_prev, prev * (1.0 - lim), np.nan)
             else:
                 lim_up, lim_down = np.full(n, np.nan), np.full(n, np.nan)
         cap_on = adv_fraction is not None

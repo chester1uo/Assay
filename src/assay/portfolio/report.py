@@ -15,8 +15,9 @@ Serialisation rules (:meth:`to_dict`): JSON-safe — non-finite floats (``NaN`` 
 ``inf``) become ``None``, tuples/arrays become lists, nested :class:`Trade` /
 :class:`PositionSnapshot` / :class:`PortfolioLineage` flatten to dicts.
 :meth:`from_dict` is the inverse, tolerant of missing optional keys so older
-persisted reports still load. ``run_id`` = SHA-256[:12] of
-``factor_id + config_hash`` (:meth:`compute_run_id`).
+persisted reports still load. ``run_id`` identifies the factor, configuration and
+accounting protocol (:meth:`compute_run_id`), but not the market snapshot or
+caller-supplied execution inputs. It is not a unique experimental record ID.
 """
 
 from __future__ import annotations
@@ -207,7 +208,7 @@ class PortfolioReport:
     """
 
     # --- identity ---------------------------------------------------------
-    run_id: str  # SHA-256[:12] of (factor_id + config_hash)
+    run_id: str  # configuration identity, not a unique input or experiment ID
     factor_id: str  # source factor (from the FactorReport)
     config: dict[str, Any] = field(default_factory=dict)  # full PortfolioBacktestConfig.to_dict()
 

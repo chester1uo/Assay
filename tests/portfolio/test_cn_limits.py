@@ -182,3 +182,28 @@ def test_cn_backtest_blocks_buy_at_limit_up(monkeypatch):
     # the block is recorded against S0 as a limit_up reason
     blocked = [t for t in report.trade_log if t.blocked_reason == "limit_up"]
     assert any(t.symbol == "S0" for t in blocked)
+
+
+def test_cn_backtest_uses_supplied_previous_close_when_official_limits_missing(monkeypatch):
+    dates = [dt.date(2021, 1, 1) + dt.timedelta(days=i) for i in range(3)]
+    symbols = [f"S{j}" for j in range(5)]
+    prices = np.full((3, 5), 101.)
+    engine = FactorEngine(_ohlc_panel(dates, symbols, prices, prices))
+    monkeypatch.setattr(PortfolioBacktester, "_build_schedule",
+                        lambda *args: ({1: np.array([.2, 0., 0., 0., 0.])}, 1))
+    report = PortfolioBacktester(store=None).run(
+        "close", _a_cfg(), engine=engine, prev_close=np.full((3, 5), 100.))
+    assert any(t.symbol == 'S0' and t.side == 'buy' and not t.blocked_reason
+               for t in report.trade_log)
+    assert any('estimated' in warning.lower() for warning in report.warnings)
+
+
+def test_cn_backtest_without_official_limits_or_previous_close_blocks(monkeypatch):
+    dates = [dt.date(2021, 1, 1) + dt.timedelta(days=i) for i in range(3)]
+    symbols = [f"S{j}" for j in range(5)]
+    prices = np.full((3, 5), 101.)
+    engine = FactorEngine(_ohlc_panel(dates, symbols, prices, prices))
+    monkeypatch.setattr(PortfolioBacktester, "_build_schedule",
+                        lambda *args: ({1: np.array([.2, 0., 0., 0., 0.])}, 1))
+    report = PortfolioBacktester(store=None).run("close", _a_cfg(), engine=engine)
+    assert any(t.blocked_reason == 'limit_data_missing' for t in report.trade_log)

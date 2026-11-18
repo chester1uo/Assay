@@ -16,6 +16,33 @@ def test_unknown_a_share_limits_block_orders():
     assert result.trades[0].blocked_reason=='limit_data_missing'
 
 
+@pytest.mark.parametrize('previous', [np.nan, np.inf, -np.inf, 0., -1.])
+def test_invalid_previous_close_cannot_establish_a_share_limits(previous):
+    result = ExecutionSimulator(config()).execute(
+        np.array([.3]), np.array([0.]), exec_price=np.array([10.]),
+        prev_close=np.array([previous]))
+    assert result.executed_weights[0] == 0
+    assert result.diag['blocked_limit_data'] == 1
+    assert result.trades[0].blocked_reason == 'limit_data_missing'
+
+
+def test_a_share_without_flat_estimate_still_requires_known_limits():
+    cfg = PortfolioBacktestConfig.preset('A', price_limit_pct=None)
+    result = ExecutionSimulator(cfg).execute(
+        np.array([.3]), np.array([0.]), exec_price=np.array([10.]))
+    assert result.executed_weights[0] == 0
+    assert result.diag['blocked_limit_data'] == 1
+
+
+def test_explicit_a_share_bands_still_apply_without_flat_limit():
+    cfg = PortfolioBacktestConfig.preset('A', price_limit_pct=None)
+    result = ExecutionSimulator(cfg).execute(
+        np.array([.3]), np.array([0.]), exec_price=np.array([10.]),
+        limit_up=np.array([10.]), limit_down=np.array([8.]))
+    assert result.executed_weights[0] == 0
+    assert result.trades[0].blocked_reason == 'limit_up'
+
+
 def test_blocked_sale_does_not_fund_purchase():
     result=ExecutionSimulator(config()).execute(np.array([0.,1.]),np.array([1.,0.]),
         exec_price=np.array([10.,10.]),limit_up=np.array([11.,11.]),limit_down=np.array([10.,9.]))

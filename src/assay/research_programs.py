@@ -144,6 +144,8 @@ def factor_history(ws, program_id, factor_id, offset=0, limit=20):
         attempt, dataset = json.loads(row['payload']), json.loads(row['dataset'])
         report = attempt.get('report') or {}
         comparison_spec = _comparison_settings(dataset)
+        from assay.research_portfolio import accounting_protocol
+        comparison_spec['portfolio_accounting_protocol'] = accounting_protocol(attempt, dataset)
         specs.append(comparison_spec)
         history.append(dict(experiment_id=attempt['id'], session_id=attempt['session_id'],
                             session_label=row['label'], expr=attempt['expr'], status=attempt['status'],
@@ -231,6 +233,9 @@ def compare_windows(ws, program_id, baseline_id, target_id, drop_threshold):
             or old['factor_id'] != new.get('factor_id')):
         raise ValueError('comparison needs completed evaluations of the same factor')
     old_settings, new_settings = _comparison_settings(old_ds), _comparison_settings(new_ds)
+    from assay.research_portfolio import accounting_protocol
+    old_settings['portfolio_accounting_protocol'] = accounting_protocol(old, old_ds)
+    new_settings['portfolio_accounting_protocol'] = accounting_protocol(new, new_ds)
     mismatches = [key for key in old_settings if old_settings[key] != new_settings[key]]
     if mismatches:
         raise ValueError('incompatible evaluation settings: ' + ', '.join(mismatches))

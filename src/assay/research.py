@@ -90,9 +90,10 @@ class AssayBackend:
     def validate_execution_dataset(self, dataset: dict) -> None:
         """Reject an explicitly incompatible accounting protocol."""
         from assay.portfolio.accounting import PORTFOLIO_ACCOUNTING_PROTOCOL
+        from assay.research_portfolio import compatible_accounting_protocol
         portfolio = dataset.get('portfolio')
         if (portfolio and portfolio.get('enabled') is not False and
-                dataset.get('portfolio_accounting_protocol') not in (None, PORTFOLIO_ACCOUNTING_PROTOCOL)):
+                not compatible_accounting_protocol(dataset.get('portfolio_accounting_protocol'), PORTFOLIO_ACCOUNTING_PROTOCOL)):
             raise ValueError('This portfolio dataset requires an unsupported accounting protocol.')
 
     def _evaluate(self, expr, dataset, entry):
