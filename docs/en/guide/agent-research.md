@@ -204,6 +204,8 @@ Start `assay serve-mcp`. The research operations include:
 |---|---|
 | `assay_backend_list` | Discover adapters and optionally check availability |
 | `assay_research_context` | Read compact, evidence-linked handoff context |
+| `assay_research_resolve_id` | Find exact or prefix IDs, or suggest similar IDs without automatically selecting them |
+| `assay_research_report` | Read bounded, saved experiment summaries with exact IDs |
 | `assay_research_import` | Restore a manifest into another workspace without resetting budget |
 | `assay_research_export` | Export full session state with a SHA-256 integrity hash |
 | `assay_experiment_replay` | Explicitly rerun a terminal attempt under the same spec |
@@ -237,6 +239,12 @@ use `assay_research_context` for model input; session export and the complete
 session tool return bulk evidence for storage and analysis.
 `assay_factor_history` also accepts `offset` and `limit`, paging both chronological
 lists. Its `history_page` reports separate experiment and decision totals.
+
+`assay_research_resolve_id` searches only the current workspace; experiment lookup
+requires an exact session ID. Similar IDs are suggestions and must be confirmed;
+mutating operations never apply fuzzy correction. `assay_research_report` returns
+the latest attempts or explicitly selected exact IDs, including failed attempts,
+with a truncation flag. It does not validate an agent’s narrative conclusions.
 
 ## Retry, failure and recovery
 

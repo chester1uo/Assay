@@ -181,6 +181,14 @@ listed in the <a href="/doc/guide/rest-api">REST guide</a>.</p>
 <td>Read compact, evidence-linked handoff context</td>
 </tr>
 <tr>
+<td><code>assay_research_resolve_id</code></td>
+<td>Find exact or prefix IDs, or suggest similar IDs without automatically selecting them</td>
+</tr>
+<tr>
+<td><code>assay_research_report</code></td>
+<td>Read bounded, saved experiment summaries with exact IDs</td>
+</tr>
+<tr>
 <td><code>assay_research_import</code></td>
 <td>Restore a manifest into another workspace without resetting budget</td>
 </tr>
@@ -267,6 +275,11 @@ use <code>assay_research_context</code> for model input; session export and the 
 session tool return bulk evidence for storage and analysis.
 <code>assay_factor_history</code> also accepts <code>offset</code> and <code>limit</code>, paging both chronological
 lists. Its <code>history_page</code> reports separate experiment and decision totals.</p>
+<p><code>assay_research_resolve_id</code> searches only the current workspace; experiment lookup
+requires an exact session ID. Similar IDs are suggestions and must be confirmed;
+mutating operations never apply fuzzy correction. <code>assay_research_report</code> returns
+the latest attempts or explicitly selected exact IDs, including failed attempts,
+with a truncation flag. It does not validate an agent’s narrative conclusions.</p>
 <h2 id="retry-failure-and-recovery">Retry, failure and recovery</h2>
 <p>An attempt transitions from <code>running</code> to <code>completed</code> or <code>failed</code>; explicit recovery
 may change synchronous <code>running</code> to <code>abandoned</code>, or asynchronous <code>running</code> to <code>cancelled</code>. Completed means the evaluator returned without

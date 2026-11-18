@@ -53,6 +53,10 @@ python -m assay.agent \
 安装 MCP extra。工具定义、研究文本与报告会发送给配置的模型提供商；密钥保留在环境变量
 及请求头中。更换提供商时需核对其协议与实际模型身份。
 
+`run.json` 的 `structured_evidence.observed_experiments` 保存成功工具响应中观察到的
+实验摘要；模型原始 `final_text` 单独保留，结构化记录不代表其文字结论正确。
+可使用 `assay_research_report` 根据精确 ID 读取持久化记录。
+
 输出包含 `tools.json`、`conversation.json` 和 `run.json`，后者记录实际响应、请求配置、
 模型身份、工具结果、耗时与供应商报告的 token 用量。返回模型名须匹配请求名，或由
 `--allow-returned-model` 显式列出允许的别名；别名匹配不代表模型等价。

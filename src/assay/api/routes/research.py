@@ -114,6 +114,11 @@ def sessions():
     return invoke('list_sessions')
 
 
+@router.get('/resolve-id')
+def resolve_id(kind: str, query: str = Query(min_length=8, max_length=100), session_id: str | None = None):
+    return invoke('resolve_research_id', kind, query, session_id=session_id)
+
+
 @router.post('/sessions')
 def create_session(req: SessionRequest):
     return invoke('create_session', **req.model_dump(), agent='human:webui')
@@ -132,6 +137,12 @@ def manifest(session_id: str):
 @router.get('/sessions/{session_id}/context')
 def context(session_id: str, limit: int = Query(10, ge=1, le=50)):
     return invoke('research_context', session_id, limit=limit)
+
+
+@router.get('/sessions/{session_id}/report')
+def report(session_id: str, experiment_ids: list[str] | None = Query(None),
+           limit: int = Query(20, ge=1, le=50)):
+    return invoke('research_report', session_id, experiment_ids=experiment_ids, limit=limit)
 
 
 @router.get('/sessions/{session_id}/audit')

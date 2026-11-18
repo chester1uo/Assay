@@ -23,6 +23,8 @@ python -m assay.cli serve-api --port 8000      # or: uvicorn assay.api.app:app -
 | GET / POST | `/sessions` | 发现／创建研究会话 |
 | POST | `/sessions/import` | 导入已校验的 session manifest |
 | GET | `/sessions/{id}` · `/manifest` · `/context` | 完整状态、导出和紧凑 context |
+| GET | `/resolve-id` | 根据 `kind`、`query` 和可选的精确 `session_id` 查找 ID |
+| GET | `/sessions/{id}/report` | 获取持久实验摘要；支持重复传入 `experiment_ids` 和 `limit` |
 | GET | `/sessions/{id}/audit` | 只读 judge 报告；`offset`、`limit`、`expected_manifest_hash` |
 | POST | `/sessions/{id}/experiments` · `/notes` | 执行实验／追加笔记 |
 | GET / POST | `/sessions/{id}/checkpoints` | 列出搜索状态／按版本保存 |

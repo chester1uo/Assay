@@ -55,6 +55,17 @@ def test_research_over_stdio_and_restart(tmp_path):
                     context = await tools.call("assay_research_context", session_id=sid, limit=1)
                     assert context["counts"]["statuses"] == {"failed": 1}
                     assert context["remaining_experiments"] == 1
+                    lookup = await tools.call("assay_research_resolve_id", kind="session", query=sid[:-1])
+                    assert lookup["resolved_id"] == sid
+                    wrong = sid[:-1] + ("0" if sid[-1] != "0" else "1")
+                    error = await session.call_tool("assay_research_context", {"session_id": wrong})
+                    assert error.isError and "assay_research_resolve_id" in str(error.content)
+                    suggestions = await tools.call("assay_research_resolve_id", kind="session", query=wrong)
+                    assert suggestions["resolved_id"] is None and sid in suggestions["candidates"]
+                    report = await tools.call("assay_research_report", session_id=sid,
+                                              experiment_ids=[attempt["id"]])
+                    assert report["experiment_ids"] == [attempt["id"]]
+                    assert report["experiments"][0]["status"] == "failed"
                     manifest = await tools.call("assay_research_export", session_id=sid)
                     from assay.research import ResearchWorkspace
                     assert ResearchWorkspace.verify_manifest(manifest)
@@ -72,6 +83,8 @@ def test_research_over_stdio_and_restart(tmp_path):
                     assert after == before
                     assert await tools.call("assay_research_export", session_id=sid) == manifest
                     assert await tools.call("assay_research_context", session_id=sid, limit=1) == context
+                    assert await tools.call("assay_research_report", session_id=sid,
+                                            experiment_ids=[attempt["id"]]) == report
                     assert await tools.call("assay_experiment_replay", **replay_args) == replay
                     assert await tools.call("assay_experiment_run", **args) == attempt
                     assert (await tools.call("assay_research_session_get", session_id=sid)) == before

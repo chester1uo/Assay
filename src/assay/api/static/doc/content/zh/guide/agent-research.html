@@ -111,7 +111,7 @@ comparison = ws.compare_program_windows(program['id'], source_experiment_id,
 <p>重新评估使用目标 session 的数据与预算，并记录来源；历史列表返回每次的窗口、设置和指标。跨窗口比较要求时间有序、评分窗口不重叠及设置一致，并按调用方指定的 RankIC 下降阈值给出提示。评分日期不重叠不代表前向收益标签在后续窗口前已经可用，也不能证明设置了交易日缓冲；提示不构成统计意义上的衰减检验。Program 关联保存在工作区数据库中；单个 session 的导出只包含该 session 和 checkpoint，不含 program 关联。行情快照需要单独保存。</p>
 <p>Program 因子池按规范因子身份汇总尝试，保留各 session 独立的接受／拒绝决策。MCP 对应 <code>assay_checkpoint_save/get/list</code> 和 <code>assay_program_create/list/get/attach_session/candidates/reassess/factor_history/compare_windows</code>；REST 路径见 <a href="/doc/guide/rest-api">REST API</a>。</p>
 <h2 id="mcp-研究工具">MCP 研究工具</h2>
-<p>运行 <code>assay serve-mcp</code>。20 个研究工具如下，与原有 11 个评估/因子库工具共存：</p>
+<p>运行 <code>assay serve-mcp</code>。研究工具包括：</p>
 <div class="table-wrap"><table class="doc-table">
 <thead>
 <tr>
@@ -127,6 +127,14 @@ comparison = ws.compare_program_windows(program['id'], source_experiment_id,
 <tr>
 <td><code>assay_research_context</code></td>
 <td>获取紧凑研究交接摘要</td>
+</tr>
+<tr>
+<td><code>assay_research_resolve_id</code></td>
+<td>查找精确 ID 或前缀，提供相似 ID 建议</td>
+</tr>
+<tr>
+<td><code>assay_research_report</code></td>
+<td>获取持久化实验摘要和完整 ID</td>
 </tr>
 <tr>
 <td><code>assay_research_import</code></td>
@@ -211,6 +219,10 @@ comparison = ws.compare_program_windows(program['id'], source_experiment_id,
 长会话应优先使用 <code>assay_research_context</code> 向模型提供上下文；session export 和完整会话
 接口用于存储及分析完整证据。<code>assay_factor_history</code> 同样接受 <code>offset</code> 与 <code>limit</code>，
 按时间顺序分别截取实验、决定列表，<code>history_page</code> 给出两类记录的总数。</p>
+<p><code>assay_research_resolve_id</code> 只搜索当前工作区；查找实验时须提供精确的会话 ID。
+相似 ID 只是建议，须由调用方确认；修改状态的操作不会自动纠错。
+<code>assay_research_report</code> 返回最近实验或指定的精确 ID，包含失败记录与截断标记；
+它不验证 Agent 对结果的自然语言判断。</p>
 <h2 id="重试-预算与恢复">重试、预算与恢复</h2>
 <p>每次尝试指定稳定的 <code>request_id</code>。重复提交只返回旧状态，不重复执行；相同请求 ID 搭配不同
 表达式、假设或父实验会报错。新请求 ID 代表新尝试，相同因子的不同实验不互相覆盖。

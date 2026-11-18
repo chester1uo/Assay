@@ -43,6 +43,7 @@ EXPECTED_TOOLS = {
     'assay_program_attach_session', 'assay_program_candidates', 'assay_program_factor_history',
     'assay_program_reassess', 'assay_program_compare_windows',
     'assay_research_audit',
+    'assay_research_resolve_id', 'assay_research_report',
     'assay_candidate_decide', 'assay_candidate_list', 'assay_factor_history',
     "fdb_submit", "fdb_job", "fdb_query", "fdb_factor",
     "fdb_novelty", "fdb_values", "fdb_operators", "fdb_budget",

@@ -80,6 +80,56 @@ def test_feedback_is_returned_to_model_and_receipts_are_retained(tmp_path):
     assert result['provider_calls'][0]['response']['model'] == 'scripted-test-only'
 
 
+def test_reference_agent_preserves_exact_server_ids_separate_from_model_text(tmp_path):
+    class ResearchSession:
+        async def list_tools(self, cursor=None):
+            schema = {'type': 'object', 'properties': {'session_id': {'type': 'string'}},
+                      'required': ['session_id']}
+            return SimpleNamespace(tools=[SimpleNamespace(name='assay_experiment_run',
+                description='Run an experiment', inputSchema=schema)], nextCursor=None)
+
+        async def call_tool(self, name, args):
+            return SimpleNamespace(structuredContent={'id':'exp_1234567890abcdef',
+                'session_id':'research_1234567890abcdef', 'status':'completed', 'expr':'close',
+                'report':{'rank_ic':.1,'rank_ic_series':[1,2,3]}}, isError=False)
+
+    request = {'id':'run', 'type':'function', 'function':{'name':'assay_experiment_run',
+        'arguments':json.dumps({'session_id':'research_1234567890abcdef'})}}
+    model = Model([reply([request]), reply(content='The result is exp_12345678.')])
+    result = asyncio.run(run_agent(ResearchSession(), model, task='Evaluate', output=tmp_path / 'run'))
+    assert result['final_text'] == 'The result is exp_12345678.'
+    observed = result['structured_evidence']['observed_experiments']
+    assert observed[0]['evidence']['id'] == 'exp_1234567890abcdef'
+    assert observed[0]['evidence']['report']['rank_ic'] == .1
+    assert 'rank_ic_series' not in observed[0]['evidence']['report']
+
+
+def test_detail_page_does_not_overwrite_report_evidence(tmp_path):
+    class ResearchSession:
+        async def list_tools(self, cursor=None):
+            return SimpleNamespace(tools=[SimpleNamespace(name=name, description='',
+                inputSchema={'type':'object'}) for name in ('assay_research_report', 'assay_experiment_get')],
+                nextCursor=None)
+
+        async def call_tool(self, name, args):
+            if name == 'assay_research_report':
+                data = {'experiments':[{'id':'exp_123', 'status':'completed', 'expr':'close',
+                                        'report':{'rank_ic':.1}}]}
+            else:
+                data = {'id':'exp_123','status':'completed','section':'ic','items':[{'ic':.2}]}
+            return SimpleNamespace(structuredContent=data, isError=False)
+
+    def request(name, identifier):
+        return {'id':identifier, 'type':'function', 'function':{'name':name, 'arguments':'{}'}}
+    model = Model([reply([request('assay_research_report','a')]),
+                   reply([request('assay_experiment_get','b')]), reply(content='Done')])
+    result = asyncio.run(run_agent(ResearchSession(), model, task='Inspect', output=tmp_path / 'run'))
+    observed = result['structured_evidence']['observed_experiments']
+    assert len(observed) == 1 and observed[0]['source_tool'] == 'assay_research_report'
+    assert observed[0]['evidence']['expr'] == 'close'
+    assert observed[0]['evidence']['report']['rank_ic'] == .1
+
+
 def test_tool_budget_caps_multi_call_responses(tmp_path):
     session = Session()
     model = Model([reply([call(identifier='a'), call(identifier='b')])])
@@ -221,10 +271,11 @@ def test_text_json_results_normalize_without_losing_other_content():
 
 
 def test_explicit_experiment_page_is_preserved_in_model_feedback():
-    from assay.agent import model_tool_result
+    from assay.agent import model_tool_result, observed_experiments
     page=dict(id='exp',status='completed',section='trades',offset=0,limit=1,total=2,
               next_offset=1,has_more=True,items=[dict(symbol='S1',price=12.)])
     assert model_tool_result('assay_experiment_get',page)==page
+    assert observed_experiments('assay_experiment_get',page)==[]
 
 
 def test_reference_client_compacts_legacy_factor_history_and_keeps_pages():

@@ -1,6 +1,6 @@
 # MCP Server
 
-The source server has **53 tools**, including eight FactorDB tools and 34 research
+The source server has **55 tools**, including eight FactorDB tools and 36 research
 tools for datasets, sessions, experiments, search checkpoints and programs. The
 deployed service can run a different version. See the [agent research guide](agent-research.md).
 

@@ -46,6 +46,16 @@
 </tr>
 <tr>
 <td>GET</td>
+<td><code>/resolve-id</code></td>
+<td>根据 <code>kind</code>、<code>query</code> 和可选的精确 <code>session_id</code> 查找 ID</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/sessions/{id}/report</code></td>
+<td>获取持久实验摘要；支持重复传入 <code>experiment_ids</code> 和 <code>limit</code></td>
+</tr>
+<tr>
+<td>GET</td>
 <td><code>/sessions/{id}/audit</code></td>
 <td>只读 judge 报告；<code>offset</code>、<code>limit</code>、<code>expected_manifest_hash</code></td>
 </tr>

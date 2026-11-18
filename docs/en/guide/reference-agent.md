@@ -72,6 +72,12 @@ the selected deployment; this client does not make all models interchangeable.
 
 ## Inspect the run
 
+`run.json` includes `structured_evidence.observed_experiments`: bounded experiment
+records observed in successful tool responses. The original model `final_text` is
+kept separately; this evidence does not establish that its claims are correct.
+Use `assay_research_report` to retrieve saved records for exact IDs.
+
+
 - `tools.json`: tool schemas discovered from the server.
 - `conversation.json`: the messages and tool outputs sent through the loop.
 - `run.json`: requested configuration, actual response identities, raw received

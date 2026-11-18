@@ -26,7 +26,7 @@ RESEARCH_TOOLS = {
     'assay_candidate_decide', 'assay_candidate_list', 'assay_factor_history',
     'assay_backend_list', 'assay_dataset_register', 'assay_dataset_list',
     'assay_research_session_create', 'assay_research_session_list',
-    'assay_research_context', 'assay_research_note',
+    'assay_research_context', 'assay_research_note', 'assay_research_resolve_id', 'assay_research_report',
     'assay_experiment_run', 'assay_experiment_get', 'assay_experiment_reconcile', 'assay_experiment_cancel', 'assay_experiment_compare',
     'assay_experiment_replay', 'assay_lint',
 }
@@ -93,6 +93,27 @@ def model_tool_result(name, result):
         return result  # preserve the explicitly requested, bounded detail page
     from assay.research_inspection import summarize_attempt
     return summarize_attempt(result)
+
+
+def observed_experiments(name, result):
+    """Extract exact IDs and bounded evidence actually returned by the server."""
+    result = normalize_tool_result(result)
+    if not isinstance(result, dict):
+        return []
+    if name == 'assay_experiment_get' and 'section' in result and 'items' in result:
+        return []  # A detail page must not overwrite a previously observed summary.
+    if name == 'assay_research_report':
+        attempts = result.get('experiments', [])
+    elif name in {'assay_experiment_run', 'assay_experiment_replay', 'assay_experiment_get',
+                  'assay_experiment_reconcile'}:
+        attempts = [result]
+    else:
+        return []
+    if not isinstance(attempts, list):
+        return []
+    from assay.research_inspection import summarize_attempt
+    return [dict(source_tool=name, evidence=summarize_attempt(a)) for a in attempts
+            if isinstance(a, dict) and isinstance(a.get('id'), str) and isinstance(a.get('status'), str)]
 
 
 def atomic_json(path: Path, payload):
@@ -171,7 +192,8 @@ async def run_agent(session, model, *, task: str, output: Path, max_turns=8,
     ledger = dict(schema_version=1, status='initializing', max_turns=max_turns,
                   max_tool_calls=max_tool_calls, provider_calls=[], tool_calls=[],
                   usage={'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0},
-                  usage_complete=True, final_text=None)
+                  usage_complete=True, final_text=None,
+                  structured_evidence={'observed_experiments': []})
     ledger['model_config'] = model.configuration() if hasattr(model, 'configuration') else None
     save = lambda: atomic_json(output / 'run.json', ledger)
     save()
@@ -179,7 +201,9 @@ async def run_agent(session, model, *, task: str, output: Path, max_turns=8,
         'You are a quantitative research assistant using Assay MCP tools. Discover the environment, '
         'inspect prior research, propose explicit hypotheses, evaluate candidates and use feedback to '
         'choose the next step. Retain failures and record decisions. Respect dataset settings and budgets. '
-        'Use stable request IDs for experiment retries. Never describe evaluation completion as proof of '
+        'Use stable request IDs for experiment retries. If an ID is unknown, use assay_research_resolve_id '
+        'or list sessions; never guess a correction. For exact saved evidence use assay_research_report. '
+        'Never describe evaluation completion as proof of '
         'profitability. End with a concise evidence-linked report of what you actually observed.')),
         dict(role='user', content=task)]
     try:
@@ -289,6 +313,12 @@ async def run_agent(session, model, *, task: str, output: Path, max_turns=8,
                 presented = model_tool_result(name, result)
                 if entry.get('isError'):
                     presented = {'isError': True, 'result': presented}
+                elif entry['status'] == 'completed':
+                    known = ledger['structured_evidence']['observed_experiments']
+                    for item in observed_experiments(name, result):
+                        identifier = item['evidence']['id']
+                        known[:] = [existing for existing in known if existing['evidence']['id'] != identifier]
+                        known.append(item)
                 entry['model_result'] = presented
                 messages.append(dict(role='tool', tool_call_id=tool['id'], content=json.dumps(presented)))
                 save()
@@ -347,7 +377,7 @@ def main():
             return await run_agent(session, model, task=args.task_file.read_text(), output=args.output,
                                    max_turns=args.max_turns, max_tool_calls=args.max_tool_calls)
     result = asyncio.run(execute())
-    print(json.dumps({k: result[k] for k in ('status', 'usage', 'usage_complete', 'final_text')}, indent=2))
+    print(json.dumps({k: result[k] for k in ('status', 'usage', 'usage_complete', 'final_text', 'structured_evidence')}, indent=2))
 
 
 if __name__ == '__main__':

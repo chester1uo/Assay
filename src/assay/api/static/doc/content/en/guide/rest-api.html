@@ -47,6 +47,16 @@
 </tr>
 <tr>
 <td>GET</td>
+<td><code>/resolve-id</code></td>
+<td>Find session or experiment IDs with <code>kind</code>, <code>query</code> and optional exact <code>session_id</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/sessions/{id}/report</code></td>
+<td>Bounded saved evidence; optional repeated <code>experiment_ids</code> and <code>limit</code></td>
+</tr>
+<tr>
+<td>GET</td>
 <td><code>/sessions/{id}/audit</code></td>
 <td>Read-only judge packet; <code>offset</code>, <code>limit</code>, <code>expected_manifest_hash</code></td>
 </tr>

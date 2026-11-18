@@ -128,12 +128,14 @@ Program 因子池按规范因子身份汇总尝试，保留各 session 独立的
 
 ## MCP 研究工具
 
-运行 `assay serve-mcp`。20 个研究工具如下，与原有 11 个评估/因子库工具共存：
+运行 `assay serve-mcp`。研究工具包括：
 
 | 工具 | 用途 |
 |---|---|
 | `assay_backend_list` | 发现后端、能力及可选的可用性检查 |
 | `assay_research_context` | 获取紧凑研究交接摘要 |
+| `assay_research_resolve_id` | 查找精确 ID 或前缀，提供相似 ID 建议 |
+| `assay_research_report` | 获取持久化实验摘要和完整 ID |
 | `assay_research_import` | 将清单恢复到新工作区，保留原预算与实验身份 |
 | `assay_research_export` | 导出带 SHA-256 完整性哈希的会话清单 |
 | `assay_experiment_replay` | 按原表达式及配置显式重跑终态实验 |
@@ -163,6 +165,11 @@ Program 因子池按规范因子身份汇总尝试，保留各 session 独立的
 长会话应优先使用 `assay_research_context` 向模型提供上下文；session export 和完整会话
 接口用于存储及分析完整证据。`assay_factor_history` 同样接受 `offset` 与 `limit`，
 按时间顺序分别截取实验、决定列表，`history_page` 给出两类记录的总数。
+
+`assay_research_resolve_id` 只搜索当前工作区；查找实验时须提供精确的会话 ID。
+相似 ID 只是建议，须由调用方确认；修改状态的操作不会自动纠错。
+`assay_research_report` 返回最近实验或指定的精确 ID，包含失败记录与截断标记；
+它不验证 Agent 对结果的自然语言判断。
 
 ## 重试、预算与恢复
 

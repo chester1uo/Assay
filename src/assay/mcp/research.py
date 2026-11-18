@@ -154,7 +154,35 @@ def register_research_tools(mcp, get_service):
         Each list is limited to 1–50 rows; inspect time series with experiment_get pages.
         Candidate ranking is descriptive, and expression repeats are syntactic.
         """
-        return get_service().research.research_context(session_id, limit=limit)
+        try:
+            return get_service().research.research_context(session_id, limit=limit)
+        except ValueError as exc:
+            if str(exc).startswith('unknown research session:'):
+                raise ValueError(f'{exc}; use assay_research_resolve_id or assay_research_session_list to find the exact ID') from exc
+            raise
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                         idempotentHint=True, openWorldHint=False))
+    def assay_research_resolve_id(kind: str, query: str, session_id: str | None = None) -> dict:
+        """Find an exact or unique-prefix session/experiment ID in this workspace.
+
+        Use kind='session' or kind='experiment'; experiment lookup requires the
+        exact session_id. Typo candidates are suggestions and never executed.
+        Use a returned exact ID in subsequent calls; ambiguous prefixes do not resolve.
+        """
+        return get_service().research.resolve_research_id(kind, query, session_id=session_id)
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                         idempotentHint=True, openWorldHint=False))
+    def assay_research_report(session_id: str, experiment_ids: list[str] | None = None,
+                              limit: int = 20) -> dict:
+        """Return saved evidence and exact experiment IDs for a final report or handoff.
+
+        Select exact IDs from this session or omit them for the latest attempts.
+        The result is read-only, bounded to 50 rows, and includes failed attempts.
+        It contains saved metrics, not a verification of model-written conclusions.
+        """
+        return get_service().research.research_report(session_id, experiment_ids=experiment_ids, limit=limit)
 
     @mcp.tool()
     def assay_research_export(session_id: str) -> dict:

@@ -999,7 +999,7 @@
      }
     ]
    },
-   "updated": "2026-11-13"
+   "updated": "2026-11-14"
   },
   "guide/research-audit": {
    "group": "research",
@@ -1576,7 +1576,7 @@
      }
     ]
    },
-   "updated": "2026-11-10"
+   "updated": "2026-11-14"
   },
   "guide/python-sdk": {
    "group": "api",
@@ -1724,7 +1724,7 @@
      }
     ]
    },
-   "updated": "2026-11-10"
+   "updated": "2026-11-14"
   },
   "design/integration": {
    "group": "design",
@@ -1798,7 +1798,7 @@
      }
     ]
    },
-   "updated": "2026-11-13"
+   "updated": "2026-11-14"
   },
   "design/factordb": {
    "group": "design",

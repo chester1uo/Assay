@@ -495,6 +495,17 @@ class ResearchWorkspace:
             context['truncated']['checkpoints'] = len(checkpoints) > limit
         return context
 
+    def resolve_research_id(self, kind: str, query: str, *, session_id: str | None = None) -> dict:
+        """Find IDs in this workspace without executing or changing a record."""
+        from assay.research_assistance import resolve_id
+        return resolve_id(self, kind, query, session_id=session_id)
+
+    def research_report(self, session_id: str, *, experiment_ids: list[str] | None = None,
+                        limit: int = 20) -> dict:
+        """Build a bounded structured report from the saved session snapshot."""
+        from assay.research_assistance import research_report
+        return research_report(self, session_id, experiment_ids=experiment_ids, limit=limit)
+
     def export_session(self, session_id: str) -> dict:
         """Export a consistent full research-state manifest; no market data or credentials."""
         from assay.research_checkpoints import add_to_state

@@ -65,6 +65,21 @@ def test_account_workspaces_are_isolated_across_rest_and_mcp(tmp_path, monkeypat
             assert client.get('/v1/research/experiments/'+result.json()['id'],headers=b).status_code == 400
             assert _mcp(client,alice_key,'assay_research_session_list',{})['sessions'][0]['id']==sid
             assert _mcp(client,bob_key,'assay_research_session_list',{})['sessions']==[]
+            lookup = _mcp(client,alice_key,'assay_research_resolve_id',{'kind':'session','query':sid[:-2]})
+            assert lookup['resolved_id'] == sid
+            assert _mcp(client,bob_key,'assay_research_resolve_id',{'kind':'session','query':sid})['candidates'] == []
+            report = _mcp(client,alice_key,'assay_research_report',{'session_id':sid})
+            assert report['experiment_ids'] == [result.json()['id']]
+            denied_report = client.post('/mcp/', headers={'Authorization':'Bearer '+bob_key,
+                'Accept':'application/json, text/event-stream'}, json={'jsonrpc':'2.0','id':2,
+                'method':'tools/call','params':{'name':'assay_research_report','arguments':{'session_id':sid}}})
+            assert denied_report.status_code == 200
+            assert 'private hypothesis' not in denied_report.text and result.json()['id'] not in denied_report.text
+            assert '"isError":true' in denied_report.text.replace(' ', '')
+            assert client.get('/v1/research/resolve-id',headers=b,params={'kind':'session','query':sid}).json()['candidates'] == []
+            assert client.get('/v1/research/sessions/'+sid+'/report',headers=b).status_code == 400
+            own_report = client.get('/v1/research/sessions/'+sid+'/report',headers=a)
+            assert own_report.status_code == 200 and own_report.json()['experiment_ids'] == [result.json()['id']]
             assert _mcp(client,bob_key,'assay_dataset_list',{})['datasets']==[]
             program = client.post('/v1/research/programs', headers=a,
                 json={'name':'Private mining','goal':'Persist search','request_id':'program-1'}).json()

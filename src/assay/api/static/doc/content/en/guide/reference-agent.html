@@ -53,6 +53,10 @@ Returned model identity must match the requested name unless explicit
 model equivalence. Provider availability and protocol support must be verified for
 the selected deployment; this client does not make all models interchangeable.</p>
 <h2 id="inspect-the-run">Inspect the run</h2>
+<p><code>run.json</code> includes <code>structured_evidence.observed_experiments</code>: bounded experiment
+records observed in successful tool responses. The original model <code>final_text</code> is
+kept separately; this evidence does not establish that its claims are correct.
+Use <code>assay_research_report</code> to retrieve saved records for exact IDs.</p>
 <ul>
 <li><code>tools.json</code>: tool schemas discovered from the server.</li>
 <li><code>conversation.json</code>: the messages and tool outputs sent through the loop.</li>
