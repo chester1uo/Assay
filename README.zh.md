@@ -19,6 +19,11 @@ Agent 自行选择模型和搜索策略；工作区跨重启保存数据集设�
 整合版本保留上游 FactorDB、ADES 分布式计算、账户认证、QFinVerse 面板读取及可选原生内核。
 各模块的记录与预算边界见[整合架构](docs/cn/design/integration.md)。
 
+**迁移提示：** `next_close` 现在从次日收盘价入场；旧版的因子收益标签使用信号当日收盘价，
+因此旧调用可能产生不同结果。如需复现旧标签，请显式使用 `execution="close"`（CLI 使用
+`--execution close`）。该当日收盘口径仅用于诊断，可能存在前视风险。旧版 `next_close`
+研究数据集需要重新注册，历史报告仍可读取。详见[迁移说明](docs/cn/guide/agent-research.md)。
+
 ### Agent-Native 研究工作区
 
 - **Dataset：** 固定股票池、读取/评分区间、交易日、执行设置和表达式约束。

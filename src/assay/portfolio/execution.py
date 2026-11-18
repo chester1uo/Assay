@@ -354,7 +354,8 @@ class ExecutionSimulator:
         # ``blocked_adv`` (fully blocked orders), so the §4.4 attempt denominator
         # never double-counts it.
         defer = cfg.partial_fill_handling == "defer"
-        delayed_sales = ~buy & (untradable | down_hit | missing_limits | held | cash_limited_sells | (capped & defer))
+        delayed_sales = ~buy & (untradable | missing_liquidity | down_hit | missing_limits | held |
+                                cash_limited_sells | (capped & defer))
         cash_deferred = cash_limited_sells | (cash_limited & bool(delayed_sales.any()))
         # Fees-only cash scaling is a completed feasible allocation, not an order
         # to borrow the fee back tomorrow. Retry cash buys when pending sales can

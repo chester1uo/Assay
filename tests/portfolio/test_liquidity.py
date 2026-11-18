@@ -54,6 +54,31 @@ def test_actual_order_size_controls_capacity_impact_and_missing_data():
     assert output.nav_series[1] == pytest.approx(.999)
 
 
+def test_missing_sale_liquidity_defers_cash_dependent_buy_until_data_recovers():
+    cfg = PortfolioBacktestConfig.preset(
+        'US', universe='NASDAQ100', period_start='2024-01-01', period_end='2024-01-03',
+        initial_capital=1000, liquidity_model='trailing_notional_v1',
+        liquidity_volume_multiplier=1, commission_rate=0, commission_min=0,
+        transfer_fee_rate=0, stamp_duty_rate=0, slippage_model='zero',
+        max_adv_fraction=.1, partial_fill_handling='defer',
+    )
+    result = PortfolioAccountant(cfg).run(
+        np.zeros((3, 2)),
+        {0: np.array([1., 0.]), 1: np.array([0., 1.])},
+        adv_notional=np.array([[1e9, 1e9], [np.nan, 1e9], [1e9, 1e9]]),
+        dates=['2024-01-01', '2024-01-02', '2024-01-03'], symbols=['A', 'B'],
+    )
+
+    # A's missing liquidity blocks the sale; its proceeds cannot fund B yet.
+    np.testing.assert_allclose(result.weights[1], [1., 0.])
+    assert any(t.date == '2024-01-02' and t.symbol == 'A'
+               and t.blocked_reason == 'liquidity_data_missing' for t in result.trades)
+    # Once data returns, the original switch executes without a new rebalance.
+    np.testing.assert_allclose(result.weights[2], [0., 1.])
+    assert any(t.date == '2024-01-03' and t.symbol == 'B'
+               and t.side == 'buy' and not t.blocked_reason for t in result.trades)
+
+
 def test_historical_calendar_covers_2003_and_rejects_unsupported_cn_future():
     days = np.array(['2003-09-08', '2003-09-09', '2003-09-10'], dtype='datetime64[D]')
     frame = pl.DataFrame({'date': pl.Series(days).cast(pl.Date), 'symbol': ['A'] * 3,

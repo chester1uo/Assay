@@ -18,7 +18,7 @@ const LINT_DEBOUNCE_MS = 300;
 
 const DEFAULT_EXPR = "ts_corr(close, volume, 20)";
 const HORIZONS_ALL = [1, 5, 10, 20];
-const EXECUTIONS = ["next_open", "next_close"]; // vwap unsupported (no intraday source)
+const EXECUTIONS = ["next_open", "next_close", "close"]; // vwap unsupported (no intraday source)
 // Neutralize options: `value` is the API field; `labelKey` resolves to a
 // localized display label at render time.
 const NEUTRALIZE = [
@@ -705,7 +705,7 @@ function buildConfigRow(ctx, store, onEvaluate) {
   const endInput = ctx.el("input", { type: "date", className: "input input-date", value: globalPeriod[1], "aria-label": ctx.t("factor.periodEndAria") });
 
   const execSel = ctx.el("select", { className: "select", "aria-label": ctx.t("factor.execution") },
-    ...EXECUTIONS.map((x) => ctx.el("option", { value: x }, x))
+    ...EXECUTIONS.map((x) => ctx.el("option", { value: x }, x === "close" ? ctx.t("factor.sameCloseDiagnostic") : x))
   );
 
   // Editable holding periods: a free-text list (comma/space separated). Defaults to

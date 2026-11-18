@@ -709,8 +709,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--as-of", type=_date, default=None, help="point-in-time as-of date")
         sp.add_argument("--adj", default=None,
                         choices=["none", "split", "total", "forward"], help="price adjustment")
-        sp.add_argument("--execution", default=None, choices=["next_open", "next_close"],
-                        help="forward-return convention (default = config default)")
+        sp.add_argument("--execution", default=None, choices=["next_open", "next_close", "close"],
+                        help="forward-return convention; close is a same-day diagnostic with lookahead risk (default = config default)")
         sp.add_argument("--neutralize", default=None,
                         help="comma-separated group keys to neutralize against")
         sp.add_argument("--horizons", default=None, help="comma-separated, e.g. 1,5,10,20")

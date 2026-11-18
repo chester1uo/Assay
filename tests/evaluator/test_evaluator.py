@@ -40,17 +40,26 @@ from assay.evaluator import (
 
 
 def test_forward_returns_next_close_math_and_nan_tail():
-    # Single symbol, geometric closes: 1, 2, 4, 8, 16 (doubles each day).
-    close = np.array([[1.0], [2.0], [4.0], [8.0], [16.0]])
+    # Irregular prices distinguish signal-day and next-day close entry.
+    close = np.array([[1.0], [2.0], [5.0], [9.0], [20.0]])
     out = forward_returns(close, None, [1, 2], execution="next_close")
-    # h=1: fwd[t] = close[t+1]/close[t] - 1 == 1.0 for all defined rows.
+    # h=1: close[t+2] / close[t+1] - 1.
     h1 = out[1][:, 0]
-    np.testing.assert_allclose(h1[:3], [1.0, 1.0, 1.0])
+    np.testing.assert_allclose(h1[:3], [5/2-1, 9/5-1, 20/9-1])
     assert np.isnan(h1[3:]).all()
-    # h=2: close[t+2]/close[t] - 1 == 3.0; last *two* rows are the NaN tail.
+    # h=2: close[t+3] / close[t+1] - 1.
     h2 = out[2][:, 0]
-    np.testing.assert_allclose(h2[:2], [3.0, 3.0])
+    np.testing.assert_allclose(h2[:2], [9/2-1, 20/5-1])
     assert np.isnan(h2[2:]).all()
+
+
+def test_forward_returns_close_preserves_legacy_same_day_convention():
+    close = np.array([[1.0], [2.0], [5.0], [9.0], [20.0]])
+    out = forward_returns(close, None, [1, 2], execution="close")
+    np.testing.assert_allclose(out[1][:4, 0], [2/1-1, 5/2-1, 9/5-1, 20/9-1])
+    np.testing.assert_allclose(out[2][:3, 0], [5/1-1, 9/2-1, 20/5-1])
+    assert np.isnan(out[1][4:, 0]).all()
+    assert np.isnan(out[2][3:, 0]).all()
 
 
 def test_forward_returns_next_open_math_and_nan_tail():

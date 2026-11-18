@@ -53,7 +53,8 @@ def forward_returns(
     horizons
         Holding periods in trading days, e.g. ``[1, 5, 10, 20]``. Must be >= 1.
     execution
-        ``next_open`` | ``next_close``. ``vwap`` raises (no intraday in MASSIVE).
+        ``next_open`` | ``next_close`` | ``close``. The last uses the signal-day
+        close and is a diagnostic that can introduce lookahead. ``vwap`` raises.
     """
     close = np.asarray(close, dtype=np.float64)
     if close.ndim != 2:
@@ -67,7 +68,7 @@ def forward_returns(
         )
     if execution not in ("next_open", "next_close", "close"):
         raise ValueError(
-            f"unknown execution {execution!r}; expected 'next_open' or 'next_close'"
+            f"unknown execution {execution!r}; expected 'next_open', 'next_close' or 'close'"
         )
 
     if execution == "next_open":

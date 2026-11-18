@@ -117,7 +117,8 @@ _EVALUATE_DESC = (
     "syntax (e.g. Corr($close,$volume,20), Ref($close,5)) and Python syntax "
     "(e.g. ts_corr(close,volume,20), ts_delay(close,5)). When evaluating MANY "
     "expressions, call assay_batch instead of looping this tool — batch shares "
-    "the panel load and is far faster."
+    "the panel load and is far faster. Execution may be next_open, next_close, "
+    "or close (same-day diagnostic with lookahead risk)."
 ) + _operator_docs()
 
 
@@ -136,12 +137,15 @@ def assay_evaluate(
     period: list[str] | None = None,
     horizons: list[int] | None = None,
     neutralize: list[str] | None = None,
+    execution: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate one factor expression into a FactorReport dict (architecture §6.3).
 
     ``universe`` is any data-backed pool — US (NASDAQ100, SP500…) or A-share
     (CSI300/CSI500/CSI1000); call ``assay_universes`` to see which are live.
     ``period`` is ``["YYYY-MM-DD", "YYYY-MM-DD"]`` (defaults to the config period).
+    ``execution`` may be ``next_open``, ``next_close`` or ``close``; ``close``
+    uses the signal-day close and is a diagnostic with potential lookahead.
     A factor that fails diagnostics returns a metrics-free report carrying
     ``failure_mode`` / ``suggestion`` / ``lookahead_detected`` rather than raising.
     """
@@ -152,6 +156,7 @@ def assay_evaluate(
         period=tuple(period) if period else None,
         horizons=horizons,
         neutralize=neutralize,
+        **({"execution": execution} if execution is not None else {}),
     )
     return report.to_dict()
 
@@ -164,7 +169,8 @@ def assay_evaluate(
         "this over calling assay_evaluate in a loop: the panel load and forward "
         "returns are paid once and the per-factor numerics run concurrently, so a "
         "batch of N factors is far cheaper than N separate calls. Same dual "
-        "qlib/Python syntax as assay_evaluate."
+        "qlib/Python syntax as assay_evaluate. Execution may be next_open, "
+        "next_close, or close (same-day diagnostic with lookahead risk)."
     ),
 )
 def assay_batch(
@@ -173,6 +179,7 @@ def assay_batch(
     period: list[str] | None = None,
     n_jobs: int = 8,
     sort_by: str = "rank_icir",
+    execution: str | None = None,
 ) -> dict[str, Any]:
     """Batch-evaluate ``exprs`` and return ``{total, reports}`` (architecture §6.3).
 
@@ -187,6 +194,7 @@ def assay_batch(
         period=tuple(period) if period else None,
         n_jobs=n_jobs,
         sort_by=sort_by,
+        **({"execution": execution} if execution is not None else {}),
     )
     return {"total": len(reports), "reports": [r.to_dict() for r in reports]}
 

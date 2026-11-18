@@ -89,6 +89,14 @@ day's close, including in IC labels. Corrected daily evaluation settings carry
 again. Their stored reports remain readable. Compute score keys also version this
 execution convention, so old labels cannot satisfy new requests from cache.
 
+Earlier versions used `close[t+h] / close[t] - 1` for `next_close` factor labels.
+The corrected convention uses `close[t+1+h] / close[t+1] - 1`, so existing SDK,
+REST and CLI calls specifying `next_close` may return different scores. To reproduce
+the former labels, explicitly set `execution="close"` in SDK, REST or MCP evaluation
+calls, or pass `--execution close` to the evaluation CLI. The workbench factor page
+also offers this diagnostic. It uses the signal-day close and can introduce lookahead;
+it does not represent a tradable next-close portfolio execution.
+
 Observed panel hashes include prices, membership and group labels. Precomputed
 subtrees retain pre-admission rolling history, and membership is applied when
 computing cross-sectional operators and final outputs. Matching replay hashes

@@ -9,3 +9,10 @@ def test_serve_mcp_cli_passes_supported_transport_host_and_port(monkeypatch):
     monkeypatch.setattr(server,'main',lambda argv:calls.append(argv))
     main(['serve-mcp','--transport','http','--host','127.0.0.1','--port','8123'])
     assert calls==[['--transport','http','--host','127.0.0.1','--port','8123']]
+
+
+def test_evaluation_cli_accepts_legacy_same_day_close():
+    from assay.cli import build_parser
+    parser = build_parser()
+    assert parser.parse_args(['run', 'close', '--execution', 'close']).execution == 'close'
+    assert parser.parse_args(['batch', 'close', '--execution', 'close']).execution == 'close'

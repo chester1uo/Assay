@@ -303,6 +303,48 @@ def test_assay_evaluate_default_period_is_none(monkeypatch):
     assert captured["kwargs"]["universe"] == "NASDAQ100"
 
 
+@pytest.mark.parametrize("tool_name", ["assay_evaluate", "assay_batch"])
+def test_evaluation_tools_forward_explicit_execution_without_changing_defaults(monkeypatch, tool_name):
+    mod = _server_module()
+    calls = []
+
+    class FakeService:
+        def evaluate(self, expr, **kwargs):
+            calls.append(kwargs)
+            return _make_report()
+
+        def batch(self, exprs, **kwargs):
+            calls.append(kwargs)
+            return [_make_report()]
+
+    monkeypatch.setattr(mod, "get_service", lambda: FakeService())
+    fn = _tool_fn(mod, tool_name)
+    expr = "close" if tool_name == "assay_evaluate" else ["close"]
+    fn(expr)
+    fn(expr, execution="close")
+    assert "execution" not in calls[0]
+    assert calls[1]["execution"] == "close"
+
+
+def test_mcp_execution_convention_reaches_real_factor_evaluator(tmp_path, monkeypatch):
+    from assay.demo import prepare_demo
+
+    service, dataset = prepare_demo(tmp_path / "market")
+    mod = _server_module()
+    monkeypatch.setattr(mod, "get_service", lambda: service)
+    common = {"universe": dataset["universe"], "period": dataset["period"]}
+    single = _tool_fn(mod, "assay_evaluate")
+    batch = _tool_fn(mod, "assay_batch")
+    same_day = single("ts_returns(close,3)", horizons=[1], execution="close", **common)
+    next_day = single("ts_returns(close,3)", horizons=[1], execution="next_close", **common)
+    sdk = service.evaluate("ts_returns(close,3)", horizons=[1], execution="close", **common)
+    batch_same_day = batch(["ts_returns(close,3)"], execution="close", n_jobs=1, **common)
+    assert same_day["failure_mode"] is None
+    assert same_day["rank_ic"] == pytest.approx(sdk.rank_ic)
+    assert batch_same_day["reports"][0]["rank_ic"] == pytest.approx(sdk.rank_ic)
+    assert next_day["rank_ic"] != pytest.approx(same_day["rank_ic"])
+
+
 def test_get_service_uses_assay_service_get(monkeypatch):
     """get_service() returns the AssayService.get() singleton when it is initialized."""
     mod = _server_module()

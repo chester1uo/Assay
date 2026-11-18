@@ -22,6 +22,13 @@ The integrated platform retains upstream FactorDB, ADES distributed workers, acc
 authentication, QFinVerse-panel ingestion, and optional native kernels. See the
 [integration architecture](docs/en/design/integration.md) for record and budget boundaries.
 
+**Migration:** `next_close` now enters at the following day's close; older versions
+used the signal-day close for factor labels. Existing calls can therefore produce
+different results. To reproduce the old labels, explicitly use `execution="close"`
+(`--execution close` in the CLI). This is a same-day diagnostic with lookahead risk.
+Existing research datasets using the old `next_close` protocol must be registered
+again; historical reports remain readable. See the [migration details](docs/en/guide/agent-research.md).
+
 ### Agent-native research workspace
 
 - **Datasets:** fix data-read/scoring windows, trading dates, execution settings and expression contracts.

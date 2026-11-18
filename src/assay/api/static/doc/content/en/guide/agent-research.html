@@ -73,6 +73,13 @@ day's close, including in IC labels. Corrected daily evaluation settings carry
 <code>evaluation_protocol=&quot;assay-daily-v2&quot;</code>; old <code>next_close</code> datasets must be registered
 again. Their stored reports remain readable. Compute score keys also version this
 execution convention, so old labels cannot satisfy new requests from cache.</p>
+<p>Earlier versions used <code>close[t+h] / close[t] - 1</code> for <code>next_close</code> factor labels.
+The corrected convention uses <code>close[t+1+h] / close[t+1] - 1</code>, so existing SDK,
+REST and CLI calls specifying <code>next_close</code> may return different scores. To reproduce
+the former labels, explicitly set <code>execution=&quot;close&quot;</code> in SDK, REST or MCP evaluation
+calls, or pass <code>--execution close</code> to the evaluation CLI. The workbench factor page
+also offers this diagnostic. It uses the signal-day close and can introduce lookahead;
+it does not represent a tradable next-close portfolio execution.</p>
 <p>Observed panel hashes include prices, membership and group labels. Precomputed
 subtrees retain pre-admission rolling history, and membership is applied when
 computing cross-sectional operators and final outputs. Matching replay hashes
