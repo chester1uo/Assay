@@ -783,7 +783,7 @@ export function render(root, ctx) {
       t.setAttribute("font-size", String(opts.size || 10));
       if (opts.anchor) t.setAttribute("text-anchor", opts.anchor);
       if (opts.rot) t.setAttribute("transform", `rotate(${opts.rot} ${x} ${y})`);
-      if (opts.fill) t.setAttribute("fill", opts.fill);
+      if (opts.fill) t.style.fill = opts.fill;
       t.textContent = s;
       if (opts.title) { const tt = document.createElementNS(NS, "title"); tt.textContent = opts.title; t.appendChild(tt); }
       return t;

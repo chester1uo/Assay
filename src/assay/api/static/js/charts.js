@@ -28,6 +28,24 @@ function finiteValues(arrays) {
   return out;
 }
 
+let textMeasureContext;
+function chartTextWidth(text) {
+  if (!textMeasureContext) {
+    textMeasureContext = document.createElement("canvas").getContext("2d");
+    textMeasureContext.font = "10px system-ui, sans-serif";
+  }
+  return textMeasureContext.measureText(String(text)).width;
+}
+
+function axisLeftMargin(lo, hi, ticks, width) {
+  const step = (hi - lo) / ticks;
+  let widest = 0;
+  for (let i = 0; i <= ticks; i++) {
+    widest = Math.max(widest, chartTextWidth(formatTick(lo + step * i, step)));
+  }
+  return Math.min(width - 40, Math.max(44, Math.ceil(widest) + 12));
+}
+
 function niceDomain(values, { padFrac = 0.08, includeZero = true } = {}) {
   if (!values.length) return [-1, 1];
   let lo = Math.min(...values);
@@ -196,15 +214,14 @@ function attachHover(svg, cfg) {
  * dates?: [isoStr] aligned to value index; yDomain?: [lo,hi]; bands?: [{from,to,color}]
  */
 export function lineChart({ series = [], dates = null, yDomain = null, height = 240, bands = [], width = 640, interactive = false, valueFmt = null }) {
-  const m = { top: 12, right: 16, bottom: 24, left: 44 };
   const w = width;
   const h = height;
-  const iw = w - m.left - m.right;
-  const ih = h - m.top - m.bottom;
-
   const n = series.reduce((mx, s) => Math.max(mx, (s.values || []).length), 0);
   const dom = yDomain || niceDomain(finiteValues(series.map((s) => s.values)), { includeZero: true });
   const [ylo, yhi] = dom;
+  const m = { top: 12, right: 16, bottom: 24, left: axisLeftMargin(ylo, yhi, 4, w) };
+  const iw = w - m.left - m.right;
+  const ih = h - m.top - m.bottom;
 
   const x = (i) => (n <= 1 ? m.left + iw / 2 : m.left + (i / (n - 1)) * iw);
   const y = (v) => m.top + ih - ((v - ylo) / (yhi - ylo || 1)) * ih;
@@ -223,7 +240,7 @@ export function lineChart({ series = [], dates = null, yDomain = null, height = 
     const val = ylo + ((yhi - ylo) * t) / ticks;
     const yy = y(val);
     axis.appendChild(svgEl("line", { x1: m.left, x2: w - m.right, y1: yy, y2: yy, class: "chart-grid" }));
-    axis.appendChild(svgEl("text", { x: m.left - 6, y: yy + 3, "text-anchor": "end", text: formatTick(val) }));
+    axis.appendChild(svgEl("text", { x: m.left - 6, y: yy + 3, "text-anchor": "end", text: formatTick(val, (yhi - ylo) / ticks) }));
   }
   root.appendChild(axis);
 
@@ -249,11 +266,17 @@ export function lineChart({ series = [], dates = null, yDomain = null, height = 
   if (n > 1) {
     const xAxis = svgEl("g", { class: "chart-axis" });
     const labelCount = Math.min(6, n);
+    const indices = Array.from({ length: labelCount }, (_, t) => Math.round((t / (labelCount - 1)) * (n - 1)));
+    const monthLabels = indices.map((i) => dates && dates[i] ? shortDate(dates[i]) : String(i));
+    // Daily data within the same month needs a day component to distinguish ticks.
+    const showDays = new Set(monthLabels).size < monthLabels.length && dates;
     for (let t = 0; t < labelCount; t++) {
-      const i = Math.round((t / (labelCount - 1)) * (n - 1));
+      const i = indices[t];
       const xx = x(i);
-      const lbl = dates && dates[i] ? shortDate(dates[i]) : String(i);
-      xAxis.appendChild(svgEl("text", { x: xx, y: h - 8, "text-anchor": "middle", text: lbl }));
+      const lbl = showDays && typeof dates[i] === "string" && dates[i].length >= 10
+        ? dates[i].slice(2, 10) : monthLabels[t];
+      xAxis.appendChild(svgEl("text", { x: xx, y: h - 8,
+        "text-anchor": t === 0 ? "start" : t === labelCount - 1 ? "end" : "middle", text: lbl }));
     }
     root.appendChild(xAxis);
   }
@@ -299,13 +322,13 @@ export function lineChart({ series = [], dates = null, yDomain = null, height = 
  * labels:[str], values:[num], colors?:[str], valueLabels?:bool
  */
 export function barChart({ labels = [], values = [], colors = null, height = 240, valueLabels = false, width = 640, interactive = false, valueFmt = null, dates = null }) {
-  const m = { top: 16, right: 16, bottom: 28, left: 44 };
   const w = width;
   const h = height;
-  const iw = w - m.left - m.right;
-  const ih = h - m.top - m.bottom;
   const dom = niceDomain(values.filter(isNum), { includeZero: true });
   const [ylo, yhi] = dom;
+  const m = { top: 16, right: 16, bottom: 28, left: axisLeftMargin(ylo, yhi, 4, w) };
+  const iw = w - m.left - m.right;
+  const ih = h - m.top - m.bottom;
   const y = (v) => m.top + ih - ((v - ylo) / (yhi - ylo || 1)) * ih;
   const n = values.length || 1;
   const slot = iw / n;
@@ -323,16 +346,28 @@ export function barChart({ labels = [], values = [], colors = null, height = 240
     const val = ylo + ((yhi - ylo) * t) / 4;
     const yy = y(val);
     axis.appendChild(svgEl("line", { x1: m.left, x2: w - m.right, y1: yy, y2: yy, class: "chart-grid" }));
-    axis.appendChild(svgEl("text", { x: m.left - 6, y: yy + 3, "text-anchor": "end", text: formatTick(val) }));
+    axis.appendChild(svgEl("text", { x: m.left - 6, y: yy + 3, "text-anchor": "end", text: formatTick(val, (yhi - ylo) / 4) }));
   }
   root.appendChild(axis);
 
   const y0 = y(0);
   root.appendChild(svgEl("line", { x1: m.left, x2: w - m.right, y1: y0, y2: y0, class: "chart-zero" }));
 
-  // Thin x-axis labels so they never overlap: show at most ~12, evenly spaced
-  // (and always the last one). Few-bar charts (quintiles, decay) keep every label.
-  const labelStep = Math.max(1, Math.ceil(n / 12));
+  // Account for label width as well as the number of bars, and keep the last
+  // label when it fits. The chart's text is drawn at 10px in the SVG viewBox.
+  const textWidth = (i) => labels[i] == null ? 0 : chartTextWidth(labels[i]);
+  const maxLabelWidth = labels.reduce((max, _, i) => Math.max(max, textWidth(i)), 0);
+  const labelStep = Math.max(1, Math.ceil(n / 12), Math.ceil((maxLabelWidth + 8) / slot));
+  const labelX = (i) => Math.max(textWidth(i) / 2 + 4,
+    Math.min(w - textWidth(i) / 2 - 4, m.left + slot * i + slot / 2));
+  const labelIndices = [];
+  for (let i = 0; i < n; i++) {
+    if (labels[i] === undefined || !isNum(values[i]) || (i % labelStep !== 0 && i !== n - 1)) continue;
+    const collides = (previous) => labelX(i) - labelX(previous) < (textWidth(i) + textWidth(previous)) / 2 + 8;
+    if (i === n - 1) while (labelIndices.length > 1 && collides(labelIndices[labelIndices.length - 1])) labelIndices.pop();
+    if (!labelIndices.length || !collides(labelIndices[labelIndices.length - 1])) labelIndices.push(i);
+  }
+  const labeled = new Set(labelIndices);
 
   values.forEach((v, i) => {
     if (!isNum(v)) return;
@@ -350,9 +385,9 @@ export function barChart({ labels = [], values = [], colors = null, height = 240
         })
       );
     }
-    if (labels[i] !== undefined && (i % labelStep === 0 || i === n - 1)) {
+    if (labels[i] !== undefined && labeled.has(i)) {
       root.appendChild(
-        svgEl("text", { x: cx, y: h - 10, "text-anchor": "middle", class: "chart-axis", text: String(labels[i]) })
+        svgEl("text", { x: labelX(i), y: h - 10, "text-anchor": "middle", class: "chart-axis", text: String(labels[i]) })
       );
     }
   });
@@ -496,12 +531,17 @@ export function sparkline(values, { width = 120, height = 32, color = P.primary 
 }
 
 // ---------------------------------------------------------------- helpers ----
-function formatTick(v) {
+function formatTick(v, step = null) {
   if (!isNum(v)) return "";
   const a = Math.abs(v);
-  if (a !== 0 && (a < 0.01 || a >= 10000)) return v.toExponential(1);
-  if (a < 1) return v.toFixed(2);
-  if (a < 100) return v.toFixed(1);
+  const scale = isNum(step) && step > 0 ? step : null;
+  if (a !== 0 && (a < 0.01 || a >= 10000)) {
+    const digits = scale ? Math.max(1, Math.min(8, Math.ceil(Math.log10(a / scale)))) : 1;
+    return v.toExponential(digits);
+  }
+  const base = a < 1 ? 2 : a < 100 ? 1 : 0;
+  const digits = scale ? Math.max(base, Math.min(8, Math.ceil(-Math.log10(scale)))) : base;
+  if (digits > 0) return v.toFixed(digits);
   return Math.round(v).toLocaleString("en-US");
 }
 
