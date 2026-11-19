@@ -547,6 +547,7 @@ html.nav-folded .ico-unfold { display: block; }
 .chart-wrap { width: 100%; overflow: hidden; }
 .chart-wrap svg { display: block; width: 100%; height: auto; }
 .chart-axis text { fill: var(--text-muted); font-size: 10px; font-family: var(--font-sans); }
+.chart-cal-label { fill: var(--text-muted); font-size: 9px; font-family: var(--font-sans); }
 .chart-axis line, .chart-grid line { stroke: var(--border); shape-rendering: crispEdges; }
 .chart-zero { stroke: var(--border-strong); stroke-dasharray: 2 2; }
 .chart-legend { display: flex; gap: var(--sp-4); flex-wrap: wrap; font-size: 12px; }

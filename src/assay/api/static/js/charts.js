@@ -410,20 +410,31 @@ export function calendarHeatmap({ dates = [], values = [], height = 140, divergi
     role: "img",
   });
 
-  // year labels
-  years.forEach((yr, xi) => {
+  // Keep labels far enough apart even when the calendar spans decades.
+  const yearStep = cellW > 0 ? Math.max(1, Math.ceil(34 / cellW)) : 1;
+  const yearIndices = years.map((_, i) => i).filter((i) => i % yearStep === 0);
+  const last = years.length - 1;
+  if (last > 0 && yearIndices[yearIndices.length - 1] !== last) {
+    if ((last - yearIndices[yearIndices.length - 1]) * cellW >= 34) yearIndices.push(last);
+    else if (yearIndices.length > 1) yearIndices[yearIndices.length - 1] = last;
+  }
+  yearIndices.forEach((xi) => {
     root.appendChild(
       svgEl("text", {
-        x: left + cellW * xi + cellW / 2, y: 12, "text-anchor": "middle", class: "chart-axis", text: yr,
+        x: Math.min(w - 14, left + cellW * xi + cellW / 2), y: 12,
+        "text-anchor": "middle", class: "chart-cal-label chart-cal-year", text: years[xi],
       })
     );
   });
   // month labels
-  const MONTHS = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
+  const MONTHS = document.documentElement.lang.toLowerCase().startsWith("zh")
+    ? Array.from({ length: 12 }, (_, i) => `${i + 1}月`)
+    : ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   for (let mo = 0; mo < 12; mo++) {
     root.appendChild(
       svgEl("text", {
-        x: left - 6, y: top + cellH * mo + cellH / 2 + 3, "text-anchor": "end", class: "chart-axis", text: MONTHS[mo],
+        x: left - 6, y: top + cellH * mo + cellH / 2 + 3, "text-anchor": "end",
+        class: "chart-cal-label chart-cal-month", text: MONTHS[mo],
       })
     );
   }
