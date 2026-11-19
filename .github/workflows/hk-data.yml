@@ -79,19 +79,19 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[api,perf]" pytest
+          pip install -e ".[api,perf,mcp]" pytest
 
       - name: HK ingest + REST surface
         env:
-          PYTHONPATH: src
+          PYTHONPATH: .:src
         run: |
-          pytest tests/data/test_hk_ingest.py tests/api/test_api_hk.py \
+          python -m pytest tests/data/test_hk_ingest.py tests/api/test_api_hk.py \
                  tests/test_config_store.py -q
 
       - name: Full suite
         env:
-          PYTHONPATH: src
-        run: pytest tests -q
+          PYTHONPATH: .:src
+        run: python -m pytest tests -q
 
   refresh:
     name: Incremental HK refresh
