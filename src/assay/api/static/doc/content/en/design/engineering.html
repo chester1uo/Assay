@@ -22,8 +22,12 @@
 </ol>
 <hr />
 <h2 id="1-introduction">1. Introduction</h2>
+<p>This historical design draft describes proposed interfaces and data guarantees.
+For current behavior, see the <a href="/doc/guide/agent-research">agent research guide</a>.
+Point-in-time validity depends on the data source and historical universe; an
+<code>as_of</code> cutoff alone does not establish complete revision history or membership.</p>
 <blockquote>
-<p>Assay is a point-in-time correct, agent-native factor backtesting engine designed to serve as the high-throughput evaluation backbone for LLM agent systems that autonomously generate, evaluate, and refine quantitative alpha factors at scale.</p>
+<p>Assay is an agent-native factor backtesting engine designed to serve as the high-throughput evaluation backbone for LLM agent systems that autonomously generate, evaluate, and refine quantitative alpha factors at scale.</p>
 </blockquote>
 <h3 id="1-1-motivation">1.1  Motivation</h3>
 <p>Traditional backtesting frameworks—qlib, Zipline, VectorBT—were architected for human-in-the-loop research: a researcher manually crafts a small number of factor hypotheses and carefully validates each one. The evaluation step is a terminal operation performed once per factor.</p>

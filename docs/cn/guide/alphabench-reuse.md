@@ -1,6 +1,6 @@
 # 复用 AlphaBench V2 测试 Assay
 
-本测试复用 `/home/xluo/workdir/alphabench-v2` 的组件，不启动或恢复原 benchmark campaign。
+本测试复用本地 AlphaBench V2 检出中的组件，不启动或恢复原 benchmark campaign。
 所有新脚本、研究数据库、计划、模型响应、MCP 调用记录和测试结果均保存在 Assay 下。
 AlphaBench 源码通过只读 import 复用；运行时关闭 Python 字节码写入。
 
@@ -36,11 +36,13 @@ Dataset 同时固定 DSL 字段、算子与窗口约束，所有策略的候选�
 
 ## 运行
 
-安装 Assay 的 MCP/性能依赖，并让现有带补丁的 8002 服务可用。运行完整 live smoke：
+安装 Assay 的 MCP/性能依赖，并让现有带补丁的 8002 服务可用。在 Assay 项目根目录设置
+`ALPHABENCH_ROOT` 指向 AlphaBench V2 检出，然后运行完整 live smoke：
 
 ```bash
 PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python scripts/smoke_alphabench_reuse.py \
-  --output /home/xluo/workdir/Assay/artifacts/new-live-smoke \
+  --alphabench-root "$ALPHABENCH_ROOT" \
+  --output artifacts/new-live-smoke \
   --accept-returned-model deepseek-flash
 ```
 
@@ -50,13 +52,14 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python scripts/smoke_alphabench_reuse.p
 此命令会调用模型；输出目录必须不存在，避免覆盖已有尝试。
 
 可用 `--replay-direct PATH` 显式复用完全一致的已记录单轮生成响应。
-也可以一次回放全部三个响应，无需新模型调用：
+也可以设置 `REPLAY_RUN` 指向一份已有运行记录，一次回放全部三个响应，无需新模型调用：
 
 ```bash
 PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python scripts/smoke_alphabench_reuse.py \
-  --output /home/xluo/workdir/Assay/artifacts/new-complete-replay \
+  --alphabench-root "$ALPHABENCH_ROOT" \
+  --output artifacts/new-complete-replay \
   --accept-returned-model deepseek-flash \
-  --replay-run /home/xluo/workdir/Assay/artifacts/alphabench-reuse-20261103-03
+  --replay-run "$REPLAY_RUN"
 ```
 
 回放会核对源文件哈希、每一步提示词与 decoding；任何不匹配都报错，**不会转为 live 调用**。
@@ -67,13 +70,11 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python scripts/smoke_alphabench_reuse.p
 
 ```bash
 PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python scripts/recover_alphabench_holdout.py \
-  --source /home/xluo/workdir/Assay/artifacts/alphabench-reuse-20261103-03 \
-  --output /home/xluo/workdir/Assay/artifacts/new-holdout-recovery
+  --source "$REPLAY_RUN" \
+  --output artifacts/new-holdout-recovery
 ```
 
-共享 Python 环境的 SQLite 动态库存在版本冲突。本轮验证通过命令环境临时设置
-`LD_PRELOAD=/home/hluo/miniconda3/envs/llada/lib/libsqlite3.so.0`，没有修改共享环境。
-使用正常可导入 `sqlite3` 的 Python 环境时不需要该设置。
+使用能够正常导入 `sqlite3` 的 Python 环境。
 
 ## 证据与限制
 

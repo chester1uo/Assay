@@ -27,7 +27,12 @@
 
 ## 1. Introduction
 
-> Assay is a point-in-time correct, agent-native factor backtesting engine designed to serve as the high-throughput evaluation backbone for LLM agent systems that autonomously generate, evaluate, and refine quantitative alpha factors at scale.
+This historical design draft describes proposed interfaces and data guarantees.
+For current behavior, see the [agent research guide](../guide/agent-research.md).
+Point-in-time validity depends on the data source and historical universe; an
+`as_of` cutoff alone does not establish complete revision history or membership.
+
+> Assay is an agent-native factor backtesting engine designed to serve as the high-throughput evaluation backbone for LLM agent systems that autonomously generate, evaluate, and refine quantitative alpha factors at scale.
 
 ### 1.1  Motivation
 

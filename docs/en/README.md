@@ -3,8 +3,9 @@
 See the [project overview](project-overview.md) for the architecture, research
 workflow, and the distinction between local and deployed capabilities.
 
-Assay is a point-in-time-correct, agent-native factor backtesting engine for LLM-driven alpha
-mining. This folder holds the **design specs** and the **usage guides**.
+Assay is an agent-native factor backtesting engine for LLM-driven alpha mining.
+Point-in-time validity depends on the selected data source, historical universe,
+and data availability. This folder holds the **design specs** and the **usage guides**.
 
 New here? Start with **[Getting Started](guide/getting-started.md)**.
 

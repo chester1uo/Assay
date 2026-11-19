@@ -146,4 +146,3 @@ with store._conn() as db:
     db.execute('UPDATE users SET created_at=? WHERE id=?', (time.time()-demo._TTL-demo._CLEANUP_GRACE-10, old.id))
 demo._reap_expired(store)
 assert store.get_user(old.id) is None and not folder.exists()
-
